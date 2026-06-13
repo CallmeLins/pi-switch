@@ -6,3 +6,6 @@ target/
 .idea/
 .vscode/
 *.log
+pi-session-*.html
+*claude*cli*.txt
+package-lock.json
