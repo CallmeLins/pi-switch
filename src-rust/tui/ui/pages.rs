@@ -26,7 +26,7 @@ pub(super) fn render_home(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let logo_height = 7u16; // 5 logo lines + blank + tagline
+    let logo_height = 8u16; // 6 logo lines + blank + tagline
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(logo_height)])
