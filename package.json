@@ -1,0 +1,56 @@
+{
+  "name": "pi-switch",
+  "version": "0.2.0",
+  "description": "Lightweight profile switcher for pi models.json",
+  "type": "module",
+  "bin": {
+    "pi-switch": "./bin/pi-switch.js"
+  },
+  "main": "./index.js",
+  "napi": {
+    "name": "pi-switch-native",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "files": [
+    "bin",
+    "index.js",
+    "index.d.ts",
+    "pi-switch-native.cjs",
+    "pi-switch-native.darwin-arm64.node",
+    "pi-switch-native.darwin-x64.node",
+    "pi-switch-native.linux-x64-gnu.node",
+    "pi-switch-native.win32-x64-msvc.node",
+    "extensions"
+  ],
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build:native": "napi build --platform --release",
+    "build:native:debug": "napi build --platform",
+    "doctor": "node ./bin/pi-switch.js doctor",
+    "test": "node --test",
+    "prepublishOnly": "napi prepublish -t npm"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "models",
+    "switch"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.7.1"
+  }
+}

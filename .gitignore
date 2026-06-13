@@ -1,0 +1,8 @@
+node_modules/
+target/
+*.node
+*.tar.gz
+.env
+.idea/
+.vscode/
+*.log

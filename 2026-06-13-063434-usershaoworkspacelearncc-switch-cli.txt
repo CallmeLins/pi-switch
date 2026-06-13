@@ -1,0 +1,1607 @@
+╭─── Claude Code v2.1.139 ─────────────────────────────────────────────────────╮
+│                                        │ Tips for getting started            │
+│              Welcome back!             │ Run /init to create a CLAUDE.md fi… │
+│                                        │ ─────────────────────────────────── │
+│                 ▐▛███▜▌                │ What's new                          │
+│                ▝▜█████▛▘               │ Check the Claude Code changelog fo… │
+│                  ▘▘ ▝▝                 │                                     │
+│                                        │                                     │
+│   claude-fable-5 · API Usage Billing   │                                     │
+│      ~/WorkSpace/Learn/pi-switch       │                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ 我在将 /Users/hao/WorkSpace/Learn/cc-switch-cli 这个复刻为 pi-switch          
+  帮我分析项目，以及我的项目，并将 TUI 也复刻，只需要支持 pi agent 就行         
+
+❯ 我在将 /Users/hao/WorkSpace/Learn/cc-switch-cli 这个复刻为 pi-switch          
+  帮我分析项目，以及我的项目，并将 TUI 也复刻，只需要支持 pi agent 就行         
+
+❯ 我在将 /Users/hao/WorkSpace/Learn/cc-switch-cli 这个复刻为 pi-switch          
+  帮我分析项目，以及我的项目，并将 TUI 也复刻，只需要支持 pi agent 就行         
+  ⎿  Please run /login · API Error: 401 Invalid bearer token
+
+✻ Baked for 0s
+
+❯ /model                                                                        
+  ⎿  Set model to claude-fable-5[1m][1m] (default)
+
+❯ 我在将 /Users/hao/WorkSpace/Learn/cc-switch-cli 这个复刻为 pi-switch          
+  帮我分析项目，以及我的项目，并将 TUI 也复刻，只需要支持 pi agent 就行         
+  ⎿  Please run /login · API Error: 401 Invalid bearer token
+
+✻ Brewed for 0s
+
+❯ /model                                                                        
+  ⎿  Set model to claude-fable-5[1m]
+
+❯ 我在将 /Users/hao/WorkSpace/Learn/cc-switch-cli 这个复刻为 pi-switch          
+  帮我分析项目，以及我的项目，并将 TUI 也复刻，只需要支持 pi agent 就行         
+
+⏺ 我先分析两个项目的结构，然后规划 TUI 复刻方案。
+
+  Listed 1 directory (ctrl+o to expand)
+
+⏺ 2 Explore agents finished (ctrl+o to expand)
+   ├ 分析 cc-switch-cli 项目 · 26 tool uses · 136.9k tokens
+   │ ⎿  Done
+   └ 分析 pi-switch 项目现状 · 17 tool uses · 66.0k tokens
+     ⎿  Done
+
+⏺ 两个项目我已经分析完了，核心结论：
+
+  cc-switch-cli（复刻源）
+  - 纯 Rust，ratatui 0.30 + crossterm 0.29，TUI 在 src-tauri/src/cli/tui/
+  - 完整状态机：App + Route（约 25 个路由）+ Action（约 90 个变体）+
+  overlay/toast/表单系统
+  - 布局：header + 左侧 nav + 内容区 + footer，Dracula 主题
+  - Provider 列表支持 a 添加 / e 编辑 / s 切换 / d 删除 / c 复制等完整交互
+
+  pi-switch（你的项目）
+  - napi-rs 混合架构，Rust 侧已有 ratatui 0.30 + crossterm
+  0.29（版本一致，可直接复刻）
+  - 现有 src-rust/tui.rs 只是只读浏览（5 个屏，j/k 导航），无增删改
+  - 业务层已齐全：config.rs（profile 增删改查）、presets.rs、napi 已导出
+  use/add/remove 等
+
+  也就是说业务逻辑你已经有了，缺的就是把 cc-switch 那套交互式 TUI（状态机 + 表单
+   + overlay 确认 + toast）移植过来并对接你现有的 config
+  层。这个任务涉及多文件改动和不少设计取舍（哪些界面保留、表单字段怎么映射到 pi
+  的 profile 结构），我先进入计划模式细化方案。
+
+⏺ Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+⏺ 进入计划模式。我先深入读取两边的关键文件，明确数据模型与 TUI 复刻范围。
+
+⏺ Bash(wc -l /Users/hao/WorkSpace/Learn/pi-switch/src-rust/*.rs && echo "---" &&
+       find /Users/hao/WorkSpace/Learn/cc-switch-cli/src-tauri/src/cli/tui -name
+       "*.rs" | xar…)
+  ⎿       209 /Users/hao/WorkSpace/Learn/pi-switch/src-rust/config.rs
+          194 /Users/hao/WorkSpace/Learn/pi-switch/src-rust/daemon.rs
+           63 /Users/hao/WorkSpace/Learn/pi-switch/src-rust/error.rs
+     … +44 lines (ctrl+o to expand)
+
+  Read 3 files (ctrl+o to expand)
+
+⏺ Bash(cd /Users/hao/WorkSpace/Learn/cc-switch-cli/src-tauri/src/cli/tui && wc
+      -l theme.rs route.rs terminal.rs text_edit.rs ui/chrome.rs ui/mod.rs
+      2>/dev/null; ls ui/…)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ Explore(提取 cc-switch TUI 设计规格)
+  ⎿  Done (22 tool uses · 134.1k tokens · 9m 13s)
+  (ctrl+o to expand)
+  Read 2 files (ctrl+o to expand)
+
+⏺ User answered Claude's questions:
+  ⎿  · 左侧导航栏包含哪些页面？（cc-switch 是 header + 左导航 + 内容区 + footer 
+     的布局） → 完整版 (推荐)
+     · 交互复刻到什么程度？ → 完整复刻 (推荐)
+     · 表单里 models 字段（一个 profile 可有多个模型）如何编辑？ → 逗号分隔单行 
+     (推荐)
+
+⏺ 需求已明确。我让 Plan agent 基于这些规格设计具体的模块结构和实现顺序。
+
+⏺ Plan(设计 pi-switch TUI 实现方案)
+
+⏺ 方案已成型，我把最终计划写入计划文件。
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/adaptive-petting-quail.md · /plan to edit
+     pi-switch：复刻 cc-switch-cli 的交互式 TUI（仅支持 pi agent）
+
+     Context
+
+     pi-switch 是 cc-switch-cli 的复刻项目（napi-rs：Rust cdylib + Node
+     bin），管理 pi agent（~/.pi/agent/models.json）的 provider
+     profiles。业务层（config/presets/daemon/stats）已完备，但现有
+     src-rust/tui.rs（341 行）只是只读浏览。目标：把 cc-switch-cli 的完整 TUI
+     观感与交互复刻过来——Dracula 主题、header+左导航+内容区+footer
+     布局、Profiles 表格 CRUD、表单（模板 chips + 字段表 + JSON
+     预览）、确认弹窗、Toast、帮助 overlay、/ 过滤。
+
+     依赖已就绪：ratatui 0.30 + crossterm 0.29（与 cc-switch 同版本），无需改
+     Cargo.toml。
+
+     已确认需求（用户选定）：
+     - 导航页全集：Home / Profiles / Presets / Proxy / Stats / Backups / Exit
+     - 完整交互复刻（含 / 过滤、? 帮助、详情页、readline 编辑键）
+     - 表单 models 字段用逗号分隔单行编辑（保存拆为 ModelEntry
+     数组，其余参数取默认值）
+
+     参考规格（已从 cc-switch-cli 勘探）
+
+     cc-switch TUI
+     源码：/Users/hao/WorkSpace/Learn/cc-switch-cli/src-tauri/src/cli/tui/
+     重点参考：theme.rs、terminal.rs、ui/chrome.rs、ui/providers.rs、ui/overlay/
+     、ui/forms/provider.rs、app/types.rs、app/menu.rs、text_edit.rs、form/provi
+     der_state.rs
+
+     - Theme（Dracula）：Theme { accent, ok, warn, err, dim, comment, cyan, 
+     surface, no_color }；GREEN(80,250,123)、CYAN(139,233,253)、PINK(255,121,198
+     )、ORANGE(255,184,108)、YELLOW(241,250,140)、RED(255,85,85)、COMMENT(98,114
+     ,164)、SURFACE(68,71,90)；accent=CYAN。降级：NO_COLOR →
+     Color::Reset；Apple_Terminal/SSH+xterm →
+     ansi256（最近色：CYAN→117、SURFACE→239）
+     - 布局：垂直 [Length(3) header(带边框), Min(0) body, Length(1) 
+     footer]；body 水平 [Length(nav宽), Min(0)]。header：左 "  pi-switch" 白粗体
+      + 右侧「当前: 」徽章。footer key bar：导航段底色 RGB(101,113,160) 白字 /
+     动作段底色 RGB(248,248,248) 灰字(108,108,108)，键名 BOLD
+     - Profiles 表格：列 [Length(3), Percentage(44), Percentage(46)]（marker /
+     Name / API URL），当前 profile 标 *，选中行黑字+accent 底+BOLD（no_color 时
+      REVERSED）。键位：Enter 详情、Space/s 切换、a 添加、e 编辑、c 复制、d
+     删除、/ 过滤
+     - Overlay：help 90%x90% centered_rect；confirm 固定 60x9
+     centered_rect_fixed，边框 accent，Enter 确认 / Esc 取消；先 Clear 再画
+     - Toast：宽 clamp(文本+8, 28, 72)，最小高 5，kind 色（Info/Success=accent,
+     Warning=warn, Error=err），背景 surface，12 ticks（200ms tick ≈ 2.4s）过期
+     - 表单：顶部 Length(1) 键位栏 + Add 模式 Length(3) 模板 chips + 两栏
+     [Percentage(55) 字段表, Percentage(45) JSON 预览]；FormFocus { Templates, 
+     Fields, JsonPreview } Tab 轮换；Ctrl+S 保存、Esc 未保存确认；字段编辑态 ←→
+     移动光标 Enter 退出
+     - TextInput：readline 键 Ctrl+A/E/B/F/D/K/U/W、Alt+B/F、Home/End；cursor
+     字符索引，渲染时计算可视窗口 + set_cursor_position
+     - 主循环：TUI_TICK_RATE = 200ms，event::poll(tick剩余) → on_key /
+     on_tick；panic restore hook
+
+     实施方案
+
+     第 1 步：抽取业务逻辑 → 新建 src-rust/ops.rs（~150 行）
+
+     lib.rs 的 napi 函数内嵌了核心逻辑（use_profile 写 models.json 在
+     lib.rs:205-263），TUI 无法复用。抽出：
+
+     pub struct UseOutcome { pub name: String, pub provider_id: String,
+         pub models_backup: Option<PathBuf>, pub config_backup: Option<PathBuf>
+     }
+
+     pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome>;
+     pub fn upsert_profile(name: &str, profile: &ProviderProfile, rename_from:
+     Option<&str>) -> Result<Option<PathBuf>>;  // add/edit 共用
+     pub fn remove_profile(name: &str) -> Result<Option<PathBuf>>;   // 含 
+     current 回退
+     pub fn duplicate_profile(src: &str, dst: &str) -> Result<Option<PathBuf>>;
+      // 'c' 键
+
+     lib.rs napi 函数保留参数解析（preset 解析、api 别名映射），核心委托
+     ops，map_err(napi::Error::from_reason)。napi 接口签名零变化。
+
+     第 2 步：删除 src-rust/tui.rs，新建 src-rust/tui/ 模块树（~2100 行）
+
+     ┌───────────────┬───────────────────────────────────────────────────┬─────┐
+     │     文件      │                       职责                        │ 行  │
+     │               │                                                   │ 数  │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/mod.rs    │ pub fn run_tui() -> Result<(),                    │ ~90 │
+     │               │ String>（签名不变）；200ms tick 主循环            │     │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/terminal. │ TerminalGuard（raw + AlternateScreen +            │ ~11 │
+     │ rs            │ MouseCapture + Hide，Drop teardown）+             │ 0   │
+     │               │ PanicRestoreHookGuard                             │     │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/theme.rs  │ Theme + Dracula 常量 + NO_COLOR/ansi256 降级      │ ~11 │
+     │               │                                                   │ 0   │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/text_edit │ TextInput + readline 键                           │ ~22 │
+     │ .rs           │                                                   │ 0   │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/route.rs  │ Route、NavItem::ALL（7 项）、to_route()           │ ~50 │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/data.rs   │ UiData { config, daemon, stats, backups } +       │ ~90 │
+     │               │ refresh()（每次写操作后整体重载）                 │     │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │               │ App 状态 + on_key（优先级                         │ ~40 │
+     │ tui/app.rs    │ overlay→form→filter→route）+ on_tick +            │ 0   │
+     │               │ toast/confirm                                     │     │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │               │ ProviderFormState：FormFocus、模板                │ ~28 │
+     │ tui/form.rs   │ chips（all_presets()）、校验、to_profile()、json_ │ 0   │
+     │               │ preview()、dirty 检测                             │     │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/ui/mod.rs │ draw()：总布局切分，最后画 overlay/toast          │ ~70 │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/ui/chrome │ header / 左导航 List / footer key bar             │ ~16 │
+     │ .rs           │                                                   │ 0   │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/ui/pages. │ Home / Presets / Proxy / Stats / Backups 五页     │ ~28 │
+     │ rs            │                                                   │ 0   │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/ui/profil │ Profiles 表格 + 详情页 + 表单渲染                 │ ~33 │
+     │ es.rs         │                                                   │ 0   │
+     ├───────────────┼───────────────────────────────────────────────────┼─────┤
+     │ tui/ui/overla │ help / confirm / toast / centered_rect 辅助       │ ~16 │
+     │ y.rs          │                                                   │ 0   │
+     └───────────────┴───────────────────────────────────────────────────┴─────┘
+
+     不复刻：cc-switch 的 runtime_systems/worker 线程系统、Action 枚举（~90
+     变体）、UiDataByAppCache、tachyonfx 动画。pi-switch
+     全是毫秒级本地文件操作——on_key 直接调 ops + data.refresh() +
+     push_toast。唯一慢操作 daemon_stop（最坏 5s）：先画一帧 "Stopping..." toast
+      再同步执行。
+
+     状态机设计
+
+     enum Focus { Nav, Content }
+     enum Route { Home, Profiles, ProfileDetail(String), Presets, Proxy, Stats,
+     Backups, Form }
+     enum FormMode { Add, Edit(String) }    // Edit 存原名，支持改名
+     enum FormFocus { Templates, Fields, JsonPreview }
+     enum Overlay { None, Help, Confirm(ConfirmAction) }
+     enum ConfirmAction { DeleteProfile(String), DiscardForm }
+     struct Toast { message: String, kind: ToastKind, remaining_ticks: u8 }
+     struct App { theme, data: UiData, focus, nav_idx, route, overlay,
+         filter, form: Option<ProviderFormState>,
+         profiles_idx, presets_idx, proxy_idx, backups_idx, toast, should_quit }
+
+     表单字段：name、api（Space 在 openai-completions / anthropic-messages /
+     google-generative-ai 间轮换）、baseUrl、apiKey、models（逗号分隔）。Presets
+      页 Enter → 以 preset 预填打开 Add 表单（复用
+     preset_to_profile，presets.rs:143）。
+
+     里程碑（每步可编译可运行）
+
+     1. M1 ops 抽取：ops.rs + lib.rs 委托；cargo build + node bin/pi-switch.js 
+     list/use 回归
+     2. M2 骨架：tui/ 目录 + chrome + Home 页 + 导航/Focus + tick/toast/panic
+     hook；pi-switch tui 跑通
+     3. M3 Profiles 核心：表格 + 过滤 + 切换 + 删除确认 + 详情 + help overlay
+     4. M4 表单：text_edit → form → 表单渲染；a/e/c 入口、模板
+     chips、Ctrl+S、Esc 确认；Presets 页预填
+     5. M5 收尾：Proxy/Stats/Backups 三页 + 色彩降级 + 窄终端容错
+
+     风险点
+
+     - napi cdylib 内跑 ratatui：同步阻塞 Node 事件循环（CLI 场景可接受，现有
+     tui.rs 已验证可行）；raw mode 下 Ctrl+C 是普通按键，on_key
+     显式处理；MouseCapture 必须 Drop 成对关闭，否则退回 Node
+     后终端粘鼠标转义序列
+     - Cargo.toml 未设 panic="abort"（napi 要求 unwind）✓ 已确认
+     - 移植时只取 pi 相关分支，勿带入 cc-switch 的 AppType 多端逻辑
+
+     验证
+
+     1. npm run build（napi 构建）后 cargo clippy 无警告
+     2. 回归现有 CLI：pi-switch list / use <name> / remove <name> 行为不变（ops
+     抽取无副作用），检查 ~/.pi/agent/models.json 写入与备份正常
+     3. pi-switch tui 手测：导航切换、Profiles 增删改切（Space 切换后退出 TUI
+     验证 models.json）、模板 chips 预填、/ 过滤、? 帮助、删除确认、Toast
+     过期、Ctrl+C/q 退出后终端状态正常（无 raw mode 残留、无鼠标转义）
+     4. NO_COLOR=1 pi-switch tui 验证降级渲染
+     5. 窄终端（如 60 列）不 panic
+
+⏺ Auto mode lets Claude handle permission prompts automatically — Claude
+   checks each tool call for risky actions and prompt injection before 
+  executing. Actions Claude identifies as safe are executed, while 
+  actions Claude identifies as risky are blocked and Claude may try a 
+  different approach. Ideal for long-running tasks. Sessions are 
+  slightly more expensive. Claude can make mistakes that allow harmful 
+  commands to run, it's recommended to only use in isolated 
+  environments. Shift+Tab to change mode.
+
+⏺ 计划已批准，开始实施。先建任务清单，然后从 M1（ops 抽取）开始。
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ 现在创建 ops.rs，把 lib.rs 中的核心业务逻辑抽出来。
+
+⏺ Write(src-rust/ops.rs)
+  ⎿  Wrote 150 lines to src-rust/ops.rs
+       2     self, backup_config, load_config, provider_id_for, save_conf
+         ig, ProviderProfile,
+       3 };
+       4 use crate::error::{AppError, Result};
+       5 use std::path::PathBuf;
+       6 
+       7 pub struct UseOutcome {
+       8     pub name: String,
+       9     pub provider_id: String,
+      10     pub models_backup: Option<PathBuf>,
+     … +157 lines (ctrl+o to expand)
+
+⏺ 现在改 lib.rs，让 napi 函数委托给 ops。
+
+⏺ Update(src-rust/lib.rs)
+  ⎿  Added 2 lines, removed 1 line
+      1  mod config;
+      2  mod daemon;
+      3  mod error;
+      4 +mod ops;                                                        
+      5  mod presets;
+      6  mod stats;
+      7  mod sync;
+     ...
+       9  
+      10  use napi_derive::napi;
+      11  
+      11 -use config::{backup_config, load_config, provider_id_for, save_
+         -config, ProviderProfile};                                      
+      12 +use config::{load_config, provider_id_for, ProviderProfile};   
+      13  use presets::{all_presets, get_preset, preset_to_profile};
+      14  
+      15  // ─── Init ─────────────────────────────────────────────────
+⏺ Update(src-rust/lib.rs)
+  ⎿  Added 1 line, removed 7 lines
+      157          }
+      158      };
+      159  
+      160 -    let backup = backup_config("config")                      
+      160 +    let backup = ops::upsert_profile(&name, &profile, None)   
+      161          .map_err(|e| napi::Error::from_reason(e.to_string()))?
+      162          .map(|p| p.display().to_string());
+      163  
+      164 -    config.profiles.insert(name.clone(), serde_json::to_value(
+          -&profile).unwrap());                                          
+      165 -    if config.current.is_none() {                             
+      166 -        config.current = Some(name.clone());                  
+      167 -    }                                                         
+      168 -    save_config(&config).map_err(|e| napi::Error::from_reason(
+          -e.to_string()))?;                                             
+      169 -                                                              
+      164      Ok(AddResult { name, backup })
+      165  }
+      166  
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(src-rust/lib.rs)
+  ⎿  Removed 2 lines
+      112          return Err(napi::Error::from_reason("profile name requ
+           ired"));
+      113      }
+      114  
+      115 -    let mut config = load_config().map_err(|e| napi::Error::fr
+          -om_reason(e.to_string()))?;                                   
+      116 -                                                              
+      115      let profile = if let Some(ref preset_id) = opts.preset {
+      116          let preset = get_preset(preset_id)
+      117              .ok_or_else(|| napi::Error::from_reason(format!("u
+           nknown preset '{}'", preset_id)))?;
+
+⏺ Update(src-rust/lib.rs)
+  ⎿  Added 5 lines, removed 53 lines
+      196  
+      197  #[napi]
+      198  pub fn use_profile(name: String, mode: Option<String>) -> napi
+           ::Result<UseResult> {
+      199 -    let mut config = load_config().map_err(|e| napi::Error::fr
+          -om_reason(e.to_string()))?;                                   
+      200 -    let profile = config.profiles.get(&name)                  
+      201 -        .ok_or_else(|| napi::Error::from_reason(format!("unkno
+          -wn profile '{}'", name)))?                                    
+      202 -        .clone();                                             
+      203 -                                                              
+      204 -    let mode = mode.unwrap_or_else(|| config.settings.write_mo
+          -de.clone());                                                  
+      205 -    let provider_id = provider_id_for(&config, &name);        
+      206 -                                                              
+      207 -    // Read/update pi models.json                             
+      208 -    let models_path = config::models_path();                  
+      209 -    let mut models: serde_json::Value = if models_path.exists(
+          -) {                                                           
+      210 -        let text = std::fs::read_to_string(&models_path).unwra
+          -p_or_default();                                               
+      211 -        serde_json::from_str(&text).unwrap_or(serde_json::json
+          -!({ "providers": {} }))                                       
+      212 -    } else {                                                  
+      213 -        serde_json::json!({ "providers": {} })                
+      214 -    };                                                        
+      215 -                                                              
+      216 -    let models_backup = if models_path.exists() {             
+      217 -        let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S-
+          -%3fZ");                                                       
+      218 -        let backup_path = config::backup_dir().join(format!("m
+          -odels-{}.json", ts));                                         
+      219 -        std::fs::create_dir_all(config::backup_dir()).ok();   
+      220 -        std::fs::copy(&models_path, &backup_path).ok();       
+      221 -        Some(backup_path.display().to_string())               
+      222 -    } else {                                                  
+      223 -        None                                                  
+      224 -    };                                                        
+      225 -                                                              
+      226 -    let providers = models["providers"].as_object_mut()       
+      227 -        .ok_or_else(|| napi::Error::from_reason("invalid model
+          -s.json"))?;                                                   
+      228 -                                                              
+      229 -    if mode == "exclusive" {                                  
+      230 -        let prefix = format!("{}-", config.settings.provider_p
+          -refix);                                                       
+      231 -        providers.retain(|k, _| !k.starts_with(&prefix));     
+      232 -    }                                                         
+      233 -                                                              
+      234 -    providers.insert(provider_id.clone(), profile);           
+      235 -                                                              
+      236 -    // Atomic write                                           
+      237 -    let tmp = config::config_dir().join("models.json.tmp");   
+      238 -    std::fs::write(&tmp, serde_json::to_string_pretty(&models)
+          -.unwrap() + "\n")                                             
+      199 +    let outcome = ops::use_profile(&name, mode.as_deref())    
+      200          .map_err(|e| napi::Error::from_reason(e.to_string()))?
+           ;
+      240 -    std::fs::rename(&tmp, &models_path)                       
+      241 -        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+          -;                                                             
+      201  
+      243 -    let config_backup = backup_config("config")               
+      244 -        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+      245 -        .map(|p| p.display().to_string());                    
+      246 -                                                              
+      247 -    config.current = Some(name.clone());                      
+      248 -    save_config(&config).map_err(|e| napi::Error::from_reason(
+          -e.to_string()))?;                                             
+      249 -                                                              
+      202      Ok(UseResult {
+      251 -        name,                                                 
+      252 -        provider_id,                                          
+      253 -        models_backup,                                        
+      254 -        config_backup,                                        
+      203 +        name: outcome.name,                                   
+      204 +        provider_id: outcome.provider_id,                     
+      205 +        models_backup: outcome.models_backup.map(|p| p.display
+          +().to_string()),                                              
+      206 +        config_backup: outcome.config_backup.map(|p| p.display
+          +().to_string()),                                              
+      207      })
+      208  }
+      209  
+
+⏺ Update(src-rust/lib.rs)
+  ⎿  Added 1 line, removed 12 lines
+      215  
+      216  #[napi]
+      217  pub fn remove_profile(name: String) -> napi::Result<RemoveResu
+           lt> {
+      218 -    let mut config = load_config().map_err(|e| napi::Error::fr
+          -om_reason(e.to_string()))?;                                   
+      219 -    if !config.profiles.contains_key(&name) {                 
+      220 -        return Err(napi::Error::from_reason(format!("unknown p
+          -rofile '{}'", name)));                                        
+      221 -    }                                                         
+      222 -                                                              
+      223 -    let backup = backup_config("config")                      
+      218 +    let backup = ops::remove_profile(&name)                   
+      219          .map_err(|e| napi::Error::from_reason(e.to_string()))?
+      220          .map(|p| p.display().to_string());
+      221  
+      227 -    config.profiles.remove(&name);                            
+      228 -    if config.current.as_deref() == Some(&name) {             
+      229 -        config.current = config.profiles.keys().next().cloned(
+          -);                                                            
+      230 -    }                                                         
+      231 -    save_config(&config).map_err(|e| napi::Error::from_reason(
+          -e.to_string()))?;                                             
+      232 -                                                              
+      222      Ok(RemoveResult { name, backup })
+      223  }
+      224  
+
+⏺ M1 代码改完，编译验证。
+
+⏺ Bash(cargo build 2>&1 | tail -20)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ Write(src-rust/tui/theme.rs)
+  ⎿  Wrote 179 lines to src-rust/tui/theme.rs
+       1 use ratatui::style::Color;
+       2 
+       3 const COLOR_MODE_ENV: &str = "PI_SWITCH_COLOR_MODE";
+       4 
+       5 pub const DRACULA_GREEN: (u8, u8, u8) = (80, 250, 123);
+       6 pub const DRACULA_CYAN: (u8, u8, u8) = (139, 233, 253);
+       7 pub const DRACULA_YELLOW: (u8, u8, u8) = (241, 250, 140);
+       8 pub const DRACULA_RED: (u8, u8, u8) = (255, 85, 85);
+       9 pub const DRACULA_COMMENT: (u8, u8, u8) = (98, 114, 164);
+      10 pub const DRACULA_SURFACE: (u8, u8, u8) = (68, 71, 90);
+     … +176 lines (ctrl+o to expand)
+
+⏺ Write(src-rust/tui/terminal.rs)
+  ⎿  Wrote 142 lines to src-rust/tui/terminal.rs
+       2 use std::sync::Arc; Stdout};
+       3 
+       4 use crossterm::{
+       5     cursor,
+       6     event::{DisableMouseCapture, EnableMouseCapture},
+       7     execute,
+       8     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternate
+         Screen, LeaveAlternateScreen},
+       9 };
+      10 use ratatui::{backend::CrosstermBackend, Terminal};
+     … +138 lines (ctrl+o to expand)
+
+⏺ theme 与 terminal 完成。继续 route.rs 和 data.rs。
+
+⏺ Write(src-rust/tui/route.rs)
+  ⎿  Wrote 82 lines to src-rust/tui/route.rs
+       1 #[derive(Debug, Clone, PartialEq, Eq)]
+       2 pub enum Route {
+       3     Home,
+       4     Profiles,
+       5     ProfileDetail(String),
+       6     Presets,
+       7     Proxy,
+       8     Stats,
+       9     Backups,
+      10     Form,
+     … +74 lines (ctrl+o to expand)
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ 写 data.rs —— UiData 快照与 refresh。
+
+⏺ Write(src-rust/tui/data.rs)
+  ⎿  Wrote 101 lines to src-rust/tui/data.rs
+       1 use crate::config::{load_config, PiSwitchConfig};
+       2 use crate::daemon::{daemon_status, DaemonResult};
+       3 use crate::presets::{all_presets, Preset};
+       4 use crate::stats::{get_stats, UsageStats};
+       5 
+       6 pub struct ProfileRow {
+       7     pub name: String,
+       8     pub api: String,
+       9     pub base_url: String,
+      10     pub models: Vec<String>,
+     … +93 lines (ctrl+o to expand)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Write(src-rust/tui/text_edit.rs)
+  ⎿  Wrote 288 lines to src-rust/tui/text_edit.rs
+       1 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+       2 
+       3 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+       4 pub enum TextEditCommand {
+       5     MoveLeft,
+       6     MoveRight,
+       7     MoveLineStart,
+       8     MoveLineEnd,
+       9     MoveWordLeft,
+      10     MoveWordRight,
+     … +299 lines (ctrl+o to expand)
+  Read 1 file (ctrl+o to expand)
+
+⏺ 现在写 form.rs（表单状态机）。
+
+⏺ Write(src-rust/tui/form.rs)
+  ⎿  Wrote 283 lines to src-rust/tui/form.rs
+       1 use crate::config::{ModelEntry, ProviderProfile};
+       2 use crate::presets::Preset;
+       3 
+       4 use super::text_edit::TextInput;
+       5 
+       6 pub const API_CHOICES: [&str; 3] = [
+       7     "openai-completions",
+       8     "anthropic-messages",
+       9     "google-generative-ai",
+      10 ];
+     … +279 lines (ctrl+o to expand)
+
+⏺ app.rs 之前，快速确认 cc-switch 导航键的精确行为。
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+⏺ Write(src-rust/tui/app.rs)
+  ⎿  Wrote 807 lines to src-rust/tui/app.rs
+         nt, MouseEventKind};::{KeyCode, KeyEvent, KeyModifiers, MouseEve
+       2 
+       3 use crate::daemon::{daemon_start, daemon_stop};
+       4 use crate::ops;
+       5 
+       7 use super::form::{FieldKind, FormFocus, FormMode, ProviderFormSt
+         ate};
+       8 use super::route::{NavItem, Route};
+       9 use super::text_edit::TextInput;
+      10 use super::theme::{theme, Theme};
+     … +851 lines (ctrl+o to expand)
+
+⏺ 修复 templates 键处理里多余的重复借用。
+
+⏺ Update(src-rust/tui/app.rs)
+  ⎿  Added 1 line, removed 3 lines
+      750                  } else if let Some(preset) = self.data.presets
+           .get(form.template_idx - 1) {
+      751                      form.apply_preset(preset);
+      752                  }
+      753 -                if let Some(form) = &mut self.form {          
+      754 -                    form.focus = FormFocus::Fields;           
+      755 -                }                                             
+      753 +                form.focus = FormFocus::Fields;               
+      754              }
+      755              KeyCode::Down => {
+      756                  form.focus = FormFocus::Fields;
+
+⏺ 现在写 UI 渲染层。先是 ui.rs 根模块（布局 + 共享样式）。
+
+⏺ Write(src-rust/tui/ui.rs)
+  ⎿  Wrote 159 lines to src-rust/tui/ui.rs
+       1 mod chrome;
+       2 mod overlay;
+       3 mod pages;
+       4 mod profiles;
+       5 
+       6 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+       7 use ratatui::style::{Color, Modifier, Style};
+       8 use ratatui::text::{Line, Span};
+       9 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+      10 use ratatui::Frame;
+     … +160 lines (ctrl+o to expand)
+
+⏺ Write(src-rust/tui/ui/chrome.rs)
+  ⎿  Wrote 201 lines to src-rust/tui/ui/chrome.rs
+       2 use ratatui::style::{Color, Modifier, Style};
+       3 use ratatui::text::{Line, Span};
+       4 use ratatui::widgets::{
+       5     Block, BorderType, Borders, Cell, Paragraph, Row, Table, Tab
+         leState,
+       6 };
+       7 use ratatui::Frame;
+       8 
+       9 use crate::tui::app::{App, Focus};
+      10 use crate::tui::route::NavItem;
+     … +209 lines (ctrl+o to expand)
+
+⏺ 写 pages.rs（Home/Presets/Proxy/Stats/Backups 五页）。
+
+⏺ Write(src-rust/tui/ui/pages.rs)
+  ⎿  Wrote 370 lines to src-rust/tui/ui/pages.rs
+      2 use ratatui::style::{Modifier, Style};ction, Layout, Rect};
+      3 use ratatui::text::{Line, Span};
+      4 use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap
+        };
+      5 use ratatui::Frame;
+      6 
+      7 use crate::tui::app::{App, PROXY_ACTIONS};
+      8 
+      9 use super::{content_block, render_key_bar_center, selection_style
+        };
+     … +380 lines (ctrl+o to expand)
+
+⏺ 修正 content_block 的标题处理（避免双 title）。
+
+⏺ Update(src-rust/tui/ui.rs)
+  ⎿  Added 2 lines, removed 2 lines
+      82      }
+      83  }
+      84  
+      85 -pub(super) fn content_block<'a>(app: &App, title: &'a str) -> B
+         -lock<'a> {                                                     
+      85 +pub(super) fn content_block(app: &App, title: impl Into<Line<'s
+         +tatic>>) -> Block<'static> {                                   
+      86      Block::default()
+      87          .borders(Borders::ALL)
+      88          .border_type(BorderType::Plain)
+     ...
+      90              &app.theme,
+      91              app.focus == Focus::Content,
+      92          ))
+      93 -        .title(title)                                          
+      93 +        .title(title.into())                                   
+      94  }
+      95  
+      96  pub(super) fn display_width(text: &str) -> u16 {
+
+⏺ Update(src-rust/tui/ui/pages.rs)
+  ⎿  Added 1 line, removed 1 line
+      328  
+      329  pub(super) fn render_backups(frame: &mut Frame<'_>, app: &App,
+            area: Rect) {
+      330      let title = format!(" Backups ({}) ", app.data.backups.len
+           ());
+      331 -    let block = content_block(app, "").title(title);          
+      331 +    let block = content_block(app, title);                    
+      332      let inner = block.inner(area);
+      333      frame.render_widget(block, area);
+      334  
+
+⏺ 现在写 profiles.rs（表格、详情页、表单渲染）——M3/M4 的视觉核心。
+
+⏺ Write(src-rust/tui/ui/profiles.rs)
+  ⎿  Wrote 528 lines to src-rust/tui/ui/profiles.rs
+        ect};atatui::layout::{Alignment, Constraint, Direction, Layout, R
+      2 use ratatui::style::{Color, Modifier, Style};
+      3 use ratatui::text::{Line, Span};
+      4 use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragrap
+        h, Row, Table, TableState, Wrap};
+      6 use ratatui::Frame;
+      7 use crate::tui::app::{App, Focus};
+      8 use crate::tui::form::{FieldKind, FormFocus, FormMode, API_CHOICE
+        S};
+      9 use crate::tui::text_edit::visible_text_window;
+     … +555 lines (ctrl+o to expand)
+⏺ Write(src-rust/tui/ui/overlay.rs)
+  ⎿  Wrote 255 lines to src-rust/tui/ui/overlay.rs
+         Rect};tatui::layout::{Alignment, Constraint, Direction, Layout, 
+       2 use ratatui::style::{Modifier, Style};
+       3 use ratatui::text::{Line, Span};
+         aph, Wrap};::widgets::{Block, BorderType, Borders, Clear, Paragr
+       5 use ratatui::Frame;
+       6 
+       8 use crate::tui::theme::Theme;erlay, ToastKind};
+       9 
+      10 use super::{centered_rect, centered_rect_fixed, display_width, r
+         ender_key_bar_center};
+     … +263 lines (ctrl+o to expand)
+
+⏺ Update(src-rust/tui/ui/overlay.rs)
+  ⎿  Removed 1 line
+       5  use ratatui::Frame;
+       6  
+       7  use crate::tui::app::{App, Overlay, ToastKind};
+       8 -use crate::tui::theme::Theme;                                  
+       8  
+       9  use super::{centered_rect, centered_rect_fixed, display_width, 
+          render_key_bar_center};
+      10  
+
+⏺ Update(src-rust/tui/ui/overlay.rs)
+  ⎿  Removed 3 lines
+      249  
+      250      centered_rect_fixed(width, height, content_area)
+      251  }
+      252 -                                                              
+      253 -#[allow(dead_code)]                                           
+      254 -fn _theme_marker(_: &Theme) {}                                
+
+⏺ 最后写模块根 tui.rs（主循环），整体替换旧实现。
+
+⏺ Write(src-rust/tui.rs)
+  ⎿  Added 30 lines, removed 326 lines
+        1 -use crate::config::{load_config, PiSwitchConfig};             
+        2 -use crate::daemon::{daemon_start, daemon_status, daemon_stop};
+        3 -use crate::presets::all_presets;                              
+        4 -use crate::stats::get_stats;                                  
+        5 -use crossterm::{                                              
+        6 -    event::{self, Event, KeyCode, KeyEventKind},              
+        7 -    execute,                                                  
+        8 -    terminal::{disable_raw_mode, enable_raw_mode, EnterAlterna
+          -teScreen, LeaveAlternateScreen},                              
+        9 -};                                                            
+       10 -use ratatui::{                                                
+       11 -    backend::CrosstermBackend,                                
+       12 -    layout::{Constraint, Direction, Layout, Rect},            
+       13 -    style::{Color, Modifier, Style, Stylize},                 
+       14 -    text::{Line, Span},                                       
+       15 -    widgets::{Block, BorderType, Borders, List, ListItem, List
+          -State, Paragraph, Wrap},                                      
+       16 -    Frame, Terminal,                                          
+       17 -};                                                            
+       18 -use std::io;                                                  
+        1 +mod app;                                                      
+        2 +mod data;                                                     
+        3 +mod form;                                                     
+        4 +mod route;                                                    
+        5 +mod terminal;                                                 
+        6 +mod text_edit;                                                
+        7 +mod theme;                                                    
+        8 +mod ui;                                                       
+        9  
+       20 -// ─── App state ──────────────────────────────────────────── 
+       10 +use std::time::{Duration, Instant};                           
+       11  
+       22 -enum Screen {                                                 
+       23 -    Main,                                                     
+       24 -    Profiles,                                                 
+       25 -    Proxy,                                                    
+       26 -    Stats,                                                    
+       27 -    Presets,                                                  
+       28 -}                                                             
+       12 +use crossterm::event::{self, Event, KeyEventKind};            
+       13  
+       30 -struct App {                                                  
+       31 -    config: PiSwitchConfig,                                   
+       32 -    screen: Screen,                                           
+       33 -    main_list: ListState,                                     
+       34 -    profile_list: ListState,                                  
+       35 -    proxy_list: ListState,                                    
+       36 -    exit: bool,                                               
+       37 -}                                                             
+       14 +use app::App;                                                 
+       15 +use data::UiData;                                             
+       16 +use terminal::{PanicRestoreHookGuard, TuiTerminal};           
+       17  
+       39 -impl App {                                                    
+       40 -    fn new(config: PiSwitchConfig) -> Self {                  
+       41 -        Self {                                                
+       42 -            config,                                           
+       43 -            screen: Screen::Main,                             
+       44 -            main_list: ListState::default(),                  
+       45 -            profile_list: ListState::default(),               
+       46 -            proxy_list: ListState::default(),                 
+       47 -            exit: false,                                      
+       48 -        }                                                     
+       49 -    }                                                         
+       50 -}                                                             
+       18 +const TUI_TICK_RATE: Duration = Duration::from_millis(200);   
+       19  
+       52 -fn list_next(list: &mut ListState, len: usize) {              
+       53 -    let i = list.selected().map(|i| (i + 1) % len).unwrap_or(0
+          -);                                                            
+       54 -    *list = ListState::default();                             
+       55 -    list.select(Some(i));                                     
+       56 -}                                                             
+       57 -                                                              
+       58 -fn list_prev(list: &mut ListState, len: usize) {              
+       59 -    let i = list.selected().map(|i| if i == 0 { len - 1 } else
+          - { i - 1 }).unwrap_or(0);                                     
+       60 -    *list = ListState::default();                             
+       61 -    list.select(Some(i));                                     
+       62 -}                                                             
+       63 -                                                              
+       64 -// ─── Main loop ──────────────────────────────────────────── 
+       65 -                                                              
+       20  pub fn run_tui() -> Result<(), String> {
+       67 -    let config = load_config().map_err(|e| e.to_string())?;   
+       68 -    let mut app = App::new(config);                           
+       21 +    let _panic_guard = PanicRestoreHookGuard::install();      
+       22 +    let mut terminal = TuiTerminal::new()?;                   
+       23 +    let mut app = App::new(UiData::load());                   
+       24  
+       70 -    enable_raw_mode().map_err(|e| e.to_string())?;            
+       71 -    let mut stdout = io::stdout();                            
+       72 -    execute!(stdout, EnterAlternateScreen).map_err(|e| e.to_st
+          -ring())?;                                                     
+       25 +    let mut last_tick = Instant::now();                       
+       26 +    while !app.should_quit {                                  
+       27 +        terminal.draw(|frame| ui::draw(frame, &mut app))?;    
+       28  
+       74 -    let backend = CrosstermBackend::new(stdout);              
+       75 -    let mut terminal = Terminal::new(backend)                 
+       76 -        .map_err(|e| e.to_string())?;                         
+       77 -                                                              
+       78 -    let result = run_app(&mut terminal, &mut app);            
+       79 -                                                              
+       80 -    disable_raw_mode().map_err(|e| e.to_string())?;           
+       81 -    execute!(terminal.backend_mut(), LeaveAlternateScreen).map
+          -_err(|e| e.to_string())?;                                     
+       82 -                                                              
+       83 -    result                                                    
+       84 -}                                                             
+       85 -                                                              
+       86 -fn run_app<B: ratatui::backend::Backend>(                     
+       87 -    terminal: &mut ratatui::Terminal<B>,                      
+       88 -    app: &mut App,                                            
+       89 -) -> Result<(), String> {                                     
+       90 -    app.main_list.select(Some(0));                            
+       91 -    app.profile_list.select(Some(0));                         
+       92 -    app.proxy_list.select(Some(0));                           
+       93 -                                                              
+       94 -    while !app.exit {                                         
+       95 -        terminal.draw(|f| ui(f, app)).map_err(|e| e.to_string(
+          -))?;                                                          
+       96 -                                                              
+       97 -        if let Event::Key(key) = event::read().map_err(|e| e.t
+          -o_string())? {                                                
+       98 -            if key.kind == KeyEventKind::Release { continue; }
+       99 -            handle_key(app, key);                             
+      100 -        }                                                     
+      101 -    }                                                         
+      102 -                                                              
+      103 -    Ok(())                                                    
+      104 -}                                                             
+      105 -                                                              
+      106 -// ─── Key handler ────────────────────────────────────────── 
+      107 -                                                              
+      108 -fn handle_key(app: &mut App, key: event::KeyEvent) {          
+      109 -    match app.screen {                                        
+      110 -        Screen::Main => handle_main_keys(app, key),           
+      111 -        Screen::Profiles => handle_profile_keys(app, key),    
+      112 -        Screen::Proxy => handle_proxy_keys(app, key),         
+      113 -        Screen::Stats | Screen::Presets => {                  
+      114 -            if matches!(key.code, KeyCode::Esc | KeyCode::Char
+          -('q')) {                                                      
+      115 -                app.screen = Screen::Main;                    
+      116 -            }                                                 
+      117 -        }                                                     
+      118 -    }                                                         
+      119 -}                                                             
+      120 -                                                              
+      121 -fn handle_main_keys(app: &mut App, key: event::KeyEvent) {    
+      122 -    let items = ["Profiles", "Proxy", "Stats", "Presets", "Exi
+          -t"];                                                          
+      123 -    match key.code {                                          
+      124 -        KeyCode::Char('q') | KeyCode::Esc => app.exit = true, 
+      125 -        KeyCode::Down | KeyCode::Char('j') => list_next(&mut a
+          -pp.main_list, items.len()),                                   
+      126 -        KeyCode::Up | KeyCode::Char('k') => list_prev(&mut app
+          -.main_list, items.len()),                                     
+      127 -        KeyCode::Enter => {                                   
+      128 -            match app.main_list.selected().unwrap_or(0) {     
+      129 -                0 => { app.screen = Screen::Profiles; app.prof
+          -ile_list.select(Some(0)); }                                   
+      130 -                1 => { app.screen = Screen::Proxy; app.proxy_l
+          -ist.select(Some(0)); }                                        
+      131 -                2 => { app.screen = Screen::Stats; }          
+      132 -                3 => { app.screen = Screen::Presets; }        
+      133 -                4 => app.exit = true,                         
+       29 +        let timeout = TUI_TICK_RATE.saturating_sub(last_tick.e
+          +lapsed());                                                    
+       30 +        if event::poll(timeout).map_err(|e| format!("terminal 
+          +error: {e}"))? {                                              
+       31 +            match event::read().map_err(|e| format!("terminal 
+          +error: {e}"))? {                                              
+       32 +                Event::Key(key) if key.kind != KeyEventKind::R
+          +elease => app.on_key(key),                                    
+       33 +                Event::Mouse(mouse) => app.on_mouse(mouse),   
+       34                  _ => {}
+       35              }
+       36          }
+      137 -        _ => {}                                               
+      138 -    }                                                         
+      139 -}                                                             
+      140 -                                                              
+      141 -fn handle_profile_keys(app: &mut App, key: event::KeyEvent) { 
+      142 -    let names: Vec<String> = app.config.profiles.keys().cloned
+          -().collect();                                                 
+      143 -    match key.code {                                          
+      144 -        KeyCode::Esc | KeyCode::Char('q') => app.screen = Scre
+          -en::Main,                                                     
+      145 -        KeyCode::Down | KeyCode::Char('j') => list_next(&mut a
+          -pp.profile_list, names.len().max(1)),                         
+      146 -        KeyCode::Up | KeyCode::Char('k') => list_prev(&mut app
+          -.profile_list, names.len().max(1)),                           
+      147 -        _ => {}                                               
+      148 -    }                                                         
+      149 -}                                                             
+      150 -                                                              
+      151 -fn handle_proxy_keys(app: &mut App, key: event::KeyEvent) {   
+      152 -    let items = ["Start", "Stop", "Status", "Back"];          
+      153 -    match key.code {                                          
+      154 -        KeyCode::Esc | KeyCode::Char('q') => app.screen = Scre
+          -en::Main,                                                     
+      155 -        KeyCode::Down | KeyCode::Char('j') => list_next(&mut a
+          -pp.proxy_list, items.len()),                                  
+      156 -        KeyCode::Up | KeyCode::Char('k') => list_prev(&mut app
+          -.proxy_list, items.len()),                                    
+      157 -        KeyCode::Enter => {                                   
+      158 -            match app.proxy_list.selected().unwrap_or(0) {    
+      159 -                0 => { let _ = daemon_start(None, None); }    
+      160 -                1 => { let _ = daemon_stop(); }               
+      161 -                2 => {} // status shown in UI                 
+      162 -                3 => app.screen = Screen::Main,               
+      163 -                _ => {}                                       
+      164 -            }                                                 
+       37 +        if last_tick.elapsed() >= TUI_TICK_RATE {             
+       38 +            app.on_tick();                                    
+       39 +            last_tick = Instant::now();                       
+       40          }
+      166 -        _ => {}                                               
+       41      }
+      168 -}                                                             
+       42  
+      170 -// ─── UI render ──────────────────────────────────────────── 
+      171 -                                                              
+      172 -fn ui(f: &mut Frame, app: &mut App) {                         
+      173 -    let chunks = Layout::default()                            
+      174 -        .direction(Direction::Vertical)                       
+      175 -        .margin(1)                                            
+      176 -        .constraints([Constraint::Length(3), Constraint::Min(0
+          -), Constraint::Length(1)])                                    
+      177 -        .split(f.area());                                     
+      178 -                                                              
+      179 -    // Header                                                 
+      180 -    let header = Paragraph::new(Line::from(vec![              
+      181 -        Span::styled("  pi-switch TUI  ", Style::default().fg(
+          -Color::Cyan).add_modifier(Modifier::BOLD)),                   
+      182 -        Span::styled("Profiles: ", Style::default().fg(Color::
+          -DarkGray)),                                                   
+      183 -        Span::styled(app.config.profiles.len().to_string(), St
+          -yle::default().fg(Color::Cyan)),                              
+      184 -        Span::styled(" | Current: ", Style::default().fg(Color
+          -::DarkGray)),                                                 
+      185 -        Span::styled(app.config.current.as_deref().unwrap_or("
+          -none"), Style::default().fg(Color::Green)),                   
+      186 -    ]));                                                      
+      187 -    f.render_widget(header, chunks[0]);                       
+      188 -                                                              
+      189 -    // Content - destructure to avoid borrow conflicts        
+      190 -    let App { ref config, ref screen, ref mut main_list, ref m
+          -ut profile_list, ref mut proxy_list, .. } = *app;             
+      191 -    match screen {                                            
+      192 -        Screen::Main => render_main(f, main_list, chunks[1]), 
+      193 -        Screen::Profiles => render_profiles(f, config, profile
+          -_list, chunks[1]),                                            
+      194 -        Screen::Proxy => render_proxy(f, config, proxy_list, c
+          -hunks[1]),                                                    
+      195 -        Screen::Stats => render_stats(f, chunks[1]),          
+      196 -        Screen::Presets => render_presets(f, chunks[1]),      
+      197 -    }                                                         
+      198 -                                                              
+      199 -    // Footer                                                 
+      200 -    let footer = Paragraph::new(Span::styled(                 
+      201 -        " q/Esc: back  |  j/k or ↑/↓: navigate  |  Enter: sele
+          -ct",                                                          
+      202 -        Style::default().fg(Color::DarkGray),                 
+      203 -    ));                                                       
+      204 -    f.render_widget(footer, chunks[2]);                       
+       43 +    terminal.restore_best_effort()?;                          
+       44 +    Ok(())                                                    
+       45  }
+      206 -                                                              
+      207 -fn render_main(f: &mut Frame, list_state: &mut ListState, area
+          -: Rect) {                                                     
+      208 -    let items: Vec<ListItem> = vec!["Profiles", "Proxy", "Stat
+          -s", "Presets", "Exit"]                                        
+      209 -        .into_iter()                                          
+      210 -        .map(|s| ListItem::new(format!("  {s}")))             
+      211 -        .collect();                                           
+      212 -                                                              
+      213 -    let list = List::new(items)                               
+      214 -        .block(Block::default().title(" Main Menu ").borders(B
+          -orders::ALL).border_type(BorderType::Rounded))                
+      215 -        .highlight_style(Style::default().fg(Color::Black).bg(
+          -Color::Cyan))                                                 
+      216 -        .highlight_symbol("▶ ");                              
+      217 -                                                              
+      218 -    f.render_stateful_widget(list, area, list_state);         
+      219 -}                                                             
+      220 -                                                              
+      221 -fn render_profiles(f: &mut Frame, config: &PiSwitchConfig, lis
+          -t_state: &mut ListState, area: Rect) {                        
+      222 -    let names: Vec<String> = config.profiles.keys().cloned().c
+          -ollect();                                                     
+      223 -    if names.is_empty() {                                     
+      224 -        let p = Paragraph::new("No profiles configured.")     
+      225 -            .block(Block::default().title(" Profiles ").border
+          -s(Borders::ALL).border_type(BorderType::Rounded));            
+      226 -        f.render_widget(p, area);                             
+      227 -        return;                                               
+      228 -    }                                                         
+      229 -                                                              
+      230 -    let items: Vec<ListItem> = names.iter().map(|name| {      
+      231 -        let profile = &config.profiles[name];                 
+      232 -        let api = profile.get("api").and_then(|v| v.as_str()).
+          -unwrap_or("");                                                
+      233 -        let base_url = profile.get("baseUrl").and_then(|v| v.a
+          -s_str()).unwrap_or("");                                       
+      234 -        let is_current = config.current.as_deref() == Some(nam
+          -e.as_str());                                                  
+      235 -        let prefix = if is_current { "★ " } else { "  " };    
+      236 -        let models = profile.get("models").and_then(|v| v.as_a
+          -rray())                                                       
+      237 -            .map(|a| a.iter().filter_map(|m| m.get("id").and_t
+          -hen(|v| v.as_str())).collect::<Vec<_>>().join(", "))          
+      238 -            .unwrap_or_default();                             
+      239 -                                                              
+      240 -        ListItem::new(vec![                                   
+      241 -            Line::from(Span::styled(format!("{prefix}{name}"),
+          - Style::default().add_modifier(Modifier::BOLD))),             
+      242 -            Line::from(Span::styled(format!("    {api} | {base
+          -_url}"), Style::default().fg(Color::DarkGray))),              
+      243 -            Line::from(Span::styled(format!("    models: {mode
+          -ls}"), Style::default().fg(Color::Cyan))),                    
+      244 -        ])                                                    
+      245 -    }).collect();                                             
+      246 -                                                              
+      247 -    let list = List::new(items)                               
+      248 -        .block(Block::default().title(" Profiles ").borders(Bo
+          -rders::ALL).border_type(BorderType::Rounded))                 
+      249 -        .highlight_style(Style::default().fg(Color::Black).bg(
+          -Color::Cyan));                                                
+      250 -                                                              
+      251 -    f.render_stateful_widget(list, area, list_state);         
+      252 -}                                                             
+      253 -                                                              
+      254 -fn render_proxy(f: &mut Frame, config: &PiSwitchConfig, list_s
+          -tate: &mut ListState, area: Rect) {                           
+      255 -    let ds = daemon_status().unwrap_or_else(|e| crate::daemon:
+          -:DaemonResult {                                               
+      256 -        running: false, pid: None, host: None, port: None, tar
+          -get: None, failover: None, started_at: None,                  
+      257 -        message: e,                                           
+      258 -    });                                                       
+      259 -                                                              
+      260 -    let chunks = Layout::default()                            
+      261 -        .direction(Direction::Horizontal)                     
+      262 -        .constraints([Constraint::Percentage(50), Constraint::
+          -Percentage(50)])                                              
+      263 -        .split(area);                                         
+      264 -                                                              
+      265 -    // Status info                                            
+      266 -    let proxy = &config.settings.proxy;                       
+      267 -    let mut status_lines = vec![                              
+      268 -        Line::from(format!("  Target: {}", proxy.target.as_der
+          -ef().unwrap_or("none"))),                                     
+      269 -        Line::from(format!("  Failover: {}", if proxy.failover
+          -.is_empty() { "none".into() } else { proxy.failover.join(" → "
+          -) })),                                                        
+      270 -        Line::from(format!("  Host: {}:{}", proxy.host, proxy.
+          -port)),                                                       
+      271 -    ];                                                        
+      272 -                                                              
+      273 -    if ds.running {                                           
+      274 -        status_lines.push(Line::from(Span::styled(            
+      275 -            format!("  ● RUNNING (PID {})", ds.pid.unwrap_or(0
+          -)),                                                           
+      276 -            Style::default().fg(Color::Green),                
+      277 -        )));                                                  
+      278 -    } else {                                                  
+      279 -        status_lines.push(Line::from(Span::styled("  ○ Stopped
+          -", Style::default().fg(Color::Yellow))));                     
+      280 -    }                                                         
+      281 -                                                              
+      282 -    let status = Paragraph::new(status_lines)                 
+      283 -        .block(Block::default().title(" Status ").borders(Bord
+          -ers::ALL).border_type(BorderType::Rounded));                  
+      284 -    f.render_widget(status, chunks[0]);                       
+      285 -                                                              
+      286 -    // Actions                                                
+      287 -    let items: Vec<ListItem> = vec!["Start", "Stop", "Status",
+          - "Back"]                                                      
+      288 -        .into_iter()                                          
+      289 -        .map(|s| ListItem::new(format!("  {s}")))             
+      290 -        .collect();                                           
+      291 -                                                              
+      292 -    let list = List::new(items)                               
+      293 -        .block(Block::default().title(" Actions ").borders(Bor
+          -ders::ALL).border_type(BorderType::Rounded))                  
+      294 -        .highlight_style(Style::default().fg(Color::Black).bg(
+          -Color::Cyan));                                                
+      295 -                                                              
+      296 -    f.render_stateful_widget(list, chunks[1], list_state);    
+      297 -}                                                             
+      298 -                                                              
+      299 -fn render_stats(f: &mut Frame, area: Rect) {                  
+      300 -    let stats = get_stats();                                  
+      301 -                                                              
+      302 -    let text = if stats.total_requests == 0 {                 
+      303 -        "No request data. Start the proxy and make some reques
+          -ts first.".to_string()                                        
+      304 -    } else {                                                  
+      305 -        let mut lines = vec![                                 
+      306 -            format!("Total: {} | OK: {} | Fail: {} | Rate: {}"
+          -,                                                             
+      307 -                stats.total_requests, stats.ok_requests, stats
+          -.failed_requests, stats.success_rate),                        
+      308 -        ];                                                    
+      309 -        if stats.avg_latency_ms > 0 {                         
+      310 -            lines.push(format!("Avg latency: {}ms", stats.avg_
+          -latency_ms));                                                 
+      311 -        }                                                     
+      312 -        if !stats.by_provider.is_empty() {                    
+      313 -            lines.push("\nBy Provider:".into());              
+      314 -            let mut providers: Vec<_> = stats.by_provider.iter
+          -().collect();                                                 
+      315 -            providers.sort_by(|a, b| b.1.total.cmp(&a.1.total)
+          -);                                                            
+      316 -            for (name, ps) in providers {                     
+      317 -                let rate = if ps.total > 0 { format!("{:.0}%",
+          - (ps.ok as f64 / ps.total as f64) * 100.0) } else { "0%".into(
+          -) };                                                          
+      318 -                lines.push(format!("  {}: {} req, {} ok ({})",
+          - name, ps.total, ps.ok, rate));                               
+      319 -            }                                                 
+      320 -        }                                                     
+      321 -        lines.join("\n")                                      
+      322 -    };                                                        
+      323 -                                                              
+      324 -    let p = Paragraph::new(text)                              
+      325 -        .block(Block::default().title(" Stats ").borders(Borde
+          -rs::ALL).border_type(BorderType::Rounded))                    
+      326 -        .wrap(Wrap { trim: true });                           
+      327 -    f.render_widget(p, area);                                 
+      328 -}                                                             
+      329 -                                                              
+      330 -fn render_presets(f: &mut Frame, area: Rect) {                
+      331 -    let presets = all_presets();                              
+      332 -    let text: String = presets.into_iter().map(|p| {          
+      333 -        let models = p.models.iter().map(|m| m.id.as_str()).co
+          -llect::<Vec<_>>().join(", ");                                 
+      334 -        format!("● {}\n  {}\n  {} → {}\n  models: {}\n\n", p.n
+          -ame, p.description, p.api, p.base_url, models)                
+      335 -    }).collect::<Vec<_>>().join("");                          
+      336 -                                                              
+      337 -    let p = Paragraph::new(text)                              
+      338 -        .block(Block::default().title(" Presets ").borders(Bor
+          -ders::ALL).border_type(BorderType::Rounded))                  
+      339 -        .wrap(Wrap { trim: true });                           
+      340 -    f.render_widget(p, area);                                 
+      341 -}                                                             
+
+⏺ Bash(cargo build 2>&1 | tail -40)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ Update(src-rust/tui/app.rs)
+  ⎿  Added 16 lines, removed 6 lines
+      721          }
+      722  
+      723          match key.code {
+      724 -            KeyCode::Tab => form.next_focus(),                
+      724 +            KeyCode::Tab => {                                 
+      725 +                if let Some(form) = &mut self.form {          
+      726 +                    form.next_focus();                        
+      727 +                }                                             
+      728 +            }                                                 
+      729              KeyCode::Esc => self.request_close_form(),
+      726 -            _ => match form.focus {                           
+      727 -                FormFocus::Templates => self.on_form_templates
+          -_key(key),                                                    
+      728 -                FormFocus::Fields => self.on_form_fields_key(k
+          -ey),                                                          
+      729 -                FormFocus::JsonPreview => {}                  
+      730 -            },                                                
+      730 +            _ => {                                            
+      731 +                let focus = match &self.form {                
+      732 +                    Some(form) => form.focus,                 
+      733 +                    None => return,                           
+      734 +                };                                            
+      735 +                match focus {                                 
+      736 +                    FormFocus::Templates => self.on_form_templ
+          +ates_key(key),                                                
+      737 +                    FormFocus::Fields => self.on_form_fields_k
+          +ey(key),                                                      
+      738 +                    FormFocus::JsonPreview => {}              
+      739 +                }                                             
+      740 +            }                                                 
+      741          }
+      742      }
+      743  
+
+⏺ Update(src-rust/tui/app.rs)
+  ⎿  Added 5 lines, removed 1 line
+      223                  return;
+      224              }
+      225              KeyCode::Char('q') => {
+      226 -                self.request_quit();                          
+      226 +                if let Route::ProfileDetail(_) = self.route { 
+      227 +                    self.route = Route::Profiles;             
+      228 +                } else {                                      
+      229 +                    self.request_quit();                      
+      230 +                }                                             
+      231                  return;
+      232              }
+      233              _ => {}
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ 先全部改完，最后再 build 检查                                                 
+
+⏺ 好，继续把剩余问题全部改完。
+
+  修复 form.rs 的 json! 计算键问题（json! 宏不接受非字面量键）：
+
+⏺ Update(src-rust/tui/form.rs)
+  ⎿  Added 6 lines, removed 4 lines
+      267      pub fn json_preview(&self) -> String {
+      268          let mut profile = self.build_profile();
+      269          profile.updated_at = None;
+      270 -        serde_json::to_string_pretty(&serde_json::json!({     
+      271 -            self.profile_name(): serde_json::to_value(&profile
+          -).unwrap_or_default(),                                        
+      272 -        }))                                                   
+      273 -        .unwrap_or_default()                                  
+      270 +        let mut map = serde_json::Map::new();                 
+      271 +        map.insert(                                           
+      272 +            self.profile_name(),                              
+      273 +            serde_json::to_value(&profile).unwrap_or_default()
+          +,                                                             
+      274 +        );                                                    
+      275 +        serde_json::to_string_pretty(&serde_json::Value::Objec
+          +t(map)).unwrap_or_default()                                   
+      276      }
+      277  
+      278      fn snapshot(&self) -> String {
+
+⏺ 修复 chrome.rs 的 Cow 宽度计算：
+
+⏺ Update(src-rust/tui/ui/chrome.rs)
+  ⎿  Added 1 line, removed 1 line
+      60      let available = inner.width.saturating_sub(title_width);
+      61      let right_width: u16 = right_spans
+      62          .iter()
+      63 -        .map(|span| display_width(&span.content))              
+      63 +        .map(|span| span.width() as u16)                       
+      64          .sum::<u16>()
+      65          + display_width(&status_text);
+      66      if right_width <= available {
+
+⏺ 简化 render_form 签名为 &App 并内联 presets：
+
+⏺ Update(src-rust/tui/ui/profiles.rs)
+  ⎿  Added 4 lines, removed 5 lines
+      271  
+      272  // ─── Provider form ────────────────────────────────────────
+      273  
+      274 -pub(super) fn render_form(frame: &mut Frame<'_>, app: &mut App
+          -, area: Rect) {                                               
+      275 -    let theme = app.theme.clone();                            
+      276 -    let presets: Vec<String> = app.data.presets.iter().map(|p|
+          - p.name.clone()).collect();                                   
+      274 +pub(super) fn render_form(frame: &mut Frame<'_>, app: &App, ar
+          +ea: Rect) {                                                   
+      275 +    let theme = &app.theme;                                   
+      276      let Some(form) = &app.form else {
+      277          return;
+      278      };
+     ...
+      306  
+      307      render_key_bar_center(
+      308          frame,
+      310 -        &theme,                                               
+      309 +        theme,                                                
+      310          chunks[0],
+      311          &[
+      312              ("Tab", "focus"),
+     ...
+      318      );
+      319  
+      320      let body_area = if is_add {
+      322 -        render_template_chips(frame, app, chunks[1], &presets)
+          -;                                                             
+      321 +        render_template_chips(frame, app, chunks[1]);         
+      322          chunks[2]
+      323      } else {
+      324          chunks[1]
+
+⏺ Update(src-rust/tui/ui/profiles.rs)
+  ⎿  Added 2 lines, removed 2 lines
+      352      }
+      353  }
+      354  
+      355 -fn render_template_chips(frame: &mut Frame<'_>, app: &App, are
+          -a: Rect, presets: &[String]) {                                
+      355 +fn render_template_chips(frame: &mut Frame<'_>, app: &App, are
+          +a: Rect) {                                                    
+      356      let theme = &app.theme;
+      357      let Some(form) = &app.form else {
+      358          return;
+     ...
+      371  
+      372      let mut spans: Vec<Span<'_>> = vec![Span::raw(" ")];
+      373      let mut labels: Vec<&str> = vec!["Custom"];
+      374 -    labels.extend(presets.iter().map(String::as_str));        
+      374 +    labels.extend(app.data.presets.iter().map(|p| p.name.as_st
+          +r()));                                                        
+      375  
+      376      for (idx, label) in labels.iter().enumerate() {
+      377          if idx > 0 {
+
+⏺ Update(src-rust/tui/ui/profiles.rs)
+  ⎿  Added 1 line, removed 1 line
+       4  use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragr
+          aph, Row, Table, TableState, Wrap};
+       5  use ratatui::Frame;
+       6  
+       7 -use crate::tui::app::{App, Focus};                             
+       7 +use crate::tui::app::App;                                      
+       8  use crate::tui::form::{FieldKind, FormFocus, FormMode, API_CHOI
+          CES};
+       9  use crate::tui::text_edit::visible_text_window;
+      10  
+⏺ Update(src-rust/tui/route.rs)
+  ⎿  Removed 12 lines
+      67              NavItem::Exit => None,
+      68          }
+      69      }
+      70 -                                                               
+      71 -    pub fn index_for_route(route: &Route) -> usize {           
+      72 -        let target = match route {                             
+      73 -            Route::Home => NavItem::Home,                      
+      74 -            Route::Profiles | Route::ProfileDetail(_) | Route::
+         -Form => NavItem::Profiles,                                     
+      75 -            Route::Presets => NavItem::Presets,                
+      76 -            Route::Proxy => NavItem::Proxy,                    
+      77 -            Route::Stats => NavItem::Stats,                    
+      78 -            Route::Backups => NavItem::Backups,                
+      79 -        };                                                     
+      80 -        Self::ALL.iter().position(|item| *item == target).unwra
+         -p_or(0)                                                        
+      81 -    }                                                          
+      70  }
+
+⏺ Update(src-rust/tui/app.rs)
+  ⎿  Added 4 lines
+      117                  row.name.to_lowercase().contains(&query)
+      118                      || row.api.to_lowercase().contains(&query)
+      119                      || row.base_url.to_lowercase().contains(&q
+           uery)
+      120 +                    || row                                    
+      121 +                        .models                               
+      122 +                        .iter()                               
+      123 +                        .any(|model| model.to_lowercase().cont
+          +ains(&query))                                                 
+      124              })
+      125              .collect()
+      126      }
+
+⏺ 统一表单字段区的 vim 键归一化：
+
+⏺ Update(src-rust/tui/app.rs)
+  ⎿  Added 2 lines, removed 4 lines
+      781          let Some(form) = &mut self.form else {
+      782              return;
+      783          };
+      784 +        let key = Self::normalize_key(key);                   
+      785          match key.code {
+      786              KeyCode::Up => {
+      787                  if form.field_idx == 0 && matches!(form.mode, 
+           FormMode::Add) {
+     ...
+      790                      form.field_idx = form.field_idx.saturating
+           _sub(1);
+      791                  }
+      792              }
+      792 -            KeyCode::Down | KeyCode::Char('j') => {           
+      793 +            KeyCode::Down => {                                
+      794                  form.field_idx = (form.field_idx + 1).min(Fiel
+           dKind::ALL.len() - 1);
+      795              }
+      795 -            KeyCode::Char('k') => {                           
+      796 -                form.field_idx = form.field_idx.saturating_sub
+          -(1);                                                          
+      797 -            }                                                 
+      796              KeyCode::Enter => {
+      797                  if form.current_field().is_text() {
+      798                      form.editing = true;
+
+⏺ Bash(cargo build 2>&1 | tail -50)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ Bash(cargo build 2>&1 | tail -50)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ 仍不可用。趁等待再仔细复查最复杂的 app.rs。
+
+  Read 2 files (ctrl+o to expand)
+
+⏺ lib.rs 正常。再次尝试 build。
+
+⏺ Bash(cargo build 2>&1 | tail -60)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ Bash 持续不可用。继续复查剩余文件，把能确认的都确认掉。
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Bash(cargo build 2>&1 | tail -60)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ 代码已全部改完，但 Bash 工具因模型分类器暂时不可用而无法执行
+  build（已重试多次）。
+
+  已完成的全部改动
+
+  M1 业务逻辑抽取
+  - 新建 src-rust/ops.rs：use_profile / upsert_profile / remove_profile /
+  duplicate_profile（写 models.json + 备份逻辑从 lib.rs 抽出）
+  - src-rust/lib.rs：napi 函数改为委托 ops，接口签名零变化
+
+  M2–M5 TUI 完整复刻（旧 341 行 tui.rs → 模块根 + 13 个子模块，约 2400 行）
+  - tui.rs：200ms tick 主循环、鼠标滚轮、panic 安全退出
+  - tui/theme.rs：Dracula 配色 + NO_COLOR / ansi256 降级（环境变量
+  PI_SWITCH_COLOR_MODE）
+  - tui/terminal.rs：TuiTerminal（raw + AlternateScreen + MouseCapture，Drop
+  还原）+ PanicRestoreHookGuard
+  - tui/route.rs + tui/app.rs：7 项左导航、Focus
+  Nav/Content、确认弹窗（退出/删除/未保存）、Toast（12 tick 过期）
+  - tui/ui/：chrome（header 徽章 + 导航表 + 双色 footer key bar）、Profiles
+  表格（* 当前标记、a/e/c/d/Space/Enter//过滤）、详情页、表单（模板 chips +
+  字段表 + JSON 预览 55/45 分栏、Ctrl+S 保存）、help 90%×90%
+  overlay、Presets/Proxy/Stats/Backups 页
+  - tui/text_edit.rs：readline 全键位（Ctrl+A/E/B/F/D/K/U/W、Alt+B/F）
+  - tui/form.rs：表单状态机，models 逗号分隔编辑、dirty 检测、编辑时保留原
+  profile 的 headers/compat 等字段
+
+  代码我已自查过两轮（借用冲突、json! 宏限制、Cow 宽度等都已修掉）。
+
+  要现在验证的话，你可以直接在输入框运行：
+
+  ! cargo build 2>&1 | tail -50
+
+  输出会进入会话，我来修可能的编译错误；或者稍等片刻我再重试 Bash。
+
+✻ Churned for 19m 58s
+
+※ recap: 正在把 cc-switch-cli 的 TUI 完整复刻到 pi-switch（仅支持 pi agent），全部代码已写完并自查两轮。下一步是运行 cargo build 验证编译，之前 Bash 工具暂时不可用，你可输入 ! cargo build 或等我重试。 (disable recaps in /config)
+
+❯ 继续                                                                          
+⏺ 重试 build。
+
+⏺ Bash(cargo build 2>&1 | tail -60)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ 不需要 build，最终所有阶段完成再build                                         
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ profiles.rs
+  复查完毕，所有阶段的代码都已写完且自查通过。现在所有阶段已完成，进行最终 build
+   检查。
+
+⏺ Bash(cargo build 2>&1 | tail -60)
+  ⎿  Error: claude-fable-5[1m] is temporarily unavailable, so auto mode cannot 
+     determine the safety of Bash right now. Wait briefly and then try this 
+     action again. If it keeps failing, continue with other tasks that don't 
+     require this action and come back to it later. Note: reading files, 
+     searching code, and other read-only operations do not require the 
+     classifier and can still be used.
+
+⏺ Bash 工具仍被分类器故障阻塞，无法由我执行命令。先把任务状态更新为完成。
+
+⏺ 所有阶段（M1–M5）的代码均已完成并通过两轮静态自查：
+
+  阶段: M1
+  内容: ops.rs 业务抽取 + lib.rs 委托
+  状态: ✅
+  ────────────────────────────────────────
+  阶段: M2
+  内容: TUI 骨架（terminal/theme/route/data/chrome/Home）
+  状态: ✅
+  ────────────────────────────────────────
+  阶段: M3
+  内容: Profiles 表格 + 过滤 + 切换 + 删除确认 + 详情 + 帮助
+  状态: ✅
+  ────────────────────────────────────────
+  阶段: M4
+  内容: 表单（模板 chips + 字段表 + JSON 预览 + Ctrl+S）
+  状态: ✅
+  ────────────────────────────────────────
+  阶段: M5
+  内容: Proxy/Stats/Backups 页 + NO_COLOR/ansi256 降级 + 窄终端容错
+  状态: ✅
+
+  但 Bash 工具因模型分类器故障持续不可用，我无法替你执行
+  build。请你在输入框直接运行（! 前缀会把输出带回会话）：
+
+  ! cargo build 2>&1 | tail -60
+
+  有编译错误的话我立即修；编译通过后再跑 ! npm run build 生成 .node
+  文件，然后你就可以 pi-switch tui 实测了。
+
+✻ Churned for 1m 35s
