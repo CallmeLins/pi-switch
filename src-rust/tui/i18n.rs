@@ -140,12 +140,21 @@ pub fn page_profiles_filtered(visible: usize, total: usize) -> String {
 pub fn home_profiles() -> &'static str { t!("Profiles", "供应商") }
 pub fn home_current() -> &'static str { t!("Current", "当前") }
 pub fn home_write_mode() -> &'static str { t!("Write mode", "写入模式") }
-pub fn home_provider_prefix() -> &'static str { t!("Provider prefix", "供应商前缀") }
 pub fn home_proxy_daemon() -> &'static str { t!("Proxy daemon", "代理守护进程") }
 pub fn home_running(pid: u32, host: &str, port: u16) -> String {
     if is_zh() { format!("运行中 (PID {pid}) 于 {host}:{port}") } else { format!("running (PID {pid}) on {host}:{port}") }
 }
 pub fn home_stopped() -> &'static str { t!("stopped", "已停止") }
+pub fn home_logo() -> &'static str {
+    r"                                  _  _         _
+   ___  ___        ___ __      __(_)| |_  ___ | |__
+  / __|/ __|_____ / __\ \ /\  / /| || __|/ __|| '_ \
+ | (__| (__|_____|\__ \ \ V  V / | || |_| (__ | | | |
+  \___|\___|      |___/  \_/\_/  |_| \__|\___||_| |_|"
+}
+pub fn home_tagline() -> &'static str {
+    t!("Lightweight profile switcher for pi agent", "pi agent 轻量级供应商切换器")
+}
 pub fn home_config() -> &'static str { t!("Config", "配置") }
 pub fn home_pi_models() -> &'static str { t!("Pi models", "Pi 模型") }
 pub fn home_backups() -> &'static str { t!("Backups", "备份") }

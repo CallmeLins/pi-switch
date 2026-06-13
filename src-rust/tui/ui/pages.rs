@@ -21,15 +21,22 @@ fn label_line<'a>(app: &App, label: &'a str, value: String) -> Line<'a> {
 }
 
 pub(super) fn render_home(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let theme = &app.theme;
     let block = content_block(app, i18n::page_home());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let logo_height = 7u16; // 5 logo lines + blank + tagline
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Min(0), Constraint::Length(logo_height)])
         .split(inner);
-    render_key_bar_center(frame, &app.theme, chunks[0], &[("r", i18n::key_refresh())]);
+
+    let top = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(chunks[0]);
+    render_key_bar_center(frame, theme, top[0], &[("r", i18n::key_refresh())]);
 
     let daemon = if app.data.daemon.running {
         i18n::home_running(
@@ -44,55 +51,36 @@ pub(super) fn render_home(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let lines = vec![
         Line::default(),
         label_line(app, i18n::home_profiles(), app.data.profiles.len().to_string()),
-        label_line(
-            app,
-            i18n::home_current(),
-            app.data
-                .config
-                .current
-                .clone()
-                .unwrap_or_else(|| "none".into()),
-        ),
-        label_line(
-            app,
-            i18n::home_write_mode(),
-            app.data.config.settings.write_mode.clone(),
-        ),
-        label_line(
-            app,
-            i18n::home_provider_prefix(),
-            app.data.config.settings.provider_prefix.clone(),
-        ),
+        label_line(app, i18n::home_current(), app.data.config.current.clone().unwrap_or_else(|| "none".into())),
+        label_line(app, i18n::home_write_mode(), app.data.config.settings.write_mode.clone()),
         label_line(app, i18n::home_proxy_daemon(), daemon),
         Line::default(),
-        label_line(
-            app,
-            i18n::home_config(),
-            crate::config::config_path().display().to_string(),
-        ),
-        label_line(
-            app,
-            i18n::home_pi_models(),
-            crate::config::models_path().display().to_string(),
-        ),
-        label_line(
-            app,
-            i18n::home_backups(),
-            crate::config::backup_dir().display().to_string(),
-        ),
+        label_line(app, i18n::home_config(), crate::config::config_path().display().to_string()),
+        label_line(app, i18n::home_pi_models(), crate::config::models_path().display().to_string()),
+        label_line(app, i18n::home_backups(), crate::config::backup_dir().display().to_string()),
         Line::default(),
-        label_line(
-            app,
-            i18n::home_requests(),
-            i18n::home_requests_fmt(
-                app.data.stats.total_requests,
-                app.data.stats.ok_requests,
-                &app.data.stats.success_rate,
-            ),
-        ),
+        label_line(app, i18n::home_requests(), i18n::home_requests_fmt(
+            app.data.stats.total_requests, app.data.stats.ok_requests, &app.data.stats.success_rate,
+        )),
     ];
+    frame.render_widget(Paragraph::new(lines), top[1]);
 
-    frame.render_widget(Paragraph::new(lines), chunks[1]);
+    // Bottom: ASCII logo + tagline
+    let logo_lines: Vec<Line> = i18n::home_logo()
+        .lines()
+        .map(|s| Line::from(Span::styled(s.to_string(), Style::default().fg(theme.surface))))
+        .collect();
+    let tagline = Line::from(Span::styled(
+        i18n::home_tagline(),
+        Style::default().fg(theme.dim),
+    ));
+    let mut bottom_lines = logo_lines;
+    bottom_lines.push(Line::default());
+    bottom_lines.push(tagline);
+    frame.render_widget(
+        Paragraph::new(bottom_lines).alignment(ratatui::layout::Alignment::Center),
+        chunks[1],
+    );
 }
 
 pub(super) fn render_presets(frame: &mut Frame<'_>, app: &App, area: Rect) {
