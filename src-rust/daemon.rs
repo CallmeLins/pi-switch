@@ -1,7 +1,7 @@
 use crate::config::{config_dir, load_config};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::process::Command;
 
 fn pid_path() -> PathBuf { config_dir().join("proxy.pid") }
 
@@ -33,8 +33,14 @@ pub struct DaemonResult {
     pub message: String,
 }
 
+#[cfg(unix)]
 fn is_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_alive(_pid: u32) -> bool {
+    false
 }
 
 fn read_pid_file() -> Option<DaemonInfo> {
@@ -58,8 +64,10 @@ fn remove_pid_file() {
     std::fs::remove_file(pid_path()).ok();
 }
 
+#[cfg(unix)]
 pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonResult, String> {
-    // Check if already running
+    use std::process::Child;
+
     if let Some(info) = read_pid_file() {
         if is_alive(info.pid) {
             let msg = format!("Proxy daemon already running (PID {}) on http://{}:{}", info.pid, info.host, info.port);
@@ -79,7 +87,6 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
     let host = host.unwrap_or_else(|| config.settings.proxy.host.clone());
     let port = port.unwrap_or(config.settings.proxy.port);
 
-    // Spawn detached child process
     let child: Child = Command::new(std::env::current_exe().unwrap_or_else(|_| "pi-switch".into()))
         .arg("proxy")
         .arg("start")
@@ -111,13 +118,22 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
         pid: Some(pid),
         host: Some(host.clone()),
         port: Some(port),
-        target: None,
-        failover: None,
+        target: None, failover: None,
         started_at: Some(now_ms),
         message: format!("Proxy daemon started (PID {}) on http://{}:{}", pid, host, port),
     })
 }
 
+#[cfg(not(unix))]
+pub fn daemon_start(_host: Option<String>, _port: Option<u16>) -> Result<DaemonResult, String> {
+    Ok(DaemonResult {
+        running: false, pid: None, host: None, port: None,
+        target: None, failover: None, started_at: None,
+        message: "Daemon management is not supported on this platform".into(),
+    })
+}
+
+#[cfg(unix)]
 pub fn daemon_stop() -> Result<DaemonResult, String> {
     let info = match read_pid_file() {
         Some(i) => i,
@@ -135,10 +151,8 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
         });
     }
 
-    // Send SIGTERM
     unsafe { libc::kill(info.pid as i32, libc::SIGTERM); }
 
-    // Wait up to 5 seconds
     for _ in 0..50 {
         std::thread::sleep(std::time::Duration::from_millis(100));
         if !is_alive(info.pid) {
@@ -150,12 +164,20 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
         }
     }
 
-    // Force kill
     unsafe { libc::kill(info.pid as i32, libc::SIGKILL); }
     remove_pid_file();
     Ok(DaemonResult {
         running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
         message: format!("Proxy daemon (PID {}) force killed", info.pid),
+    })
+}
+
+#[cfg(not(unix))]
+pub fn daemon_stop() -> Result<DaemonResult, String> {
+    Ok(DaemonResult {
+        running: false, pid: None, host: None, port: None,
+        target: None, failover: None, started_at: None,
+        message: "Daemon management is not supported on this platform".into(),
     })
 }
 
@@ -168,26 +190,25 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
         }),
     };
 
-    if !is_alive(info.pid) {
+    if is_alive(info.pid) {
+        let config = load_config()
+            .map(|c| c.settings.proxy)
+            .unwrap_or_default();
+        Ok(DaemonResult {
+            running: true,
+            pid: Some(info.pid),
+            host: Some(info.host.clone()),
+            port: Some(info.port),
+            target: config.target.clone(),
+            failover: if config.failover.is_empty() { None } else { Some(config.failover.clone()) },
+            started_at: Some(info.started_at),
+            message: format!("Proxy daemon is running (PID {}) on http://{}:{}", info.pid, info.host, info.port),
+        })
+    } else {
         remove_pid_file();
-        return Ok(DaemonResult {
+        Ok(DaemonResult {
             running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
-            message: format!("Proxy daemon is not running (PID {} is dead)", info.pid),
-        });
+            message: format!("PID {} is not alive (cleaned up stale PID)", info.pid),
+        })
     }
-
-    let host = info.host.clone();
-    let port = info.port;
-    let config = load_config().map_err(|e| e.to_string())?;
-
-    Ok(DaemonResult {
-        running: true,
-        pid: Some(info.pid),
-        host: Some(host.clone()),
-        port: Some(port),
-        target: config.settings.proxy.target.clone(),
-        failover: Some(config.settings.proxy.failover.clone()),
-        started_at: Some(info.started_at),
-        message: format!("Proxy daemon running (PID {}) on http://{}:{}", info.pid, host, port),
-    })
 }
