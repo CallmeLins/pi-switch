@@ -4,28 +4,40 @@ use std::path::PathBuf;
 
 // ─── Types matching pi-switch JS config ───────────────────
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default = "default_input")]
     pub input: Vec<String>,
-    #[serde(default = "default_context_window")]
+    #[serde(default = "default_context_window", rename = "contextWindow", alias = "context_window")]
     pub context_window: u32,
-    #[serde(default = "default_max_tokens")]
+    #[serde(default = "default_max_tokens", rename = "maxTokens", alias = "max_tokens")]
     pub max_tokens: u32,
     #[serde(default)]
     pub cost: ModelCost,
 }
 
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: None,
+            input: vec!["text".into()],
+            context_window: 128000,
+            max_tokens: 16384,
+            cost: ModelCost::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelCost {
     pub input: f64,
     pub output: f64,
-    #[serde(rename = "cacheRead")]
     pub cache_read: f64,
-    #[serde(rename = "cacheWrite")]
     pub cache_write: f64,
 }
 
