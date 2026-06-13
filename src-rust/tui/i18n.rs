@@ -231,6 +231,7 @@ pub fn form_template_pane() -> &'static str { t!(" Template ", " 模板 ") }
 pub fn form_custom_chip() -> &'static str { t!("Custom", "自定义") }
 pub fn form_fields_pane() -> &'static str { t!(" Fields ", " 字段 ") }
 pub fn form_json_preview_pane() -> &'static str { t!(" JSON Preview ", " JSON 预览 ") }
+pub fn form_json_editing_pane() -> &'static str { t!(" JSON Editing ", " JSON 编辑中 ") }
 pub fn form_editing(field: &str) -> String {
     if is_zh() { format!(" {field} (编辑中) ") } else { format!(" {field} (editing) ") }
 }

@@ -543,21 +543,46 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         return;
     };
 
+    let editing = form.json_editing;
+    let title = if editing {
+        i18n::form_json_editing_pane()
+    } else {
+        i18n::form_json_preview_pane()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(super::pane_border_style(
             theme,
-            form.focus == FormFocus::JsonPreview,
+            form.focus == FormFocus::JsonPreview || editing,
         ))
-        .title(i18n::form_json_preview_pane());
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let text = if editing {
+        format!(" {}▎", form.json_edit.value)
+    } else {
+        form.json_preview()
+    };
+
     frame.render_widget(
-        Paragraph::new(form.json_preview())
-            .style(Style::default().fg(theme.cyan))
+        Paragraph::new(text)
+            .style(if editing {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.cyan)
+            })
             .wrap(Wrap { trim: false }),
         inner,
     );
+
+    if editing {
+        let (_, cursor_x) = visible_text_window(
+            &form.json_edit.value,
+            form.json_edit.cursor,
+            inner.width.saturating_sub(1).max(1),
+        );
+        frame.set_cursor_position((inner.x + 1 + cursor_x, inner.y));
+    }
 }

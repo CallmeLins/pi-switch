@@ -69,6 +69,8 @@ pub struct ProviderFormState {
     pub api_key: TextInput,
     pub models: TextInput,
     pub preset_id: Option<String>,
+    pub json_edit: TextInput,
+    pub json_editing: bool,
     /// Profile the form started from; preserves fields the form does not edit
     /// (headers, compat, proxy, ...).
     base: ProviderProfile,
@@ -116,6 +118,8 @@ impl ProviderFormState {
             api_key: TextInput::default(),
             models: TextInput::default(),
             preset_id: None,
+            json_edit: TextInput::default(),
+            json_editing: false,
             base: empty_profile(),
             baseline: String::new(),
         };
@@ -144,6 +148,8 @@ impl ProviderFormState {
             api_key: TextInput::new(profile.api_key.clone()),
             models: TextInput::new(models_text(&profile.models)),
             preset_id: profile.preset.clone(),
+            json_edit: TextInput::default(),
+            json_editing: false,
             base: profile.clone(),
             baseline: String::new(),
         };
@@ -263,6 +269,29 @@ impl ProviderFormState {
             return Err(if i18n::is_zh() { "至少需要一个模型".into() } else { "At least one model is required".into() });
         }
         Ok(profile)
+    }
+
+    /// Try to apply edited JSON back to form fields. Returns error message on failure.
+    pub fn apply_json_edit(&mut self) -> Result<(), String> {
+        let json_str = self.json_edit.value.trim();
+        if json_str.is_empty() {
+            return Err(if i18n::is_zh() { "JSON 不能为空".to_string() } else { "JSON cannot be empty".to_string() });
+        }
+        let parsed: serde_json::Value = serde_json::from_str(json_str)
+            .map_err(|e| format!("{}", e))?;
+        let obj = parsed.as_object()
+            .ok_or_else(|| if i18n::is_zh() { "JSON 必须是对象格式".to_string() } else { "JSON must be an object".to_string() })?;
+        let profile: ProviderProfile = serde_json::from_value(serde_json::Value::Object(obj.clone()))
+            .map_err(|e| format!("{}", e))?;
+
+        self.name.set(if let Some(key) = obj.keys().next() { key.clone() } else { self.name.value.clone() });
+        self.api_idx = api_index(&profile.api);
+        self.base_url.set(profile.base_url.clone());
+        self.api_key.set(profile.api_key.clone());
+        self.models.set(models_text(&profile.models));
+        self.base.models = profile.models.clone();
+        self.json_editing = false;
+        Ok(())
     }
 
     pub fn json_preview(&self) -> String {

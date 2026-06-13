@@ -827,6 +827,43 @@ impl App {
             return;
         };
 
+        // JSON edit mode
+        if form.json_editing {
+            match key.code {
+                KeyCode::Esc => {
+                    form.json_editing = false;
+                }
+                KeyCode::Enter => {
+                    match form.apply_json_edit() {
+                        Ok(()) => {}
+                        Err(e) => self.push_toast(ToastKind::Error, e),
+                    }
+                }
+                KeyCode::Tab => {
+                    if let Err(e) = form.apply_json_edit() {
+                        self.push_toast(ToastKind::Error, e);
+                    }
+                }
+                _ => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('s' | 'S'))
+                    {
+                        if let Err(e) = form.apply_json_edit() {
+                            self.push_toast(ToastKind::Error, e);
+                            return;
+                        }
+                        if self.save_form() {
+                            self.close_form();
+                        }
+                        return;
+                    }
+                    form.json_edit.apply_key(key);
+                }
+            }
+            return;
+        }
+
+        // Field edit mode
         if form.editing {
             match key.code {
                 KeyCode::Enter | KeyCode::Esc => {
@@ -869,7 +906,7 @@ impl App {
                 match focus {
                     FormFocus::Templates => self.on_form_templates_key(key),
                     FormFocus::Fields => self.on_form_fields_key(key),
-                    FormFocus::JsonPreview => {}
+                    FormFocus::JsonPreview => self.on_form_json_preview_key(key),
                 }
             }
         }
@@ -942,6 +979,16 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn on_form_json_preview_key(&mut self, key: KeyEvent) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        if matches!(key.code, KeyCode::Enter) {
+            form.json_edit = TextInput::new(form.json_preview());
+            form.json_editing = true;
         }
     }
 }
