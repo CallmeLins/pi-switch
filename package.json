@@ -32,8 +32,7 @@
     "build:native": "napi build --platform --release",
     "build:native:debug": "napi build --platform",
     "doctor": "node ./bin/pi-switch.js doctor",
-    "test": "node --test",
-    "prepublishOnly": "napi prepublish -t npm"
+    "test": "node --test"
   },
   "keywords": [
     "pi",
