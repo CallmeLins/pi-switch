@@ -11,6 +11,20 @@ pub struct UseOutcome {
     pub config_backup: Option<PathBuf>,
 }
 
+fn normalize_models(profile: &mut ProviderProfile) {
+    for m in &mut profile.models {
+        if m.context_window == 0 {
+            m.context_window = 128000;
+        }
+        if m.max_tokens == 0 {
+            m.max_tokens = 16384;
+        }
+        if m.input.is_empty() {
+            m.input = vec!["text".into()];
+        }
+    }
+}
+
 fn write_models_atomic(models: &serde_json::Value) -> Result<()> {
     let models_path = config::models_path();
     let tmp = config::config_dir().join("models.json.tmp");
@@ -64,6 +78,7 @@ pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome> {
         providers.retain(|k, _| !k.starts_with(&prefix));
     }
 
+    normalize_models(&mut profile);
     providers.insert(provider_id.clone(), profile);
 
     write_models_atomic(&models)?;
