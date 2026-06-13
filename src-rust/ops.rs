@@ -11,16 +11,20 @@ pub struct UseOutcome {
     pub config_backup: Option<PathBuf>,
 }
 
-fn normalize_models(profile: &mut ProviderProfile) {
-    for m in &mut profile.models {
-        if m.context_window == 0 {
-            m.context_window = 128000;
-        }
-        if m.max_tokens == 0 {
-            m.max_tokens = 16384;
-        }
-        if m.input.is_empty() {
-            m.input = vec!["text".into()];
+fn normalize_models(profile: &mut serde_json::Value) {
+    if let Some(models) = profile.get_mut("models").and_then(|v| v.as_array_mut()) {
+        for m in models {
+            if let Some(obj) = m.as_object_mut() {
+                if obj.get("contextWindow").or(obj.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+                    obj.insert("contextWindow".into(), serde_json::json!(128000));
+                }
+                if obj.get("maxTokens").or(obj.get("max_tokens")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+                    obj.insert("maxTokens".into(), serde_json::json!(16384));
+                }
+                if obj.get("input").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
+                    obj.insert("input".into(), serde_json::json!(["text"]));
+                }
+            }
         }
     }
 }
@@ -48,7 +52,7 @@ fn backup_models() -> Option<PathBuf> {
 
 pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome> {
     let mut config = load_config()?;
-    let profile = config
+    let mut profile = config
         .profiles
         .get(name)
         .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?
