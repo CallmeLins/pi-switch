@@ -10,7 +10,7 @@ pub struct ProfileRow {
     pub models: Vec<String>,
     pub provider_id: String,
     pub proxy: bool,
-    pub is_current: bool,
+    pub exposed_count: usize,
 }
 
 pub struct UiData {
@@ -28,7 +28,7 @@ fn offline_daemon(message: String) -> DaemonResult {
         pid: None,
         host: None,
         port: None,
-        target: None,
+        targets: None,
         failover: None,
         started_at: None,
         message,
@@ -86,7 +86,11 @@ fn profile_rows(config: &PiSwitchConfig) -> Vec<ProfileRow> {
                     .unwrap_or_default(),
                 provider_id,
                 proxy,
-                is_current: config.current.as_deref() == Some(name.as_str()),
+                exposed_count: profile
+                    .get("exposedModels")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
             }
         })
         .collect()

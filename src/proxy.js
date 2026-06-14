@@ -61,9 +61,26 @@ function buildCandidateNames(config, explicitProfile) {
     names.push(name);
   };
   add(explicitProfile);
-  add(config.settings.proxy.target);
-  for (const name of config.settings.proxy.failover || []) add(name);
-  add(pickDefaultTarget(config));
+
+  // New: check for providers with exposedModels
+  const hasExposed = Object.values(config.profiles || {}).some(p =>
+    Array.isArray(p.exposedModels) && p.exposedModels.length > 0
+  );
+
+  if (hasExposed) {
+    // Use only providers that have exposedModels set
+    for (const [name, profile] of Object.entries(config.profiles || {})) {
+      if (profile.proxy) continue;
+      if (Array.isArray(profile.exposedModels) && profile.exposedModels.length > 0) {
+        add(name);
+      }
+    }
+  } else {
+    // Fallback: use failover list or all non-proxy profiles
+    for (const name of config.settings.proxy.failover || []) add(name);
+    if (names.length === 0) add(pickDefaultTarget(config));
+  }
+
   return names;
 }
 
@@ -443,9 +460,31 @@ export async function daemonStatus() {
   };
 }
 
+function filterCandidatesByModel(config, candidateNames, requestedModel) {
+  if (!requestedModel) return candidateNames;
+
+  // Check if we're in exposed mode
+  const hasExposed = Object.values(config.profiles || {}).some(p =>
+    Array.isArray(p.exposedModels) && p.exposedModels.length > 0
+  );
+
+  return candidateNames.filter(name => {
+    const profile = config.profiles[name];
+    if (!profile) return false;
+
+    if (hasExposed && Array.isArray(profile.exposedModels)) {
+      // In exposed mode: check exposedModels
+      return profile.exposedModels.includes(requestedModel);
+    } else {
+      // Fallback mode: check models array
+      return (profile.models || []).some(m => m.id === requestedModel);
+    }
+  });
+}
+
 async function forwardWithFailover(req, res, config, candidateNames, targetPath) {
   const started = Date.now();
-  const body = await readBody(req);
+  const body = req.__body || await readBody(req);
   let parsed;
   try {
     parsed = JSON.parse(body.toString("utf8") || "{}");
@@ -625,7 +664,7 @@ async function forwardOpenAI(req, res, profile, targetPath) {
 
 async function forwardAnthropicWithFailover(req, res, config, candidateNames) {
   const started = Date.now();
-  const body = await readBody(req);
+  const body = req.__body || await readBody(req);
   let parsed;
   try {
     parsed = JSON.parse(body.toString("utf8") || "{}");
@@ -732,33 +771,87 @@ export async function startProxy(options = {}) {
         const candidates = buildCandidateNames(activeConfig, options.profile);
         const seen = new Set();
         const data = [];
-        for (const candidate of candidates) {
-          for (const model of activeConfig.profiles[candidate]?.models || []) {
-            if (seen.has(model.id)) continue;
-            seen.add(model.id);
-            data.push({ id: model.id, object: "model", owned_by: candidate });
+
+        // Check if any provider has exposedModels set
+        const hasExposed = Object.values(activeConfig.profiles || {}).some(p =>
+          Array.isArray(p.exposedModels) && p.exposedModels.length > 0
+        );
+
+        if (hasExposed) {
+          // New mode: only return exposedModels
+          for (const candidate of candidates) {
+            const profile = activeConfig.profiles[candidate];
+            if (!profile) continue;
+            const exposedModels = profile.exposedModels;
+            if (Array.isArray(exposedModels)) {
+              for (const modelId of exposedModels) {
+                if (seen.has(modelId)) continue;
+                seen.add(modelId);
+                data.push({ id: modelId, object: "model", owned_by: candidate });
+              }
+            }
+          }
+        } else {
+          // Fallback mode: return all models from all non-proxy profiles
+          for (const [name, profile] of Object.entries(activeConfig.profiles || {})) {
+            if (profile.proxy) continue;
+            for (const model of profile.models || []) {
+              if (seen.has(model.id)) continue;
+              seen.add(model.id);
+              data.push({ id: model.id, object: "model", owned_by: name });
+            }
           }
         }
+
         sendJson(res, 200, { object: "list", data });
         return;
       }
       if (url.pathname === "/v1/chat/completions") {
-        await forwardWithFailover(req, res, activeConfig, buildCandidateNames(activeConfig, options.profile), "chat/completions");
+        const body = await readBody(req);
+        let parsed;
+        try {
+          parsed = JSON.parse(body.toString("utf8") || "{}");
+        } catch {
+          parsed = {};
+        }
+        const requestedModel = parsed.model;
+        const allCandidates = buildCandidateNames(activeConfig, options.profile);
+        const filteredCandidates = filterCandidatesByModel(activeConfig, allCandidates, requestedModel);
+
+        // Reconstruct request with body
+        const fakeReq = { ...req, __body: body };
+        await forwardWithFailover(fakeReq, res, activeConfig, filteredCandidates, "chat/completions");
         return;
       }
       if (url.pathname === "/v1/messages") {
         // Direct Anthropic-compatible endpoint - forward natively
+        const body = await readBody(req);
+        let parsed;
+        try {
+          parsed = JSON.parse(body.toString("utf8") || "{}");
+        } catch {
+          parsed = {};
+        }
+        const requestedModel = parsed.model;
+
         const candidateNames = buildCandidateNames(activeConfig, options.profile);
         // Filter to anthropic profiles only for direct /v1/messages
         const anthropicCandidates = candidateNames.filter((name) => {
           const p = activeConfig.profiles[name];
           return p && p.api === "anthropic-messages";
         });
-        if (anthropicCandidates.length === 0) {
-          sendJson(res, 501, { error: { message: "No Anthropic-compatible upstream profile available", type: "unsupported_api" } });
+
+        // Further filter by model
+        const filteredCandidates = filterCandidatesByModel(activeConfig, anthropicCandidates, requestedModel);
+
+        if (filteredCandidates.length === 0) {
+          sendJson(res, 501, { error: { message: "No Anthropic-compatible upstream profile available for requested model", type: "unsupported_api" } });
           return;
         }
-        await forwardAnthropicWithFailover(req, res, activeConfig, anthropicCandidates);
+
+        // Reconstruct request with body
+        const fakeReq = { ...req, __body: body };
+        await forwardAnthropicWithFailover(fakeReq, res, activeConfig, filteredCandidates);
         return;
       }
       sendJson(res, 404, { error: { message: `Unsupported path ${url.pathname}`, type: "not_found" } });

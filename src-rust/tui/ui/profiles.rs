@@ -1,7 +1,7 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
 use crate::tui::app::App;
@@ -94,13 +94,13 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
     let rows = visible.iter().map(|row| {
-        let marker = if row.is_current {
-            i18n::profiles_marker_current()
+        let marker = if row.exposed_count > 0 {
+            format!("[{}]", row.exposed_count)
         } else {
-            i18n::profiles_marker_other()
+            "   ".to_string()
         };
-        let marker_style = if row.is_current {
-            Style::default().fg(theme.ok).add_modifier(Modifier::BOLD)
+        let marker_style = if row.exposed_count > 0 {
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -143,9 +143,9 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(3),
-            Constraint::Percentage(44),
-            Constraint::Percentage(46),
+            Constraint::Length(5),
+            Constraint::Percentage(43),
+            Constraint::Percentage(45),
         ],
     )
     .header(header)
@@ -218,6 +218,7 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
             ("e", i18n::key_edit()),
             ("Space", i18n::key_switch()),
             ("d", i18n::key_delete()),
+            ("x", i18n::key_expose()),
             ("↑↓", i18n::key_scroll()),
             ("Esc", i18n::key_back()),
         ],
@@ -441,8 +442,20 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(3)])
         .split(inner);
+
+    // Key bar at top
+    super::render_key_bar_center(
+        frame,
+        theme,
+        chunks[0],
+        &[
+            ("f", i18n::key_fetch()),
+            ("d", i18n::key_delete()),
+            ("Enter", i18n::key_edit()),
+        ],
+    );
 
     let label_width = FieldKind::ALL
         .iter()
@@ -481,7 +494,7 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let mut state = TableState::default();
     state.select(Some(form.field_idx));
-    frame.render_stateful_widget(table, chunks[0], &mut state);
+    frame.render_stateful_widget(table, chunks[1], &mut state);
 
     // Edit box for current field
     let field = form.current_field();
@@ -503,8 +516,8 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .border_type(BorderType::Plain)
         .border_style(edit_border)
         .title(edit_title);
-    let edit_inner = edit_block.inner(chunks[1]);
-    frame.render_widget(edit_block, chunks[1]);
+    let edit_inner = edit_block.inner(chunks[2]);
+    frame.render_widget(edit_block, chunks[2]);
 
     match field {
         FieldKind::Api => {
@@ -519,12 +532,23 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 edit_inner,
             );
         }
+        FieldKind::Models => {
+            let input_width = edit_inner.width.saturating_sub(1).max(1);
+            let (visible, cursor_x) = visible_text_window(&form.models.value, form.models.cursor, input_width);
+            frame.render_widget(
+                Paragraph::new(format!(" {visible}")),
+                edit_inner,
+            );
+            if editing {
+                frame.set_cursor_position((edit_inner.x + 1 + cursor_x, edit_inner.y));
+            }
+        }
         _ => {
             let input = match field {
                 FieldKind::Name => &form.name,
                 FieldKind::BaseUrl => &form.base_url,
                 FieldKind::ApiKey => &form.api_key,
-                FieldKind::Models => &form.models,
+                FieldKind::Models => unreachable!(),
                 FieldKind::Api => unreachable!(),
             };
             let input_width = edit_inner.width.saturating_sub(1).max(1);
@@ -573,6 +597,7 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
             } else {
                 Style::default().fg(theme.cyan)
             })
+            .scroll((form.json_scroll, 0))
             .wrap(Wrap { trim: false }),
         inner,
     );
@@ -594,13 +619,152 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
             cursor_pos += line_len + 1; // +1 for newline
         }
 
-        // Set cursor position with correct Y coordinate
-        let cursor_y = inner.y + cursor_line as u16;
+        // Adjust cursor position relative to scroll
+        let visible_line = cursor_line.saturating_sub(form.json_scroll as usize);
+        let cursor_y = inner.y + visible_line as u16;
         let cursor_x = inner.x + 1 + cursor_col as u16;
 
         // Only set cursor if within visible area
-        if cursor_y < inner.y + inner.height {
+        if cursor_y >= inner.y && cursor_y < inner.y + inner.height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }
+}
+
+// ─── Model Selection ──────────────────────────────────────
+
+pub fn render_model_selection(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    provider_name: &str,
+    is_expose_mode: bool,
+) {
+    let title = if is_expose_mode {
+        i18n::model_selection_title_expose(provider_name)
+    } else {
+        i18n::model_selection_title_fetch(provider_name)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(super::pane_border_style(
+            &app.theme,
+            app.focus == crate::tui::app::Focus::Content,
+        ))
+        .title(Span::raw(title));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if app.model_selection_loading {
+        let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spinner = spinner_chars[(app.tick % 10) as usize];
+        let loading_text = format!("{} {}", spinner, i18n::model_selection_loading());
+        let loading = Paragraph::new(loading_text)
+            .style(Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD))
+            .alignment(ratatui::layout::Alignment::Center);
+
+        // Center vertically
+        let center_y = area.height / 2;
+        let loading_area = Rect::new(
+            inner.x,
+            inner.y + center_y.saturating_sub(1),
+            inner.width,
+            3,
+        );
+        frame.render_widget(loading, loading_area);
+        return;
+    }
+
+    if app.model_selection_list.is_empty() {
+        let empty_msg = if is_expose_mode {
+            i18n::model_selection_empty_expose()
+        } else {
+            i18n::model_selection_empty_fetch()
+        };
+        let empty = Paragraph::new(empty_msg)
+            .style(Style::default().fg(app.theme.dim));
+        frame.render_widget(empty, inner);
+        return;
+    }
+
+    // Split area: list on left, help on right
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(inner);
+
+    // Render checklist
+    let items: Vec<ListItem> = app.model_selection_list
+        .iter()
+        .enumerate()
+        .map(|(idx, (model_id, selected))| {
+            let checkbox = if *selected { "[√]" } else { "[ ]" };
+            let text = format!(" {} {}", checkbox, model_id);
+
+            let style = if idx == app.model_selection_idx {
+                selection_style(&app.theme)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_symbol(highlight_symbol(&app.theme))
+        .highlight_style(selection_style(&app.theme));
+
+    frame.render_widget(list, chunks[0]);
+
+    // Render help
+    let help_text = if is_expose_mode {
+        vec![
+            Line::from(i18n::model_selection_help_expose_title()),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Space", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_toggle_text()),
+            ]),
+            Line::from(vec![
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_save_expose()),
+            ]),
+            Line::from(vec![
+                Span::styled("q/Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_cancel_text()),
+            ]),
+            Line::from(""),
+            Line::from(i18n::model_selection_help_expose_desc1()),
+            Line::from(i18n::model_selection_help_expose_desc2()),
+        ]
+    } else {
+        vec![
+            Line::from(i18n::model_selection_help_fetch_title()),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Space", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_toggle_text()),
+            ]),
+            Line::from(vec![
+                Span::styled("s", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_save_models()),
+            ]),
+            Line::from(vec![
+                Span::styled("q/Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(i18n::model_selection_help_cancel_text()),
+            ]),
+            Line::from(""),
+            Line::from(i18n::model_selection_help_fetch_desc1()),
+            Line::from(i18n::model_selection_help_fetch_desc2()),
+        ]
+    };
+
+    let help = Paragraph::new(help_text)
+        .style(Style::default().fg(app.theme.dim))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(help, chunks[1]);
 }

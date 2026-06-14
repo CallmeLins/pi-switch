@@ -24,7 +24,7 @@ pub struct DaemonResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
+    pub targets: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failover: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,7 +76,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
                 pid: Some(info.pid),
                 host: Some(info.host),
                 port: Some(info.port),
-                target: None, failover: None, started_at: None,
+                targets: None, failover: None, started_at: None,
                 message: msg,
             });
         }
@@ -133,7 +133,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
         pid: Some(pid),
         host: Some(host.clone()),
         port: Some(port),
-        target: None, failover: None,
+        targets: None, failover: None,
         started_at: Some(now_ms),
         message: format!("Proxy daemon started (PID {}) on http://{}:{}", pid, host, port),
     })
@@ -143,7 +143,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
 pub fn daemon_start(_host: Option<String>, _port: Option<u16>) -> Result<DaemonResult, String> {
     Ok(DaemonResult {
         running: false, pid: None, host: None, port: None,
-        target: None, failover: None, started_at: None,
+        targets: None, failover: None, started_at: None,
         message: "Daemon management is not supported on this platform".into(),
     })
 }
@@ -153,7 +153,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
     let info = match read_pid_file() {
         Some(i) => i,
         None => return Ok(DaemonResult {
-            running: false, pid: None, host: None, port: None, target: None, failover: None, started_at: None,
+            running: false, pid: None, host: None, port: None, targets: None, failover: None, started_at: None,
             message: "No proxy daemon PID file found".into(),
         }),
     };
@@ -161,7 +161,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
     if !is_alive(info.pid) {
         remove_pid_file();
         return Ok(DaemonResult {
-            running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
+            running: false, pid: Some(info.pid), host: None, port: None, targets: None, failover: None, started_at: None,
             message: format!("PID {} is not alive (cleaned up stale PID)", info.pid),
         });
     }
@@ -173,7 +173,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
         if !is_alive(info.pid) {
             remove_pid_file();
             return Ok(DaemonResult {
-                running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
+                running: false, pid: Some(info.pid), host: None, port: None, targets: None, failover: None, started_at: None,
                 message: format!("Proxy daemon (PID {}) stopped", info.pid),
             });
         }
@@ -182,7 +182,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
     unsafe { libc::kill(info.pid as i32, libc::SIGKILL); }
     remove_pid_file();
     Ok(DaemonResult {
-        running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
+        running: false, pid: Some(info.pid), host: None, port: None, targets: None, failover: None, started_at: None,
         message: format!("Proxy daemon (PID {}) force killed", info.pid),
     })
 }
@@ -191,7 +191,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
 pub fn daemon_stop() -> Result<DaemonResult, String> {
     Ok(DaemonResult {
         running: false, pid: None, host: None, port: None,
-        target: None, failover: None, started_at: None,
+        targets: None, failover: None, started_at: None,
         message: "Daemon management is not supported on this platform".into(),
     })
 }
@@ -200,7 +200,7 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
     let info = match read_pid_file() {
         Some(i) => i,
         None => return Ok(DaemonResult {
-            running: false, pid: None, host: None, port: None, target: None, failover: None, started_at: None,
+            running: false, pid: None, host: None, port: None, targets: None, failover: None, started_at: None,
             message: "Proxy daemon is not running (no PID file)".into(),
         }),
     };
@@ -209,12 +209,29 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
         let config = load_config()
             .map(|c| c.settings.proxy)
             .unwrap_or_default();
+
+        // Collect all providers with non-empty exposedModels as targets
+        let config_full = load_config().ok();
+        let targets: Vec<String> = config_full
+            .as_ref()
+            .map(|cfg| {
+                cfg.profiles.iter()
+                    .filter_map(|(name, profile)| {
+                        profile.get("exposedModels")
+                            .and_then(|v| v.as_array())
+                            .filter(|arr| !arr.is_empty())
+                            .map(|_| name.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(DaemonResult {
             running: true,
             pid: Some(info.pid),
             host: Some(info.host.clone()),
             port: Some(info.port),
-            target: config.target.clone(),
+            targets: if targets.is_empty() { None } else { Some(targets) },
             failover: if config.failover.is_empty() { None } else { Some(config.failover.clone()) },
             started_at: Some(info.started_at),
             message: format!("Proxy daemon is running (PID {}) on http://{}:{}", info.pid, info.host, info.port),
@@ -222,7 +239,7 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
     } else {
         remove_pid_file();
         Ok(DaemonResult {
-            running: false, pid: Some(info.pid), host: None, port: None, target: None, failover: None, started_at: None,
+            running: false, pid: Some(info.pid), host: None, port: None, targets: None, failover: None, started_at: None,
             message: format!("PID {} is not alive (cleaned up stale PID)", info.pid),
         })
     }

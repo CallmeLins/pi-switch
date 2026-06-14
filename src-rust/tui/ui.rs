@@ -45,11 +45,14 @@ fn render_content(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Route::Home => pages::render_home(frame, app, area),
         Route::Profiles => profiles::render_profiles(frame, app, area),
         Route::ProfileDetail(name) => profiles::render_profile_detail(frame, app, area, &name),
+        Route::FetchModels(name) => profiles::render_model_selection(frame, app, area, &name, false),
+        Route::ExposeModels(name) => profiles::render_model_selection(frame, app, area, &name, true),
         Route::Form => profiles::render_form(frame, app, area),
         Route::Proxy => pages::render_proxy(frame, app, area),
         Route::Stats => pages::render_stats(frame, app, area),
         Route::Backups => pages::render_backups(frame, app, area),
         Route::Settings => pages::render_settings(frame, app, area),
+        Route::FailoverEditor => pages::render_failover_editor(frame, app, area),
     }
 }
 

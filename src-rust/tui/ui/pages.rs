@@ -159,7 +159,19 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
     status_lines.push(Line::default());
     status_lines.push(label_line(app, i18n::proxy_listen(), format!("{}:{}", proxy.host, proxy.port)));
-    status_lines.push(label_line(app, i18n::proxy_target(), proxy.target.clone().unwrap_or_else(|| "—".into())));
+
+    // Show targets (auto-selected from exposedModels)
+    let targets_display = if let Some(ref targets) = app.data.daemon.targets {
+        if targets.is_empty() {
+            "—".into()
+        } else {
+            targets.join(", ")
+        }
+    } else {
+        "—".into()
+    };
+    status_lines.push(label_line(app, i18n::proxy_target(), targets_display));
+
     status_lines.push(label_line(
         app,
         i18n::proxy_failover(),
@@ -357,7 +369,11 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         &[
             ("↑↓", i18n::key_move()),
             ("←→/Space", if app.settings_proxy_idx == 0 { i18n::key_switch() } else { "" }),
-            ("Enter", i18n::key_edit()),
+            ("Enter", if app.settings_proxy_idx == 3 {
+                if i18n::is_zh() { "编辑" } else { "Edit" }
+            } else {
+                i18n::key_edit()
+            }),
             ("Esc", i18n::key_back()),
         ]
     };
@@ -383,7 +399,6 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }),
         (i18n::settings_proxy_host(), proxy.host.clone()),
         (i18n::settings_proxy_port(), proxy.port.to_string()),
-        (i18n::settings_proxy_target(), proxy.target.clone().unwrap_or_else(|| "—".into())),
         (i18n::settings_proxy_failover(), failover_str),
     ];
 
@@ -449,4 +464,59 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             frame.set_cursor_position((x + cursor_x, y));
         }
     }
+}
+
+pub(super) fn render_failover_editor(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let block = content_block(app, if i18n::is_zh() {
+        "故障转移链编辑"
+    } else {
+        "Failover Chain Editor"
+    });
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    let key_hints: &[(&str, &str)] = &[
+        ("↑↓", i18n::key_move()),
+        ("Space", if i18n::is_zh() { "勾选" } else { "Toggle" }),
+        ("Ctrl+j/k", if i18n::is_zh() { "移动" } else { "Move" }),
+        ("Enter/s", i18n::key_save()),
+        ("Esc", i18n::key_back()),
+    ];
+    render_key_bar_center(frame, theme, chunks[0], key_hints);
+
+    if app.failover_list.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                if i18n::is_zh() { "无可用的供应商" } else { "No available providers" },
+                Style::default().fg(theme.dim),
+            ))),
+            chunks[1],
+        );
+        return;
+    }
+
+    // Render list with checkboxes
+    let items: Vec<ListItem<'_>> = app
+        .failover_list
+        .iter()
+        .map(|(name, selected)| {
+            let checkbox = if *selected { "[✓]" } else { "[ ]" };
+            let text = format!("  {} {}", checkbox, name);
+            ListItem::new(text)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
+
+    let mut state = ListState::default();
+    state.select(Some(app.failover_idx));
+    frame.render_stateful_widget(list, chunks[1], &mut state);
 }

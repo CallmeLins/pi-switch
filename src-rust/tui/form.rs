@@ -71,6 +71,7 @@ pub struct ProviderFormState {
     pub preset_id: Option<String>,
     pub json_edit: TextInput,
     pub json_editing: bool,
+    pub json_scroll: u16,
     /// Profile the form started from; preserves fields the form does not edit
     /// (headers, compat, proxy, ...).
     base: ProviderProfile,
@@ -101,6 +102,8 @@ fn empty_profile() -> ProviderProfile {
         compat: None,
         proxy: false,
         updated_at: None,
+        model_map: None,
+        exposed_models: vec![],
     }
 }
 
@@ -120,6 +123,7 @@ impl ProviderFormState {
             preset_id: None,
             json_edit: TextInput::default(),
             json_editing: false,
+            json_scroll: 0,
             base: empty_profile(),
             baseline: String::new(),
         };
@@ -142,6 +146,7 @@ impl ProviderFormState {
             preset_id: profile.preset.clone(),
             json_edit: TextInput::default(),
             json_editing: false,
+            json_scroll: 0,
             base: profile.clone(),
             baseline: String::new(),
         };

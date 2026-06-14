@@ -35,7 +35,7 @@ pub fn encrypt_config(passphrase: &str) -> Result<String, String> {
     // PKCS7 padding
     let mut data = text.as_bytes().to_vec();
     let pad_len = 16 - (data.len() % 16);
-    data.extend(std::iter::repeat(pad_len as u8).take(pad_len));
+    data.extend(std::iter::repeat_n(pad_len as u8, pad_len));
 
     // Encrypt using AES-256-CBC manually
     let cipher = aes::Aes256::new_from_slice(&key)
@@ -52,7 +52,7 @@ pub fn encrypt_config(passphrase: &str) -> Result<String, String> {
 
     let encrypted = serde_json::json!({
         "v": 1,
-        "iv": B64.encode(&iv),
+        "iv": B64.encode(iv),
         "data": B64.encode(&data),
     });
 
@@ -133,7 +133,7 @@ pub fn import_config(file_path: &str, passphrase: &str) -> Result<String, String
         let needs_sanitize = new_config.profiles.get(&name)
             .and_then(|v| v.get("apiKey"))
             .and_then(|v| v.as_str())
-            .map_or(false, |key| !key.starts_with('$') && key.len() > 8);
+            .is_some_and(|key| !key.starts_with('$') && key.len() > 8);
         if needs_sanitize {
             if let Some(profile) = new_config.profiles.get_mut(&name) {
                 profile["apiKey"] = serde_json::Value::String("$PI_SWITCH_IMPORTED_KEY".into());

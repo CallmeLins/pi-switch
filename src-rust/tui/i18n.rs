@@ -197,8 +197,6 @@ pub fn backups_empty() -> &'static str {
 
 pub fn profiles_api_url_col() -> &'static str { t!("API URL", "API 地址") }
 pub fn profiles_name_id_col() -> &'static str { t!("Name / ID", "名称 / ID") }
-pub fn profiles_marker_current() -> &'static str { t!("*", "★") }
-pub fn profiles_marker_other() -> &'static str { " " }
 pub fn profiles_proxy_badge() -> &'static str { t!("[proxy]", "[代理]") }
 pub fn profiles_empty_add() -> &'static str {
     t!("No profiles yet.\n\nPress a to add your first profile,\nor pick a template from Presets.",
@@ -271,6 +269,8 @@ pub fn key_save() -> &'static str { t!("save", "保存") }
 pub fn key_close() -> &'static str { t!("close", "关闭") }
 pub fn key_confirm() -> &'static str { t!("confirm", "确认") }
 pub fn key_cancel() -> &'static str { t!("cancel", "取消") }
+pub fn key_fetch() -> &'static str { t!("Fetch", "获取模型") }
+pub fn key_expose() -> &'static str { t!("Expose", "暴露模型") }
 
 // ─── Overlay: Help ───────────────────────────────────────
 
@@ -403,6 +403,18 @@ pub fn toast_lang_set(code: &str) -> String {
     if is_zh() { format!("语言已设为: {}", if code == "zh" { "中文" } else { "English" }) }
     else { format!("Language set to: {}", if code == "zh" { "Chinese" } else { "English" }) }
 }
+pub fn toast_models_fetched(count: usize) -> String {
+    if is_zh() { format!("已获取 {} 个模型", count) }
+    else { format!("{} models fetched", count) }
+}
+pub fn toast_models_updated(name: &str) -> String {
+    if is_zh() { format!("已更新供应商 '{}' 的模型列表", name) }
+    else { format!("Updated models for '{}'", name) }
+}
+pub fn toast_exposed_models_updated(name: &str) -> String {
+    if is_zh() { format!("已更新供应商 '{}' 的暴露模型并同步到 pi 配置", name) }
+    else { format!("Updated exposed models for '{}' and synced to pi config", name) }
+}
 
 // ─── Settings page ───────────────────────────────────────
 
@@ -411,7 +423,6 @@ pub fn settings_lang_en() -> &'static str { t!("English", "English") }
 pub fn settings_lang_zh() -> &'static str { t!("中文", "中文") }
 pub fn settings_proxy_host() -> &'static str { t!("Proxy host", "代理地址") }
 pub fn settings_proxy_port() -> &'static str { t!("Proxy port", "代理端口") }
-pub fn settings_proxy_target() -> &'static str { t!("Proxy target", "代理目标") }
 pub fn settings_proxy_failover() -> &'static str { t!("Failover chain", "故障转移链") }
 pub fn settings_saved() -> &'static str { t!("Settings saved", "设置已保存") }
 pub fn settings_header_setting() -> &'static str { t!("Setting", "设置项") }
@@ -422,6 +433,57 @@ pub fn settings_header_value() -> &'static str { t!("Value", "当前值") }
 pub fn proxy_action_start() -> &'static str { t!("Start daemon", "启动守护进程") }
 pub fn proxy_action_stop() -> &'static str { t!("Stop daemon", "停止守护进程") }
 pub fn proxy_action_status() -> &'static str { t!("Refresh status", "刷新状态") }
+
+// ─── Model Selection ─────────────────────────────────────
+
+pub fn model_selection_title_fetch(name: &str) -> String {
+    if is_zh() { format!(" 获取并选择模型: {} ", name) }
+    else { format!(" Fetch & Select Models: {} ", name) }
+}
+pub fn model_selection_title_expose(name: &str) -> String {
+    if is_zh() { format!(" 暴露模型到 Pi: {} ", name) }
+    else { format!(" Expose Models: {} ", name) }
+}
+pub fn model_selection_loading() -> &'static str {
+    t!("Fetching models from provider...", "正在从供应商获取模型...")
+}
+pub fn model_selection_empty_expose() -> &'static str {
+    t!("No models configured for this provider.\nAdd models first using 'f' (Fetch Models).",
+       "此供应商未配置模型。\n请先使用 'f' 键获取模型。")
+}
+pub fn model_selection_empty_fetch() -> &'static str {
+    t!("No models available.", "无可用模型。")
+}
+pub fn model_selection_help_expose_title() -> &'static str {
+    t!("Expose Models", "暴露模型")
+}
+pub fn model_selection_help_fetch_title() -> &'static str {
+    t!("Select Provider Models", "选择供应商模型")
+}
+pub fn model_selection_help_expose_desc1() -> &'static str {
+    t!("Only checked models will", "仅勾选的模型会")
+}
+pub fn model_selection_help_expose_desc2() -> &'static str {
+    t!("appear in pi config.", "出现在 pi 配置中。")
+}
+pub fn model_selection_help_fetch_desc1() -> &'static str {
+    t!("Models define provider", "模型定义了供应商的")
+}
+pub fn model_selection_help_fetch_desc2() -> &'static str {
+    t!("capabilities for failover.", "故障转移能力。")
+}
+pub fn model_selection_help_save_expose() -> &'static str {
+    t!(" - Save & sync to pi", " - 保存并同步到 pi")
+}
+pub fn model_selection_help_save_models() -> &'static str {
+    t!(" - Save models", " - 保存模型")
+}
+pub fn model_selection_help_toggle_text() -> &'static str {
+    t!(" - Toggle selection", " - 切换选择")
+}
+pub fn model_selection_help_cancel_text() -> &'static str {
+    t!(" - Cancel", " - 取消")
+}
 
 // ─── Menu title ──────────────────────────────────────────
 

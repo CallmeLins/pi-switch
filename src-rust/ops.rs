@@ -11,15 +11,16 @@ pub struct UseOutcome {
     pub config_backup: Option<PathBuf>,
 }
 
+#[allow(dead_code)]
 fn normalize_models(profile: &mut serde_json::Value) {
     if let Some(models) = profile.get_mut("models").and_then(|v| v.as_array_mut()) {
         for m in models {
             if let Some(obj) = m.as_object_mut() {
                 if obj.get("contextWindow").or(obj.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
-                    obj.insert("contextWindow".into(), serde_json::json!(128000));
+                    obj.insert("contextWindow".into(), serde_json::json!(1000000));
                 }
                 if obj.get("maxTokens").or(obj.get("max_tokens")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
-                    obj.insert("maxTokens".into(), serde_json::json!(16384));
+                    obj.insert("maxTokens".into(), serde_json::json!(128000));
                 }
                 if obj.get("input").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
                     obj.insert("input".into(), serde_json::json!(["text"]));
@@ -38,6 +39,54 @@ fn write_models_atomic(models: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
+pub fn update_exposed_models(name: &str, model_ids: Vec<String>) -> Result<Option<PathBuf>> {
+    let mut config = load_config()?;
+    let backup = backup_config("config")?;
+
+    let profile_value = config
+        .profiles
+        .get_mut(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let mut profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    profile.exposed_models = model_ids;
+    profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
+
+    *profile_value = serde_json::to_value(&profile)
+        .map_err(|e| AppError::json(config::config_path(), e))?;
+
+    save_config(&config)?;
+
+    // Sync all profiles to pi config to keep models.json consistent
+    sync_all_profiles_to_pi()?;
+
+    Ok(backup)
+}
+
+pub fn update_provider_models(name: &str, models: Vec<config::ModelEntry>) -> Result<Option<PathBuf>> {
+    let mut config = load_config()?;
+    let backup = backup_config("config")?;
+
+    let profile_value = config
+        .profiles
+        .get_mut(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let mut profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    profile.models = models;
+    profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
+
+    *profile_value = serde_json::to_value(&profile)
+        .map_err(|e| AppError::json(config::config_path(), e))?;
+
+    save_config(&config)?;
+
+    Ok(backup)
+}
 fn backup_models() -> Option<PathBuf> {
     let models_path = config::models_path();
     if !models_path.exists() {
@@ -52,11 +101,6 @@ fn backup_models() -> Option<PathBuf> {
 
 pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome> {
     let mut config = load_config()?;
-    let mut profile = config
-        .profiles
-        .get(name)
-        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?
-        .clone();
 
     let mode = mode
         .map(str::to_string)
@@ -64,28 +108,26 @@ pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome> {
     let provider_id = provider_id_for(&config, name);
 
     let models_path = config::models_path();
-    let mut models: serde_json::Value = if models_path.exists() {
-        let text = std::fs::read_to_string(&models_path).unwrap_or_default();
-        serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
-    } else {
-        serde_json::json!({ "providers": {} })
-    };
-
     let models_backup = backup_models();
 
-    let providers = models["providers"]
-        .as_object_mut()
-        .ok_or_else(|| AppError::Message("invalid models.json".into()))?;
-
+    // Handle exclusive mode
     if mode == "exclusive" {
-        let prefix = format!("{}-", config.settings.provider_prefix);
-        providers.retain(|k, _| !k.starts_with(&prefix));
+        let mut models: serde_json::Value = if models_path.exists() {
+            let text = std::fs::read_to_string(&models_path).unwrap_or_default();
+            serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
+        } else {
+            serde_json::json!({ "providers": {} })
+        };
+
+        if let Some(providers) = models["providers"].as_object_mut() {
+            let prefix = format!("{}-", config.settings.provider_prefix);
+            providers.retain(|k, _| !k.starts_with(&prefix));
+            write_models_atomic(&models)?;
+        }
     }
 
-    normalize_models(&mut profile);
-    providers.insert(provider_id.clone(), profile);
-
-    write_models_atomic(&models)?;
+    // Sync exposed models to pi config
+    sync_exposed_models_to_pi(name)?;
 
     let config_backup = backup_config("config")?;
 
@@ -140,6 +182,22 @@ pub fn remove_profile(name: &str) -> Result<Option<PathBuf>> {
     }
 
     let backup = backup_config("config")?;
+
+    // Remove from models.json
+    let provider_id = provider_id_for(&config, name);
+    let models_path = config::models_path();
+    if models_path.exists() {
+        let mut models: serde_json::Value = {
+            let text = std::fs::read_to_string(&models_path)
+                .map_err(|e| AppError::io(&models_path, e))?;
+            serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
+        };
+
+        if let Some(providers) = models["providers"].as_object_mut() {
+            providers.remove(&provider_id);
+            write_models_atomic(&models)?;
+        }
+    }
 
     config.profiles.remove(name);
     if config.current.as_deref() == Some(name) {
@@ -329,8 +387,192 @@ pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
     Err(AppError::Message(last_error))
 }
 
+
+// ─── Sync Exposed Models to Pi Config ────────────────────
+
+pub fn sync_exposed_models_to_pi(name: &str) -> Result<()> {
+    let config = load_config()?;
+    let profile_value = config
+        .profiles
+        .get(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    let provider_id = provider_id_for(&config, name);
+    let models_path = config::models_path();
+
+    // Load existing models.json
+    let mut models: serde_json::Value = if models_path.exists() {
+        let text = std::fs::read_to_string(&models_path)
+            .map_err(|e| AppError::io(&models_path, e))?;
+        serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
+    } else {
+        serde_json::json!({ "providers": {} })
+    };
+
+    let providers = models["providers"]
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("invalid models.json".into()))?;
+
+    // Filter models to only exposed ones
+    let exposed_models: Vec<serde_json::Value> = profile.models
+        .into_iter()
+        .filter(|m| profile.exposed_models.contains(&m.id))
+        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+        .collect();
+
+    // Determine baseUrl: use proxy if enabled and target is set
+    let base_url = if let Some(proxy_target) = config.settings.proxy.target.as_ref() {
+        if proxy_target == name {
+            // This is the proxy target, route through proxy server
+            let host = &config.settings.proxy.host;
+            let port = config.settings.proxy.port;
+            format!("http://{}:{}/v1", host, port)
+        } else {
+            // Not the target, use original baseUrl
+            profile.base_url.clone()
+        }
+    } else {
+        // No proxy target configured, use original baseUrl
+        profile.base_url.clone()
+    };
+
+    // Build provider entry
+    let mut provider_entry = serde_json::json!({
+        "api": profile.api,
+        "baseUrl": base_url,
+        "apiKey": profile.api_key,
+        "models": exposed_models,
+        "proxy": profile.proxy,
+    });
+
+    if let Some(preset) = profile.preset {
+        provider_entry["preset"] = serde_json::json!(preset);
+    }
+    if let Some(headers) = profile.headers {
+        provider_entry["headers"] = headers;
+    }
+    if let Some(auth_header) = profile.auth_header {
+        provider_entry["authHeader"] = serde_json::json!(auth_header);
+    }
+    if let Some(compat) = profile.compat {
+        provider_entry["compat"] = serde_json::json!(compat);
+    }
+    if let Some(updated_at) = profile.updated_at {
+        provider_entry["updatedAt"] = serde_json::json!(updated_at);
+    }
+
+    providers.insert(provider_id, provider_entry);
+
+    // Write atomically
+    let tmp = config::config_dir().join("models.json.tmp");
+    let json = serde_json::to_string_pretty(&models)
+        .map_err(|e| AppError::json(&models_path, e))?;
+    std::fs::write(&tmp, json + "\n")
+        .map_err(|e| AppError::io(&tmp, e))?;
+    std::fs::rename(&tmp, &models_path)
+        .map_err(|e| AppError::io(&models_path, e))?;
+
+    Ok(())
+}
+
+pub fn sync_all_profiles_to_pi() -> Result<()> {
+    let config = load_config()?;
+    let models_path = config::models_path();
+
+    // Load existing models.json
+    let mut models: serde_json::Value = if models_path.exists() {
+        let text = std::fs::read_to_string(&models_path)
+            .map_err(|e| AppError::io(&models_path, e))?;
+        serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
+    } else {
+        serde_json::json!({ "providers": {} })
+    };
+
+    let providers = models["providers"]
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("invalid models.json".into()))?;
+
+    // Sync all non-proxy profiles
+    for (name, profile_value) in &config.profiles {
+        let profile: ProviderProfile = match serde_json::from_value(profile_value.clone()) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        if profile.proxy {
+            continue;
+        }
+
+        let provider_id = provider_id_for(&config, name);
+
+        // Filter models to only exposed ones
+        let exposed_models: Vec<serde_json::Value> = profile.models
+            .into_iter()
+            .filter(|m| profile.exposed_models.contains(&m.id))
+            .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+            .collect();
+
+        // Determine baseUrl: use proxy if enabled and target is set
+        let base_url = if let Some(proxy_target) = config.settings.proxy.target.as_ref() {
+            if proxy_target == name {
+                // This is the proxy target, route through proxy server
+                let host = &config.settings.proxy.host;
+                let port = config.settings.proxy.port;
+                format!("http://{}:{}/v1", host, port)
+            } else {
+                // Not the target, use original baseUrl
+                profile.base_url.clone()
+            }
+        } else {
+            // No proxy target configured, use original baseUrl
+            profile.base_url.clone()
+        };
+
+        // Build provider entry
+        let mut provider_entry = serde_json::json!({
+            "api": profile.api,
+            "baseUrl": base_url,
+            "apiKey": profile.api_key,
+            "models": exposed_models,
+            "proxy": profile.proxy,
+        });
+
+        if let Some(preset) = profile.preset {
+            provider_entry["preset"] = serde_json::json!(preset);
+        }
+        if let Some(headers) = profile.headers {
+            provider_entry["headers"] = headers;
+        }
+        if let Some(auth_header) = profile.auth_header {
+            provider_entry["authHeader"] = serde_json::json!(auth_header);
+        }
+        if let Some(compat) = profile.compat {
+            provider_entry["compat"] = serde_json::json!(compat);
+        }
+        if let Some(updated_at) = profile.updated_at {
+            provider_entry["updatedAt"] = serde_json::json!(updated_at);
+        }
+
+        providers.insert(provider_id, provider_entry);
+    }
+
+    // Write atomically
+    let tmp = config::config_dir().join("models.json.tmp");
+    let json = serde_json::to_string_pretty(&models)
+        .map_err(|e| AppError::json(&models_path, e))?;
+    std::fs::write(&tmp, json + "\n")
+        .map_err(|e| AppError::io(&tmp, e))?;
+    std::fs::rename(&tmp, &models_path)
+        .map_err(|e| AppError::io(&models_path, e))?;
+
+    Ok(())
+}
+
 // Build multiple candidate URLs to try (following cc-switch logic)
-fn build_model_fetch_urls(base_url: &str, api_type: &str) -> Vec<String> {
+pub fn build_model_fetch_urls(base_url: &str, api_type: &str) -> Vec<String> {
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() {
         return Vec::new();
@@ -403,7 +645,7 @@ fn strip_compat_suffix(base: &str) -> Option<&str> {
 }
 
 // Parse model IDs from various response formats
-fn parse_model_ids(payload: &serde_json::Value) -> Vec<String> {
+pub fn parse_model_ids(payload: &serde_json::Value) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
     // Try OpenAI format: { "data": [{"id": "..."}, ...] }

@@ -357,7 +357,7 @@ async function screenEditProfile(config) {
       const idx = item.indexOf("=");
       const id = idx === -1 ? item : item.slice(0, idx).trim();
       const mn = idx === -1 ? undefined : item.slice(idx + 1).trim();
-      return { id, ...(mn ? { name: mn } : {}), input: ["text"], contextWindow: 128000, maxTokens: 16384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      return { id, ...(mn ? { name: mn } : {}), input: ["text"], contextWindow: 1000000, maxTokens: 128000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
     });
     await update(name, { models });
     process.stdout.write(color("\n  ✓ Models updated", C.green) + "\n");

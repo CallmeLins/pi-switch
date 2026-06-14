@@ -153,6 +153,8 @@ pub fn add_provider(opts: AddProviderOptions) -> napi::Result<AddResult> {
             compat: None,
             proxy: false,
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
+            model_map: None,
+            exposed_models: vec![],
         }
     };
 
@@ -338,7 +340,7 @@ pub fn list_backups() -> napi::Result<Vec<String>> {
 
 #[napi]
 pub fn run_native_tui() -> napi::Result<()> {
-    tui::run_tui().map_err(|e| napi::Error::from_reason(e))
+    tui::run_tui().map_err(napi::Error::from_reason)
 }
 
 // ─── Proxy ────────────────────────────────────────────────
@@ -379,7 +381,7 @@ pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
 #[napi]
 pub fn daemon_start_native(host: Option<String>, port: Option<u16>) -> napi::Result<String> {
     let result = daemon::daemon_start(host, port)
-        .map_err(|e| napi::Error::from_reason(e))?;
+        .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
@@ -387,7 +389,7 @@ pub fn daemon_start_native(host: Option<String>, port: Option<u16>) -> napi::Res
 #[napi]
 pub fn daemon_stop_native() -> napi::Result<String> {
     let result = daemon::daemon_stop()
-        .map_err(|e| napi::Error::from_reason(e))?;
+        .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
@@ -395,7 +397,7 @@ pub fn daemon_stop_native() -> napi::Result<String> {
 #[napi]
 pub fn daemon_status_native() -> napi::Result<String> {
     let result = daemon::daemon_status()
-        .map_err(|e| napi::Error::from_reason(e))?;
+        .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
@@ -426,13 +428,13 @@ pub fn export_logs_csv() -> napi::Result<String> {
 #[napi]
 pub fn export_config(passphrase: String) -> napi::Result<String> {
     sync::encrypt_config(&passphrase)
-        .map_err(|e| napi::Error::from_reason(e))
+        .map_err(napi::Error::from_reason)
 }
 
 #[napi]
 pub fn import_config(file_path: String, passphrase: String) -> napi::Result<String> {
     sync::import_config(&file_path, &passphrase)
-        .map_err(|e| napi::Error::from_reason(e))
+        .map_err(napi::Error::from_reason)
 }
 
 #[napi]
@@ -504,5 +506,50 @@ pub fn duplicate_provider(src_name: String, dst_name: String) -> napi::Result<St
         Ok(format!("Provider '{}' duplicated as '{}'. Backup: {}", src_name, dst_name, path.display()))
     } else {
         Ok(format!("Provider '{}' duplicated as '{}'", src_name, dst_name))
+    }
+}
+
+#[napi]
+pub fn update_exposed_models(name: String, model_ids: Vec<String>) -> napi::Result<String> {
+    let backup = ops::update_exposed_models(&name, model_ids)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    if let Some(path) = backup {
+        Ok(format!("Exposed models updated. Backup: {}", path.display()))
+    } else {
+        Ok("Exposed models updated".to_string())
+    }
+}
+
+#[napi(object)]
+pub struct ModelEntryInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub input: Option<Vec<String>>,
+    pub context_window: Option<u32>,
+    pub max_tokens: Option<u32>,
+}
+
+#[napi]
+pub fn update_provider_models(name: String, models: Vec<ModelEntryInput>) -> napi::Result<String> {
+    let model_entries: Vec<config::ModelEntry> = models
+        .into_iter()
+        .map(|m| config::ModelEntry {
+            id: m.id,
+            name: m.name,
+            input: m.input.unwrap_or_else(|| vec!["text".to_string()]),
+            context_window: m.context_window.unwrap_or(128000),
+            max_tokens: m.max_tokens.unwrap_or(16384),
+            cost: config::ModelCost::default(),
+        })
+        .collect();
+
+    let backup = ops::update_provider_models(&name, model_entries)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    if let Some(path) = backup {
+        Ok(format!("Provider models updated. Backup: {}", path.display()))
+    } else {
+        Ok("Provider models updated".to_string())
     }
 }

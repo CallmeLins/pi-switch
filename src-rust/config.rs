@@ -41,11 +41,14 @@ pub struct ModelCost {
     pub cache_write: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderProfile {
+    #[serde(default)]
     pub api: String,
+    #[serde(default)]
     #[serde(rename = "baseUrl")]
     pub base_url: String,
+    #[serde(default)]
     #[serde(rename = "apiKey")]
     pub api_key: String,
     #[serde(default)]
@@ -64,6 +67,12 @@ pub struct ProviderProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "modelMap")]
+    pub model_map: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "exposedModels")]
+    pub exposed_models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -350,16 +359,6 @@ pub fn validate_config() -> Result<Vec<ValidationIssue>> {
             path: "settings.proxy.port".into(),
             message: "Proxy port cannot be 0".into(),
         });
-    }
-
-    if let Some(ref target) = config.settings.proxy.target {
-        if !config.profiles.contains_key(target) {
-            issues.push(ValidationIssue {
-                level: "warning".into(),
-                path: "settings.proxy.target".into(),
-                message: format!("Target provider '{}' does not exist", target),
-            });
-        }
     }
 
     for (i, name) in config.settings.proxy.failover.iter().enumerate() {

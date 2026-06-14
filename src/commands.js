@@ -144,6 +144,17 @@ export async function remove(name) {
   const config = await loadConfig();
   if (!config.profiles[name]) throw new Error(`unknown profile '${name}'`);
   const backup = await backupFile(CONFIG_PATH, "config");
+
+  // Remove from models.json
+  const providerId = providerIdFor(config, name);
+  if (await exists(MODELS_PATH)) {
+    const models = await readJson(MODELS_PATH, { providers: {} });
+    if (models.providers && models.providers[providerId]) {
+      delete models.providers[providerId];
+      await atomicWriteJson(MODELS_PATH, models);
+    }
+  }
+
   delete config.profiles[name];
   if (config.current === name) config.current = Object.keys(config.profiles)[0] || null;
   await saveConfig(config);
@@ -172,7 +183,7 @@ export async function use(argv) {
     }
   }
 
-  models.providers[providerId] = profileToPiProvider(profile);
+  models.providers[providerId] = profileToPiProvider(profile, config, name);
   config.current = name;
   await mkdir(PI_DIR, { recursive: true });
   const modelsBackup = await backupFile(MODELS_PATH, "models");
@@ -272,8 +283,8 @@ export function proxyProviderProfile(host = "127.0.0.1", port = 43112) {
         id: "pi-switch-current",
         name: "pi-switch current profile",
         input: ["text"],
-        contextWindow: 128000,
-        maxTokens: 16384,
+        contextWindow: 1000000,
+        maxTokens: 128000,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
     ],

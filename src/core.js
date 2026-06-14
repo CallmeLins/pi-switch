@@ -118,8 +118,8 @@ export function parseModel(modelArg) {
     id,
     ...(name ? { name } : {}),
     input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 16384,
+    contextWindow: 1000000,
+    maxTokens: 128000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   };
 }
@@ -129,14 +129,27 @@ export function providerIdFor(config, profileName) {
   return `${prefix}-${profileName}`;
 }
 
-export function profileToPiProvider(profile) {
+export function profileToPiProvider(profile, config = null, profileName = null) {
+  // Filter models to only include exposed ones
+  const exposedModels = profile.exposedModels && profile.exposedModels.length > 0
+    ? profile.models.filter(m => profile.exposedModels.includes(m.id))
+    : profile.models;
+
+  // Determine baseUrl: use proxy if enabled and this is the target
+  let baseUrl = profile.baseUrl;
+  if (config && profileName && config.settings?.proxy?.target === profileName) {
+    const host = config.settings.proxy.host || "127.0.0.1";
+    const port = config.settings.proxy.port || 43112;
+    baseUrl = `http://${host}:${port}/v1`;
+  }
+
   return {
-    baseUrl: profile.baseUrl,
+    baseUrl,
     api: profile.api,
     apiKey: profile.apiKey,
     ...(profile.headers && Object.keys(profile.headers).length ? { headers: profile.headers } : {}),
     ...(profile.authHeader !== undefined ? { authHeader: profile.authHeader } : {}),
     ...(profile.compat ? { compat: profile.compat } : {}),
-    models: profile.models
+    models: exposedModels
   };
 }

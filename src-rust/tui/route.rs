@@ -5,10 +5,13 @@ pub enum Route {
     Home,
     Profiles,
     ProfileDetail(String),
+    FetchModels(String),      // Fetch & select models for provider
+    ExposeModels(String),     // Select which models to expose to pi
     Proxy,
     Stats,
     Backups,
     Settings,
+    FailoverEditor,           // Edit failover chain with checkbox+sortable list
     Form,
 }
 
@@ -58,7 +61,7 @@ impl NavItem {
         }
     }
 
-    pub fn to_route(&self) -> Option<Route> {
+    pub fn to_route(self) -> Option<Route> {
         match self {
             NavItem::Home => Some(Route::Home),
             NavItem::Profiles => Some(Route::Profiles),

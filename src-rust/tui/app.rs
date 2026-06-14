@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use std::sync::mpsc;
 
 use crate::daemon::{daemon_start, daemon_stop};
 use crate::ops;
@@ -77,6 +78,11 @@ impl Overlay {
     }
 }
 
+pub enum FetchModelsMessage {
+    Success(Vec<String>),
+    Error(String),
+}
+
 pub struct App {
     pub theme: Theme,
     pub data: UiData,
@@ -99,6 +105,14 @@ pub struct App {
     pub toast: Option<Toast>,
     pub tick: u64,
     pub should_quit: bool,
+    // Model selection state
+    pub model_selection_list: Vec<(String, bool)>, // (model_id, selected)
+    pub model_selection_idx: usize,
+    pub model_selection_loading: bool,
+    pub fetch_rx: Option<mpsc::Receiver<FetchModelsMessage>>,
+    // Failover editor state
+    pub failover_list: Vec<(String, bool)>,  // (provider_name, selected)
+    pub failover_idx: usize,
 }
 
 pub fn proxy_actions() -> [&'static str; 3] {
@@ -129,6 +143,12 @@ impl App {
             toast: None,
             tick: 0,
             should_quit: false,
+            model_selection_list: vec![],
+            model_selection_idx: 0,
+            model_selection_loading: false,
+            fetch_rx: None,
+            failover_list: vec![],
+            failover_idx: 0,
         }
     }
 
@@ -188,6 +208,57 @@ impl App {
             toast.remaining_ticks = toast.remaining_ticks.saturating_sub(1);
             if toast.remaining_ticks == 0 {
                 self.toast = None;
+            }
+        }
+
+        // Check for async fetch completion
+        if let Some(rx) = &self.fetch_rx {
+            if let Ok(msg) = rx.try_recv() {
+                self.model_selection_loading = false;
+                match msg {
+                    FetchModelsMessage::Success(fetched_models) => {
+                        // Check if we're in form mode (Route::FetchModels with "_temp_form")
+                        let is_form_mode = matches!(&self.route, Route::FetchModels(name) if name == "_temp_form");
+
+                        if is_form_mode {
+                            // Form mode: update selection list with manual models pre-selected
+                            let manual_models: std::collections::HashSet<_> = self.model_selection_list
+                                .iter()
+                                .filter_map(|(id, selected)| if *selected { Some(id.clone()) } else { None })
+                                .collect();
+
+                            self.model_selection_list = fetched_models
+                                .into_iter()
+                                .map(|id| {
+                                    let selected = manual_models.contains(&id);
+                                    (id, selected)
+                                })
+                                .collect();
+
+                            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(self.model_selection_list.len()));
+                        } else {
+                            // Model selection mode: merge preserving selection state
+                            let existing: std::collections::HashSet<_> = self.model_selection_list
+                                .iter()
+                                .filter_map(|(id, selected)| if *selected { Some(id.clone()) } else { None })
+                                .collect();
+
+                            self.model_selection_list = fetched_models
+                                .into_iter()
+                                .map(|id| {
+                                    let selected = existing.contains(&id);
+                                    (id, selected)
+                                })
+                                .collect();
+
+                            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(self.model_selection_list.len()));
+                        }
+                    }
+                    FetchModelsMessage::Error(err) => {
+                        self.push_toast(ToastKind::Error, format!("Fetch failed: {}", err));
+                    }
+                }
+                self.fetch_rx = None;
             }
         }
     }
@@ -411,10 +482,13 @@ impl App {
             Route::Home => self.on_home_key(key),
             Route::Profiles => self.on_profiles_key(key),
             Route::ProfileDetail(name) => self.on_profile_detail_key(key, &name),
+            Route::FetchModels(name) => self.on_fetch_models_key(key, &name),
+            Route::ExposeModels(name) => self.on_expose_models_key(key, &name),
             Route::Proxy => self.on_proxy_key(key),
             Route::Stats => self.on_stats_key(key),
             Route::Backups => self.on_backups_key(key),
             Route::Settings => self.on_settings_key(key),
+            Route::FailoverEditor => self.on_failover_editor_key(key),
             Route::Form => {}
         }
     }
@@ -506,6 +580,11 @@ impl App {
             KeyCode::Char('e') => self.open_edit_form(name),
             KeyCode::Char(' ') | KeyCode::Char('s') => self.switch_profile(name),
             KeyCode::Char('d') => self.confirm_delete(name),
+            KeyCode::Char('x') => {
+                // Expose models selection
+                self.route = Route::ExposeModels(name.to_string());
+                self.load_expose_models_selection(name);
+            }
             _ => {}
         }
     }
@@ -596,7 +675,7 @@ impl App {
             return;
         }
 
-        let row_count = 5; // Language + 4 proxy fields
+        let row_count = 4; // Language + host + port + failover
         match key.code {
             KeyCode::Up => {
                 self.settings_proxy_idx = self.settings_proxy_idx.saturating_sub(1);
@@ -619,7 +698,10 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.settings_proxy_idx > 0 {
+                if self.settings_proxy_idx == 3 {
+                    // Open failover editor
+                    self.open_failover_editor();
+                } else if self.settings_proxy_idx > 0 {
                     // Start editing a proxy field
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
                     let policy = if self.settings_proxy_idx == 2 {
@@ -641,8 +723,7 @@ impl App {
             0 => String::new(),
             1 => proxy.host.clone(),
             2 => proxy.port.to_string(),
-            3 => proxy.target.clone().unwrap_or_default(),
-            4 => if proxy.failover.is_empty() {
+            3 => if proxy.failover.is_empty() {
                 String::new()
             } else {
                 proxy.failover.join(", ")
@@ -671,22 +752,115 @@ impl App {
                     return;
                 }
             }
-            3 => {
-                config.settings.proxy.target = if value.is_empty() { None } else { Some(value) };
-            }
-            4 => {
-                config.settings.proxy.failover = if value.is_empty() {
-                    vec![]
-                } else {
-                    value.split(',').map(|s| s.trim().to_string()).collect()
-                };
-            }
             _ => return,
         }
 
         match crate::config::save_config(&config) {
             Ok(()) => {
                 self.refresh();
+                self.push_toast(ToastKind::Success, i18n::settings_saved());
+            }
+            Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+        }
+    }
+
+    fn open_failover_editor(&mut self) {
+        // Load all non-proxy profiles as candidates
+        let current_failover = &self.data.config.settings.proxy.failover;
+
+        // Build list: start with selected (in order), then unselected
+        let mut list = Vec::new();
+
+        // First add selected ones in their current order
+        for name in current_failover {
+            if self.data.config.profiles.contains_key(name) {
+                list.push((name.clone(), true));
+            }
+        }
+
+        // Then add unselected ones (non-proxy profiles not in failover)
+        for (name, profile) in &self.data.config.profiles {
+            if current_failover.contains(name) {
+                continue;  // Already added
+            }
+            let is_proxy = profile.get("proxy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !is_proxy {
+                list.push((name.clone(), false));
+            }
+        }
+
+        self.failover_list = list;
+        self.failover_idx = 0;
+        self.route = Route::FailoverEditor;
+    }
+
+    fn on_failover_editor_key(&mut self, key: KeyEvent) {
+        if self.back_to_nav_on_esc(&key) {
+            self.route = Route::Settings;
+            return;
+        }
+
+        let len = self.failover_list.len();
+        if len == 0 {
+            return;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.failover_idx = self.failover_idx.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.failover_idx = (self.failover_idx + 1).min(len - 1);
+            }
+            KeyCode::Char(' ') => {
+                // Toggle selection
+                self.failover_list[self.failover_idx].1 = !self.failover_list[self.failover_idx].1;
+            }
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Move item up
+                if self.failover_idx > 0 {
+                    self.failover_list.swap(self.failover_idx, self.failover_idx - 1);
+                    self.failover_idx -= 1;
+                }
+            }
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Move item down
+                if self.failover_idx < len - 1 {
+                    self.failover_list.swap(self.failover_idx, self.failover_idx + 1);
+                    self.failover_idx += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char('s') => {
+                // Save failover configuration
+                self.save_failover_config();
+            }
+            _ => {}
+        }
+    }
+
+    fn save_failover_config(&mut self) {
+        let mut config = match crate::config::load_config() {
+            Ok(c) => c,
+            Err(e) => {
+                self.push_toast(ToastKind::Error, e.to_string());
+                return;
+            }
+        };
+
+        // Collect selected items in order
+        let failover: Vec<String> = self.failover_list.iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        config.settings.proxy.failover = failover;
+
+        match crate::config::save_config(&config) {
+            Ok(()) => {
+                self.refresh();
+                self.route = Route::Settings;
                 self.push_toast(ToastKind::Success, i18n::settings_saved());
             }
             Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
@@ -878,6 +1052,18 @@ impl App {
                             new_cursor += line.chars().count() + 1;
                         }
                         form.json_edit.cursor = new_cursor;
+
+                        // Auto-scroll to keep cursor visible
+                        let total_lines = lines.len();
+                        if total_lines > 0 {
+                            // Assuming area height of around 20 lines (will adjust in rendering)
+                            let visible_lines = 15; // Conservative estimate
+                            if target_line < form.json_scroll as usize {
+                                form.json_scroll = target_line as u16;
+                            } else if target_line >= (form.json_scroll as usize + visible_lines) {
+                                form.json_scroll = target_line.saturating_sub(visible_lines - 1) as u16;
+                            }
+                        }
                     }
                 }
                 _ => {
@@ -1004,6 +1190,17 @@ impl App {
                     form.cycle_api(true);
                 }
             }
+            KeyCode::Char('d') => {
+                // Quick clear current field
+                if let Some(input) = form.current_input_mut() {
+                    input.clear();
+                }
+            }
+            KeyCode::Char('f') => {
+                // Enter fetch models selection page (always use temp form marker)
+                self.route = Route::FetchModels("_temp_form".to_string());
+                self.start_fetch_models_for_form();
+            }
             KeyCode::Left => {
                 if form.current_field() == FieldKind::Api {
                     form.cycle_api(false);
@@ -1022,9 +1219,276 @@ impl App {
         let Some(form) = &mut self.form else {
             return;
         };
-        if matches!(key.code, KeyCode::Enter) {
-            form.json_edit = TextInput::new(form.json_preview());
-            form.json_editing = true;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                form.json_scroll = form.json_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                form.json_scroll = form.json_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                form.json_scroll = form.json_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                form.json_scroll = form.json_scroll.saturating_add(10);
+            }
+            KeyCode::Home => {
+                form.json_scroll = 0;
+            }
+            KeyCode::Enter => {
+                form.json_edit = TextInput::new(form.json_preview());
+                form.json_editing = true;
+            }
+            _ => {}
+        }
+    }
+
+    // ─── Model Selection ──────────────────────────────────────
+
+    fn start_fetch_models_for_form(&mut self) {
+        let Some(form) = &self.form else { return };
+
+        // Get manually entered models
+        let manual_models: Vec<String> = form.models.value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+
+        // Build a temporary profile to fetch from
+        let temp_profile = crate::config::ProviderProfile {
+            api: super::form::API_CHOICES[form.api_idx].to_string(),
+            base_url: form.base_url.value.trim().to_string(),
+            api_key: form.api_key.value.trim().to_string(),
+            models: vec![],
+            exposed_models: vec![],
+            ..Default::default()
+        };
+
+        if temp_profile.base_url.is_empty() || temp_profile.api_key.is_empty() {
+            self.push_toast(ToastKind::Error, if i18n::is_zh() {
+                "请先填写 API 地址和密钥"
+            } else {
+                "Please fill in Base URL and API Key first"
+            });
+            return;
+        }
+
+        // Show manual models immediately with all selected
+        self.model_selection_list = manual_models.iter()
+            .map(|id| (id.clone(), true))
+            .collect();
+        self.model_selection_idx = 0;
+        self.model_selection_loading = true;
+
+        // Spawn async fetch task
+        let (tx, rx) = mpsc::channel();
+        let manual_models_clone = manual_models.clone();
+
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(FetchModelsMessage::Error(format!("Runtime error: {}", e)));
+                    return;
+                }
+            };
+
+            // Call fetch directly with the temp profile values
+            let client = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(FetchModelsMessage::Error(e.to_string()));
+                    return;
+                }
+            };
+
+            let api_key = crate::config::resolve_env(&temp_profile.api_key);
+            let candidate_urls = ops::build_model_fetch_urls(&temp_profile.base_url, &temp_profile.api);
+
+            let result = rt.block_on(async {
+                for url in candidate_urls {
+                    let mut req = client.get(&url);
+                    req = match temp_profile.api.as_str() {
+                        "openai-completions" => req.header("Authorization", format!("Bearer {}", api_key)),
+                        "anthropic-messages" => req.header("x-api-key", &api_key)
+                            .header("anthropic-version", "2023-06-01"),
+                        _ => req.header("Authorization", format!("Bearer {}", api_key)),
+                    };
+
+                    if let Ok(resp) = req.send().await {
+                        if resp.status().is_success() {
+                            if let Ok(payload) = resp.json::<serde_json::Value>().await {
+                                let mut models = ops::parse_model_ids(&payload);
+                                // Merge with manual models (keep manual ones at front)
+                                for manual in &manual_models_clone {
+                                    if !models.contains(manual) {
+                                        models.insert(0, manual.clone());
+                                    }
+                                }
+                                if !models.is_empty() {
+                                    return Ok(models);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(crate::error::AppError::Message("No models found".into()))
+            });
+
+            match result {
+                Ok(models) => {
+                    let _ = tx.send(FetchModelsMessage::Success(models));
+                }
+                Err(e) => {
+                    let _ = tx.send(FetchModelsMessage::Error(e.to_string()));
+                }
+            }
+        });
+
+        self.fetch_rx = Some(rx);
+    }
+
+    fn load_expose_models_selection(&mut self, name: &str) {
+        self.model_selection_list.clear();
+        self.model_selection_idx = 0;
+
+        let profile_value = match self.data.config.profiles.get(name) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let profile: crate::config::ProviderProfile = match serde_json::from_value(profile_value.clone()) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // Load all models with exposed state
+        for model in &profile.models {
+            let is_exposed = profile.exposed_models.contains(&model.id);
+            self.model_selection_list.push((model.id.clone(), is_exposed));
+        }
+    }
+
+    fn on_fetch_models_key(&mut self, key: KeyEvent, name: &str) {
+        let is_form_mode = name == "_temp_form";
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                if is_form_mode {
+                    self.route = Route::Form;
+                } else {
+                    self.route = Route::ProfileDetail(name.to_string());
+                }
+            }
+            KeyCode::Up => {
+                self.model_selection_idx = self.model_selection_idx.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if !self.model_selection_list.is_empty() {
+                    self.model_selection_idx = (self.model_selection_idx + 1)
+                        .min(self.model_selection_list.len() - 1);
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some((_, selected)) = self.model_selection_list.get_mut(self.model_selection_idx) {
+                    *selected = !*selected;
+                }
+            }
+            KeyCode::Char('s') => {
+                self.save_fetch_models_selection(name);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_expose_models_key(&mut self, key: KeyEvent, name: &str) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.route = Route::ProfileDetail(name.to_string());
+            }
+            KeyCode::Up => {
+                self.model_selection_idx = self.model_selection_idx.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                if !self.model_selection_list.is_empty() {
+                    self.model_selection_idx = (self.model_selection_idx + 1)
+                        .min(self.model_selection_list.len() - 1);
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some((_, selected)) = self.model_selection_list.get_mut(self.model_selection_idx) {
+                    *selected = !*selected;
+                }
+            }
+            KeyCode::Char('s') => {
+                self.save_expose_models_selection(name);
+            }
+            _ => {}
+        }
+    }
+
+    fn save_fetch_models_selection(&mut self, name: &str) {
+        let is_form_mode = name == "_temp_form";
+
+        if is_form_mode {
+            // Form mode: update form's models field
+            let selected_ids: Vec<String> = self.model_selection_list
+                .iter()
+                .filter(|(_, selected)| *selected)
+                .map(|(id, _)| id.clone())
+                .collect();
+
+            if let Some(form) = &mut self.form {
+                form.models.set(selected_ids.join(", "));
+            }
+
+            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(selected_ids.len()));
+            self.route = Route::Form;
+        } else {
+            // Profile mode: save to config
+            let selected_models: Vec<crate::config::ModelEntry> = self.model_selection_list
+                .iter()
+                .filter(|(_, selected)| *selected)
+                .map(|(id, _)| crate::config::ModelEntry {
+                    id: id.clone(),
+                    ..Default::default()
+                })
+                .collect();
+
+            match ops::update_provider_models(name, selected_models) {
+                Ok(_) => {
+                    self.push_toast(ToastKind::Success, i18n::toast_models_updated(name));
+                    self.refresh();
+                    self.route = Route::ProfileDetail(name.to_string());
+                }
+                Err(e) => {
+                    self.push_toast(ToastKind::Error, e.to_string());
+                }
+            }
+        }
+    }
+
+    fn save_expose_models_selection(&mut self, name: &str) {
+        let exposed_model_ids: Vec<String> = self.model_selection_list
+            .iter()
+            .filter(|(_, selected)| *selected)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        match ops::update_exposed_models(name, exposed_model_ids) {
+            Ok(_) => {
+                self.push_toast(ToastKind::Success, i18n::toast_exposed_models_updated(name));
+                self.refresh();
+                self.route = Route::ProfileDetail(name.to_string());
+            }
+            Err(e) => {
+                self.push_toast(ToastKind::Error, e.to_string());
+            }
         }
     }
 }

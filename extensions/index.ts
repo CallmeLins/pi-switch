@@ -1,21 +1,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { add as addProfile, doctor, installProxyProvider, list, preset, remove as removeProfile, setProxyTarget, update as updateProfile, use } from "../src/commands.js";
-import { loadConfig, profileToPiProvider, providerIdFor, saveConfig } from "../src/core.js";
+import { loadConfig, providerIdFor, saveConfig } from "../src/core.js";
 import { getCircuitState, resetCircuitState, daemonStart, daemonStop, daemonStatus } from "../src/proxy.js";
 import { getStats, formatStatsText } from "../src/stats.js";
 import { exportConfig, importConfig, getProfileInfo, openProvider } from "../src/sync.js";
 
-async function registerConfiguredProviders(pi: ExtensionAPI): Promise<string[]> {
-  const config = await loadConfig();
-  const registered: string[] = [];
-
-  for (const [name, profile] of Object.entries(config.profiles || {})) {
-    const providerId = providerIdFor(config, name);
-    pi.registerProvider(providerId, profileToPiProvider(profile as any) as any);
-    registered.push(providerId);
-  }
-
-  return registered;
+// DEPRECATED: Dynamic provider registration is disabled.
+// Providers are now synced to ~/.pi/agent/models.json only.
+// This avoids inconsistency between package loading and models.json.
+async function registerConfiguredProviders(_pi: ExtensionAPI): Promise<string[]> {
+  return [];
 }
 
 function formatProfileList(result: Awaited<ReturnType<typeof list>>): string {
@@ -104,15 +98,15 @@ async function promptAddProvider(pi: ExtensionAPI, ctx: ExtensionContext): Promi
     : [name, "--preset", presetId, "--api-key", apiKey];
 
   const result = await addProfile(argv);
-  const registered = await registerConfiguredProviders(pi);
+  // Providers synced to models.json, restart pi to apply
   const activate = await ctx.ui.confirm(
     "Provider created",
-    `Created '${result.name}'.\nRegistered ${registered.length} provider(s).\n\nActivate it now?`,
+    `Created '${result.name}'.\n\nActivate it now?`,
   );
   if (activate) {
     const activated = await use([result.name]);
-    await registerConfiguredProviders(pi);
-    ctx.ui.notify(`Activated '${activated.name}' as '${activated.providerId}'. Open /model to select it.`, "info");
+    // Providers synced to models.json, restart pi to apply
+    ctx.ui.notify(`Activated '${activated.name}' as '${activated.providerId}'. Restart pi to see it in /model.`, "info");
   } else {
     ctx.ui.notify(`Created '${result.name}'. Use /piswitch use ${result.name} when ready.`, "info");
   }
@@ -137,7 +131,7 @@ async function promptEditProvider(pi: ExtensionAPI, ctx: ExtensionContext): Prom
     const apiKey = (await ctx.ui.input("API key or env var", profile.apiKey || "$API_KEY"))?.trim();
     if (!apiKey) return;
     await updateProfile(name, { apiKey });
-    await registerConfiguredProviders(pi);
+    // Providers synced to models.json, restart pi to apply
     ctx.ui.notify(`Updated API key for '${name}'.`, "info");
     return;
   }
@@ -146,7 +140,7 @@ async function promptEditProvider(pi: ExtensionAPI, ctx: ExtensionContext): Prom
     const baseUrl = (await ctx.ui.input("Base URL", profile.baseUrl || "https://api.example.com/v1"))?.trim();
     if (!baseUrl) return;
     await updateProfile(name, { baseUrl });
-    await registerConfiguredProviders(pi);
+    // Providers synced to models.json, restart pi to apply
     ctx.ui.notify(`Updated Base URL for '${name}'.`, "info");
     return;
   }
@@ -169,7 +163,7 @@ async function promptEditProvider(pi: ExtensionAPI, ctx: ExtensionContext): Prom
       };
     });
     await updateProfile(name, { models });
-    await registerConfiguredProviders(pi);
+    // Providers synced to models.json, restart pi to apply
     ctx.ui.notify(`Updated models for '${name}'.`, "info");
     return;
   }
@@ -178,7 +172,7 @@ async function promptEditProvider(pi: ExtensionAPI, ctx: ExtensionContext): Prom
     const ok = await ctx.ui.confirm("Delete provider?", `Delete '${name}' from pi-switch config?`);
     if (!ok) return;
     await removeProfile(name);
-    await registerConfiguredProviders(pi);
+    // Providers synced to models.json, restart pi to apply
     ctx.ui.notify(`Deleted '${name}'.`, "info");
   }
 }
@@ -202,7 +196,7 @@ async function promptRemoveProvider(pi: ExtensionAPI, ctx: ExtensionContext): Pr
   const ok = await ctx.ui.confirm("Delete provider?", `Delete '${name}' from pi-switch config?`);
   if (!ok) return;
   await removeProfile(name);
-  await registerConfiguredProviders(pi);
+  // Providers synced to models.json, restart pi to apply
   ctx.ui.notify(`Deleted '${name}'.`, "info");
 }
 
@@ -220,8 +214,8 @@ async function promptRawConfig(pi: ExtensionAPI, ctx: ExtensionContext): Promise
   const ok = await ctx.ui.confirm("Save raw config?", "This will overwrite ~/.pi-switch/config.json.");
   if (!ok) return;
   await saveConfig(parsed);
-  const registered = await registerConfiguredProviders(pi);
-  ctx.ui.notify(`Saved raw config. Registered ${registered.length} provider(s).`, "info");
+  // Providers synced to models.json, restart pi to apply
+  ctx.ui.notify(`Saved raw config. Restart pi to apply changes.`, "info");
 }
 
 async function promptInstallProxy(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -289,7 +283,7 @@ async function promptInstallProxy(pi: ExtensionAPI, ctx: ExtensionContext): Prom
   const port = (await ctx.ui.input("Proxy port", "43112"))?.trim();
   if (!port) return;
   const result = await installProxyProvider([name, "--host", host, "--port", port]);
-  await registerConfiguredProviders(pi);
+  // Providers synced to models.json, restart pi to apply
   const activate = await ctx.ui.confirm(
     "Proxy provider installed",
     `Installed '${result.name}' -> http://${host}:${port}/v1.\n\nActivate it now?`,
@@ -318,7 +312,7 @@ async function chooseNonProxyProfile(ctx: ExtensionContext): Promise<string | nu
 
 export default async function piSwitchExtension(pi: ExtensionAPI) {
   try {
-    await registerConfiguredProviders(pi);
+    // Providers synced to models.json, restart pi to apply
   } catch {
     // Avoid breaking pi startup if pi-switch has not been initialized yet.
   }
@@ -384,8 +378,8 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
       }
 
       if (cmd === "reload") {
-        const registered = await registerConfiguredProviders(pi);
-        ctx.ui.notify(`Registered ${registered.length} provider(s): ${registered.join(", ") || "none"}`, "info");
+        // Providers synced to models.json, restart pi to apply
+        ctx.ui.notify(`Providers are synced to models.json. Restart pi to apply changes.`, "info");
         return;
       }
 
@@ -453,7 +447,7 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
         try {
           const result = await importConfig(filePath.trim(), passphrase.trim());
           ctx.ui.notify(result.message + (result.sanitizedKeys ? `\n${result.sanitizedKeys} key(s) sanitized → env vars` : ""), "info");
-          await registerConfiguredProviders(pi);
+          // Providers synced to models.json, restart pi to apply
         } catch (err: any) {
           ctx.ui.notify(`Import failed: ${err.message}`, "error");
         }
@@ -464,7 +458,7 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
         const name = rest[0] || (await chooseProfile(ctx));
         if (!name) return;
         const result = await use([name]);
-        await registerConfiguredProviders(pi);
+        // Providers synced to models.json, restart pi to apply
         ctx.ui.notify(
           `Activated '${result.name}' as '${result.providerId}'. Open /model to refresh/select the model.`,
           "info",
@@ -510,7 +504,7 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
         const name = await chooseProfile(ctx);
         if (!name) return;
         const result = await use([name]);
-        await registerConfiguredProviders(pi);
+        // Providers synced to models.json, restart pi to apply
         ctx.ui.notify(`Activated '${result.name}' as '${result.providerId}'. Open /model to refresh/select it.`, "info");
       } else if (selected === "List profiles") {
         ctx.ui.notify(formatProfileList(await list()), "info");
@@ -520,8 +514,8 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
       } else if (selected === "Doctor") {
         await showDoctor(ctx);
       } else if (selected === "Reload registered providers") {
-        const registered = await registerConfiguredProviders(pi);
-        ctx.ui.notify(`Registered ${registered.length} provider(s): ${registered.join(", ") || "none"}`, "info");
+        // Providers synced to models.json, restart pi to apply
+        ctx.ui.notify(`Providers are synced to models.json. Restart pi to apply changes.`, "info");
       } else if (selected === "Usage stats") {
         const stats = await getStats();
         ctx.ui.notify(formatStatsText(stats, "summary"), "info");
@@ -549,7 +543,7 @@ export default async function piSwitchExtension(pi: ExtensionAPI) {
         try {
           const result = await importConfig(filePath.trim(), passphrase.trim());
           ctx.ui.notify(result.message + (result.sanitizedKeys ? `\n${result.sanitizedKeys} key(s) sanitized` : ""), "info");
-          await registerConfiguredProviders(pi);
+          // Providers synced to models.json, restart pi to apply
         } catch (err: any) {
           ctx.ui.notify(`Import failed: ${err.message}`, "error");
         }

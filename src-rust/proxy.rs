@@ -25,6 +25,7 @@ pub struct ProxyState {
 
 // ─── Request / health types ───────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProxyHealth {
     pub ok: bool,
@@ -208,13 +209,13 @@ fn openai_to_anthropic_body(body: &Value) -> Value {
                 let parts = match content {
                     Value::String(s) => vec![json!({ "type": "text", "text": s })],
                     Value::Array(arr) => {
-                        arr.iter().filter_map(|c| {
+                        arr.iter().map(|c| {
                             match c.get("type").and_then(|t| t.as_str()) {
                                 Some("text") => {
                                     let text = c.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                                    Some(json!({ "type": "text", "text": text }))
+                                    json!({ "type": "text", "text": text })
                                 }
-                                _ => Some(json!({ "type": "text", "text": c.to_string() })),
+                                _ => json!({ "type": "text", "text": c.to_string() }),
                             }
                         }).collect()
                     }
@@ -300,11 +301,7 @@ pub fn make_router(state: Arc<ProxyState>) -> Router {
 
 async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
     let config = state.config.read().await;
-    let target = config.settings.proxy.target.clone();
     let candidates = build_candidates(&config, None);
-    let profile = target.as_ref()
-        .and_then(|t| config.profiles.get(t))
-        .and_then(|v| serde_json::from_value::<ProviderProfile>(v.clone()).ok());
 
     let mut supported_apis = HashSet::new();
     for name in &candidates {
@@ -319,10 +316,7 @@ async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoRespons
 
     Json(json!({
         "ok": true,
-        "target": target,
         "candidates": candidates,
-        "api": profile.as_ref().map_or("", |p| &p.api),
-        "baseUrl": profile.as_ref().map_or("", |p| &p.base_url),
         "supportedApis": supported_apis.into_iter().collect::<Vec<_>>(),
         "failover": &config.settings.proxy.failover,
         "circuitBreaker": &config.settings.proxy.circuit_breaker,
@@ -333,11 +327,47 @@ async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoRespons
 async fn handle_models(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
     let config = state.config.read().await;
     let candidates = build_candidates(&config, None);
+
     let mut seen = HashSet::new();
     let mut data = Vec::new();
 
-    for name in &candidates {
-        if let Some(profile) = config.profiles.get(name) {
+    // Check if any provider has exposedModels set
+    let has_exposed = config.profiles.values().any(|p| {
+        p.get("exposedModels")
+            .and_then(|v| v.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false)
+    });
+
+    if has_exposed {
+        // New mode: only return exposedModels from providers that have them
+        for name in &candidates {
+            if let Some(profile) = config.profiles.get(name) {
+                if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
+                    for model_id in exposed {
+                        if let Some(id) = model_id.as_str() {
+                            if seen.insert(id.to_string()) {
+                                data.push(json!({
+                                    "id": id,
+                                    "object": "model",
+                                    "owned_by": name,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Fallback mode: return all models from all non-proxy profiles
+        for (name, profile) in &config.profiles {
+            let is_proxy = profile.get("proxy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_proxy {
+                continue;
+            }
+
             if let Some(models) = profile.get("models").and_then(|v| v.as_array()) {
                 for model in models {
                     let id = model.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -364,8 +394,30 @@ async fn handle_chat_completions(
     body: String,
 ) -> Response {
     let config = state.config.read().await;
-    let candidates = build_candidates(&config, None);
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+
+    // Get requested model from body
+    let requested_model = body_value.get("model").and_then(|v| v.as_str());
+
+    // Build candidates and filter by model availability
+    let all_candidates = build_candidates(&config, None);
+
+    // If no candidates (no exposedModels set), fall back to all non-proxy profiles
+    let all_candidates = if all_candidates.is_empty() {
+        config.profiles.keys()
+            .filter(|name| {
+                !config.profiles.get(*name)
+                    .and_then(|p| p.get("proxy"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        all_candidates
+    };
+
+    let candidates = filter_candidates_by_model(&config, all_candidates, requested_model);
 
     let result = forward_with_failover(&config, &candidates, &body_value, "chat/completions", &headers).await;
 
@@ -384,23 +436,46 @@ async fn handle_messages(
     body: String,
 ) -> Response {
     let config = state.config.read().await;
-    let candidates: Vec<String> = build_candidates(&config, None)
+    let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+
+    // Get requested model from body
+    let requested_model = body_value.get("model").and_then(|v| v.as_str());
+
+    // Build candidates, filter by Anthropic API and model availability
+    let all_candidates = build_candidates(&config, None);
+
+    // If no candidates (no exposedModels set), fall back to all non-proxy profiles
+    let all_candidates = if all_candidates.is_empty() {
+        config.profiles.keys()
+            .filter(|name| {
+                !config.profiles.get(*name)
+                    .and_then(|p| p.get("proxy"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        all_candidates
+    };
+
+    let anthropic_candidates: Vec<String> = all_candidates
         .into_iter()
         .filter(|name| {
             config.profiles.get(name)
-                .and_then(|p| p.get("api").and_then(|v| v.as_str()))
-                .map_or(false, |api| api == "anthropic-messages")
+                .and_then(|p| p.get("api").and_then(|v| v.as_str())) == Some("anthropic-messages")
         })
         .collect();
+
+    let candidates = filter_candidates_by_model(&config, anthropic_candidates, requested_model);
 
     if candidates.is_empty() {
         return (
             StatusCode::NOT_IMPLEMENTED,
-            Json(json!({ "error": { "message": "No Anthropic upstream available" } })),
+            Json(json!({ "error": { "message": "No Anthropic upstream available for requested model" } })),
         ).into_response();
     }
 
-    let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let result = forward_anthropic_with_failover(&config, &candidates, &body_value, &headers).await;
 
     match result {
@@ -429,16 +504,25 @@ fn build_candidates(config: &crate::config::PiSwitchConfig, explicit: Option<&st
     };
 
     if let Some(e) = explicit { add(e); }
-    if let Some(ref t) = config.settings.proxy.target { add(t); }
+
+    // Auto-select all providers with non-empty exposedModels as targets
+    for (name, profile) in &config.profiles {
+        if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
+            if !exposed.is_empty() {
+                add(name);
+            }
+        }
+    }
+
     for name in &config.settings.proxy.failover { add(name); }
 
     // Pick first non-proxy profile that hasn't been added yet
     let fallback = config.profiles.keys()
         .filter(|name| {
-            config.profiles.get(*name)
+            !config.profiles.get(*name)
                 .and_then(|p| p.get("proxy"))
                 .and_then(|v| v.as_bool())
-                .unwrap_or(false) == false
+                .unwrap_or(false)
         })
         .find(|name| !seen.contains(name.as_str()));
 
@@ -447,6 +531,33 @@ fn build_candidates(config: &crate::config::PiSwitchConfig, explicit: Option<&st
     }
 
     names
+}
+
+/// Filter candidates to only those that have the requested model
+fn filter_candidates_by_model(
+    config: &crate::config::PiSwitchConfig,
+    candidates: Vec<String>,
+    requested_model: Option<&str>,
+) -> Vec<String> {
+    // If no specific model requested, return all candidates
+    let Some(model) = requested_model else {
+        return candidates;
+    };
+
+    candidates.into_iter().filter(|name| {
+        config.profiles.get(name)
+            .and_then(|p| p.get("models"))
+            .and_then(|v| v.as_array())
+            .map(|models| {
+                models.iter().any(|m| {
+                    m.get("id")
+                        .and_then(|id| id.as_str())
+                        .map(|id| id == model)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }).collect()
 }
 
 async fn forward_with_failover(

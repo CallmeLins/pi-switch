@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/user/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.4-blue.svg)](https://github.com/user/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -28,22 +28,8 @@ Built with Rust (napi-rs) as a native Node.js addon. The interactive TUI is mode
 ## 📸 Screenshots
 
 <div align="center">
-  <h3>Profiles</h3>
-  <img src="assets/screenshots/profiles.png" alt="Profiles" width="70%"/>
+  <img src="assets/main.png" alt="pi-switch TUI" width="80%"/>
 </div>
-
-<br/>
-
-<table>
-  <tr>
-    <th>Home</th>
-    <th>Settings</th>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/home.png" alt="Home" width="100%"/></td>
-    <td><img src="assets/screenshots/settings.png" alt="Settings" width="100%"/></td>
-  </tr>
-</table>
 
 ## 🚀 Quick Start
 
@@ -66,6 +52,117 @@ pi-switch config backups             # List backup files
 pi-switch stats                      # View proxy request statistics
 pi-switch doctor                     # Run environment diagnostics
 ```
+
+---
+
+## 🎯 Core Workflow
+
+### Provider Management & Intelligent Failover
+
+pi-switch provides a complete workflow for managing providers and enabling smart model-based failover:
+
+#### 1️⃣ Add Provider (Manual Model Input)
+
+Add a provider with manually specified models:
+
+```bash
+# CLI
+pi-switch provider add relay-a --api openai --base-url https://relay.example.com/v1 --api-key '$API_KEY' --models deepseek-v4-pro,deepseek-chat
+
+# TUI
+Profiles → 'a' → fill form → models: "deepseek-v4-pro, deepseek-chat" → Ctrl+S
+```
+
+**Result:** Provider created with `models` list configured.
+
+#### 2️⃣ Fetch & Select Models (Optional)
+
+Automatically fetch all available models from the provider:
+
+```bash
+# TUI only (coming soon)
+Profiles → select provider → 'f' (fetch models)
+```
+
+The system will:
+- Call the provider's `/models` API
+- Show a checklist with existing models pre-selected
+- Let you add/remove models
+- Save updated `models` list
+
+**Purpose:** `models` defines which models this provider **supports** (used for failover routing).
+
+#### 3️⃣ Expose Models to Pi Config
+
+Select which models to expose in `~/.pi/agent/models.json`:
+
+```bash
+# TUI only (coming soon)
+Profiles → select provider → 'x' (expose models)
+```
+
+Check the models you want pi agent to see:
+```
+Provider: relay-a
+Available models:
+  [√] deepseek-v4-pro      ← Expose
+  [ ] deepseek-chat        ← Don't expose
+  [√] deepseek-v4-flash    ← Expose
+```
+
+**Result:** Only checked models are written to `~/.pi/agent/models.json`.
+
+**Purpose:** `exposedModels` controls which models **appear in pi agent** (prevents config bloat).
+
+#### 4️⃣ Configure Failover Priority
+
+Set up failover chain in Settings:
+
+```bash
+# TUI
+Settings → Target: deepseek-official
+Settings → Failover: relay-a, relay-b
+```
+
+**Result:** Request priority order: `deepseek-official` → `relay-a` → `relay-b`
+
+#### 5️⃣ Intelligent Model-Based Failover
+
+When a request comes in, the proxy intelligently routes based on model availability:
+
+```
+User requests: deepseek-v4-pro
+↓
+1. Filter candidates by model support
+   Check each provider's `models` list:
+   - deepseek-official.models: ["deepseek-v4-pro", ...] ✓
+   - relay-a.models: ["deepseek-v4-pro", "deepseek-chat"] ✓
+   - relay-b.models: ["deepseek-chat"] ✗ (no match, skip)
+
+2. Try candidates in priority order
+   - Try deepseek-official → 429 Rate Limit → Record failure
+   - Try relay-a → Success ✓
+
+3. Circuit breaker protection
+   - After 3 consecutive failures, provider enters cooldown
+   - Half-open state allows single probe after cooldown
+   - Auto-recovery when probe succeeds
+```
+
+**Key Benefits:**
+- **Smart routing**: Only tries providers that have the requested model
+- **Automatic failover**: Seamlessly switches on 429/5xx errors or network failures
+- **Circuit breaker**: Prevents cascade failures, auto-recovery
+- **Model isolation**: `exposedModels` keeps pi config clean while `models` enables full failover
+
+**Failover Triggers:**
+- HTTP 429 (Rate Limit), 500, 502, 503, 504
+- Network errors (timeout, connection failure)
+- Circuit breaker open (3+ failures, 60s cooldown)
+
+**Non-failover Cases:**
+- 4xx client errors (400, 401, 403, 404) → returned directly
+- 2xx success → returned directly
 
 ---
 

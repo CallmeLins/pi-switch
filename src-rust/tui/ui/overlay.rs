@@ -150,7 +150,7 @@ fn render_confirm(
 fn render_loading(frame: &mut Frame<'_>, app: &App, kind: &LoadingKind) {
     let theme = &app.theme;
     let message = kind.message();
-    let width = (display_width(message) as u16 + 8).clamp(TOAST_MIN_WIDTH, TOAST_MAX_WIDTH);
+    let width = (display_width(message) + 8).clamp(TOAST_MIN_WIDTH, TOAST_MAX_WIDTH);
     let area = centered_rect_fixed(width, 5, frame.area());
     frame.render_widget(Clear, area);
 
@@ -259,12 +259,11 @@ fn toast_rect(content_area: Rect, message: &str) -> Rect {
     let max_width = content_area
         .width
         .saturating_sub(4)
-        .max(1)
-        .min(TOAST_MAX_WIDTH);
+        .clamp(1, TOAST_MAX_WIDTH);
     let min_width = TOAST_MIN_WIDTH.min(max_width);
     let content_width = message
         .lines()
-        .map(|line| display_width(line))
+        .map(display_width)
         .max()
         .unwrap_or(0);
     let width = content_width.saturating_add(8).clamp(min_width, max_width);
