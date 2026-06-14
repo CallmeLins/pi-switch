@@ -59,6 +59,39 @@ pi-switch doctor                     # Run environment diagnostics
 
 ### Provider Management & Intelligent Failover
 
+```mermaid
+graph LR
+    subgraph Setup["⚙️ Setup Phase"]
+        A[Add Provider] --> B[Configure Models]
+        B --> C[Expose to Pi]
+        C --> D[Set Failover Chain]
+    end
+    
+    subgraph Runtime["🚀 Runtime Phase"]
+        E[Request] --> F{Filter by Model}
+        F --> G[Try Target]
+        G --> H{Success?}
+        H -->|✓| I[Response]
+        H -->|✗ 429/5xx| J[Try Failover]
+        J --> K{Success?}
+        K -->|✓| I
+        K -->|✗| L[Circuit Breaker]
+        L --> M[60s Cooldown]
+        M --> N[Half-Open Probe]
+        N -->|✓| G
+        N -->|✗| M
+    end
+    
+    Setup --> Runtime
+    
+    style A fill:#50fa7b,stroke:#50fa7b,color:#282a36
+    style E fill:#8be9fd,stroke:#8be9fd,color:#282a36
+    style I fill:#50fa7b,stroke:#50fa7b,color:#282a36
+    style L fill:#ff5555,stroke:#ff5555,color:#f8f8f2
+```
+
+#### Workflow Steps
+
 pi-switch provides a complete workflow for managing providers and enabling smart model-based failover:
 
 #### 1️⃣ Add Provider (Manual Model Input)
@@ -171,13 +204,13 @@ User requests: deepseek-v4-pro
 ### npm (Recommended)
 
 ```bash
-npm install -g pi-switch
+npm install -g cokefenta@pi-switch
 ```
 
 ### Pi Package
 
 ```bash
-pi install npm:pi-switch
+pi install npm:cokefenta@pi-switch
 ```
 
 ### Build from Source
