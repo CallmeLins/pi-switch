@@ -31,6 +31,7 @@ export const {
   exportLogsCsv,
   fetchModels,
   runProxyServer,
+  upsertProfileRaw,
 } = native;
 
 export default native;

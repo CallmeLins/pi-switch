@@ -163,6 +163,31 @@ pub fn add_provider(opts: AddProviderOptions) -> napi::Result<AddResult> {
     Ok(AddResult { name, backup })
 }
 
+#[napi(object)]
+pub struct UpsertProviderRawOptions {
+    pub name: String,
+    pub profile: String, // JSON string
+    pub rename_from: Option<String>,
+}
+
+#[napi(object)]
+pub struct UpsertResult {
+    pub name: String,
+    pub backup: Option<String>,
+}
+
+#[napi]
+pub fn upsert_profile_raw(name: String, profile_json: String, rename_from: Option<String>) -> napi::Result<UpsertResult> {
+    let profile: ProviderProfile = serde_json::from_str(&profile_json)
+        .map_err(|e| napi::Error::from_reason(format!("Invalid profile JSON: {}", e)))?;
+
+    let backup = ops::upsert_profile(&name, &profile, rename_from.as_deref())
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .map(|p| p.display().to_string());
+
+    Ok(UpsertResult { name, backup })
+}
+
 #[napi]
 pub fn list_profiles() -> napi::Result<String> {
     let config = load_config().map_err(|e| napi::Error::from_reason(e.to_string()))?;

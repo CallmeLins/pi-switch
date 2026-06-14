@@ -9,6 +9,7 @@ import {
   runProxyServer,
   runNativeTui,
 } from "../index.js";
+import * as readline from "readline";
 
 function usage() {
   console.log(`pi-switch v0.2.0 — lightweight profile switcher for pi agent
@@ -79,6 +80,102 @@ function asArray(value) {
   return Array.isArray(value) ? value : [value];
 }
 
+async function editProviderInteractive(name) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const prompt = (question, defaultValue) => {
+    return new Promise((resolve) => {
+      const display = defaultValue !== undefined && defaultValue !== ""
+        ? `${question} [${defaultValue}]: `
+        : `${question}: `;
+      rl.question(display, (answer) => {
+        resolve(answer.trim() || defaultValue || "");
+      });
+    });
+  };
+
+  try {
+    // Load current profile
+    const data = JSON.parse(showProfile(name));
+    const profile = data.profile;
+
+    console.log(`\nEditing provider '${name}'`);
+    console.log("─".repeat(60));
+    console.log(`Current API: ${profile.api}`);
+    console.log(`Current Base URL: ${profile.baseUrl}`);
+    console.log(`Current API Key: ${profile.apiKey.slice(0, 8)}...`);
+    console.log(`Current Models: ${profile.models?.map(m => m.id).join(", ") || "none"}`);
+    console.log("─".repeat(60));
+    console.log("\nPress Enter to keep current value, or type new value:\n");
+
+    // Prompt for each field
+    const newName = await prompt("Provider name", name);
+
+    let newApi = await prompt("API type (openai-completions | anthropic-messages | google-generative-ai)", profile.api);
+    // Normalize aliases
+    if (newApi === "openai") newApi = "openai-completions";
+    if (newApi === "anthropic") newApi = "anthropic-messages";
+
+    const newBaseUrl = await prompt("Base URL", profile.baseUrl);
+    const newApiKey = await prompt("API Key", profile.apiKey);
+
+    const currentModels = profile.models?.map(m => m.id).join(",") || "";
+    const newModelsStr = await prompt("Models (comma-separated)", currentModels);
+
+    // Build updated profile
+    const updatedProfile = {
+      api: newApi,
+      baseUrl: newBaseUrl,
+      apiKey: newApiKey,
+      models: newModelsStr.split(",").filter(s => s.trim()).map(id => ({
+        id: id.trim(),
+        input: ["text"],
+        contextWindow: 128000,
+        maxTokens: 16384,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      })),
+      preset: profile.preset,
+      headers: profile.headers,
+      authHeader: profile.authHeader,
+      compat: profile.compat,
+      proxy: profile.proxy || false,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Show summary
+    console.log("\n" + "─".repeat(60));
+    console.log("Updated configuration:");
+    console.log("─".repeat(60));
+    console.log(`Name: ${newName}`);
+    console.log(`API: ${updatedProfile.api}`);
+    console.log(`Base URL: ${updatedProfile.baseUrl}`);
+    console.log(`API Key: ${updatedProfile.apiKey.slice(0, 8)}...`);
+    console.log(`Models: ${updatedProfile.models.map(m => m.id).join(", ")}`);
+    console.log("─".repeat(60));
+
+    const confirm = await prompt("\nSave changes? (y/n)", "y");
+    if (confirm.toLowerCase() !== "y" && confirm.toLowerCase() !== "yes") {
+      console.log("Edit cancelled.");
+      return;
+    }
+
+    // Save via native binding (upsert_profile with rename_from)
+    const { upsertProfileRaw } = await import("../index.js");
+    const renameFrom = newName !== name ? name : undefined;
+    const result = upsertProfileRaw(newName, JSON.stringify(updatedProfile), renameFrom);
+
+    console.log(`\n✓ Provider '${newName}' updated successfully`);
+    if (result.backup) {
+      console.log(`Backup: ${result.backup}`);
+    }
+  } finally {
+    rl.close();
+  }
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   try {
@@ -146,13 +243,9 @@ async function main() {
       }
 
       if (sub === "edit") {
-        // provider edit opens TUI at the edit form for the given provider
         const name = rest[1];
         if (!name) fail("provider name required");
-        const data = JSON.parse(showProfile(name));
-        console.log(`Current config for '${name}':`);
-        console.log(JSON.stringify(data, null, 2));
-        console.log(`\nTo edit, use: pi-switch tui → Profiles → ${name} → e (edit)`);
+        await editProviderInteractive(name);
         return;
       }
 
