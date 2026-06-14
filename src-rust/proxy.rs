@@ -493,7 +493,7 @@ async fn forward_with_failover(
             continue;
         }
 
-        let api_key = resolve_env(&profile.api_key);
+        let api_key = crate::config::resolve_env(&profile.api_key);
 
         if is_anthropic {
             // Convert OpenAI -> Anthropic
@@ -620,7 +620,7 @@ async fn forward_anthropic_with_failover(
         };
         if profile.api != "anthropic-messages" { continue; }
 
-        let api_key = resolve_env(&profile.api_key);
+        let api_key = crate::config::resolve_env(&profile.api_key);
         let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
         let resp = client.post(&url)
@@ -657,20 +657,6 @@ async fn forward_anthropic_with_failover(
     }
 
     Err(AppError::proxy("All Anthropic upstream attempts failed".to_string()))
-}
-
-// ─── Env resolution ───────────────────────────────────────
-
-fn resolve_env(value: &str) -> String {
-    let trimmed = value.trim();
-    // Check if it's an env var reference like $VAR or ${VAR}
-    if trimmed.starts_with('$') {
-        let var_name = trimmed.trim_start_matches('$').trim_start_matches('{').trim_end_matches('}');
-        if var_name.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()) {
-            return std::env::var(var_name).unwrap_or_else(|_| trimmed.to_string());
-        }
-    }
-    trimmed.to_string()
 }
 
 // ─── Request logging ──────────────────────────────────────

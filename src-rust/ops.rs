@@ -259,16 +259,6 @@ pub async fn test_provider(name: &str) -> Result<TestResult> {
 
 // ─── Fetch Models ─────────────────────────────────────────
 
-#[derive(serde::Deserialize)]
-struct OpenAIModel {
-    id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct OpenAIModelsResponse {
-    data: Vec<OpenAIModel>,
-}
-
 pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
     let config = load_config()?;
     let profile_value = config
@@ -284,43 +274,172 @@ pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
         .build()
         .map_err(|e| AppError::Message(format!("HTTP client error: {}", e)))?;
 
-    match profile.api.as_str() {
-        "openai-completions" => {
-            let url = format!("{}/models", profile.base_url.trim_end_matches('/'));
-            let resp = client
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", profile.api_key))
-                .send()
-                .await
-                .map_err(|e| AppError::Message(format!("Request failed: {}", e)))?;
+    let api_key = crate::config::resolve_env(&profile.api_key);
 
-            if !resp.status().is_success() {
-                return Err(AppError::Message(format!(
-                    "API returned HTTP {}",
-                    resp.status().as_u16()
-                )));
+    // Build candidate URLs (try multiple common endpoints)
+    let candidate_urls = build_model_fetch_urls(&profile.base_url, &profile.api);
+    let mut last_error = String::from("No candidate URLs");
+
+    for url in candidate_urls {
+        let mut req = client.get(&url);
+
+        // Set auth headers based on API type
+        req = match profile.api.as_str() {
+            "openai-completions" => req.header("Authorization", format!("Bearer {}", api_key)),
+            "anthropic-messages" => req
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01"),
+            _ => req.header("Authorization", format!("Bearer {}", api_key)),
+        };
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    last_error = format!("HTTP {} ({})", status.as_u16(), url);
+                    // Skip 404/405 and try next URL
+                    if status == reqwest::StatusCode::NOT_FOUND
+                        || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
+                    {
+                        continue;
+                    }
+                    return Err(AppError::Message(last_error));
+                }
+
+                match resp.json::<serde_json::Value>().await {
+                    Ok(payload) => {
+                        let models = parse_model_ids(&payload);
+                        if models.is_empty() {
+                            last_error = format!("No models found in response ({})", url);
+                            continue;
+                        }
+                        return Ok(models);
+                    }
+                    Err(e) => {
+                        last_error = format!("Invalid JSON ({}): {}", url, e);
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = format!("Request failed ({}): {}", url, e);
+            }
+        }
+    }
+
+    Err(AppError::Message(last_error))
+}
+
+// Build multiple candidate URLs to try (following cc-switch logic)
+fn build_model_fetch_urls(base_url: &str, api_type: &str) -> Vec<String> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Vec::new();
+    }
+
+    // If already ends with /models, use it directly
+    if base.ends_with("/models") {
+        return vec![base.to_string()];
+    }
+
+    let mut urls = Vec::new();
+    let append_models = format!("{}/models", base);
+    let has_version_suffix = base.ends_with("/v1") || base.ends_with("/v1beta");
+
+    match api_type {
+        "anthropic-messages" => {
+            // Try /v1/models first for Anthropic-compatible endpoints
+            if !has_version_suffix {
+                urls.push(format!("{}/v1/models", base));
+            } else {
+                urls.push(append_models.clone());
             }
 
-            let models_resp: OpenAIModelsResponse = resp
-                .json()
-                .await
-                .map_err(|e| AppError::Message(format!("Failed to parse response: {}", e)))?;
-
-            Ok(models_resp.data.into_iter().map(|m| m.id).collect())
+            // Try stripping known compatibility suffixes
+            if let Some(stripped) = strip_compat_suffix(base) {
+                let root = stripped.trim_end_matches('/');
+                if !root.is_empty() && root.contains("://") {
+                    urls.push(format!("{}/v1/models", root));
+                    urls.push(format!("{}/models", root));
+                }
+            } else if !has_version_suffix {
+                urls.push(append_models);
+            }
         }
-        "anthropic-messages" => {
-            // Anthropic doesn't provide a models endpoint, return hardcoded list
-            Ok(vec![
-                "claude-3-5-sonnet-20241022".to_string(),
-                "claude-3-5-haiku-20241022".to_string(),
-                "claude-3-opus-20240229".to_string(),
-                "claude-3-sonnet-20240229".to_string(),
-                "claude-3-haiku-20240307".to_string(),
-            ])
+        _ => {
+            // OpenAI and others: try /models, then /v1/models
+            urls.push(append_models);
+            if !has_version_suffix {
+                urls.push(format!("{}/v1/models", base));
+            }
         }
-        _ => Err(AppError::Message(format!(
-            "Unsupported API type: {}. Only openai-completions and anthropic-messages are supported.",
-            profile.api
-        ))),
     }
+
+    // Deduplicate
+    let mut seen = std::collections::HashSet::new();
+    urls.retain(|url| seen.insert(url.clone()));
+    urls
 }
+
+// Strip known compatibility path suffixes (e.g., /api/anthropic, /claudecode)
+fn strip_compat_suffix(base: &str) -> Option<&str> {
+    const KNOWN_SUFFIXES: &[&str] = &[
+        "/api/claudecode",
+        "/api/anthropic",
+        "/apps/anthropic",
+        "/api/coding",
+        "/claudecode",
+        "/anthropic",
+        "/step_plan",
+        "/coding",
+        "/claude",
+    ];
+
+    let lower = base.to_ascii_lowercase();
+    KNOWN_SUFFIXES.iter().find_map(|suffix| {
+        lower
+            .ends_with(suffix)
+            .then(|| &base[..base.len() - suffix.len()])
+    })
+}
+
+// Parse model IDs from various response formats
+fn parse_model_ids(payload: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+
+    // Try OpenAI format: { "data": [{"id": "..."}, ...] }
+    if let Some(data) = payload.get("data").and_then(|v| v.as_array()) {
+        for item in data {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                out.push(id.to_string());
+            }
+        }
+    }
+
+    // Try Google format: { "models": [{"name": "models/..."}, ...] }
+    if out.is_empty() {
+        if let Some(models) = payload.get("models").and_then(|v| v.as_array()) {
+            for item in models {
+                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                    out.push(name.strip_prefix("models/").unwrap_or(name).to_string());
+                }
+            }
+        }
+    }
+
+    // Try direct array: [{"id": "..."}, ...]
+    if out.is_empty() {
+        if let Some(arr) = payload.as_array() {
+            for item in arr {
+                if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                    out.push(id.to_string());
+                }
+            }
+        }
+    }
+
+    // Deduplicate
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|model| seen.insert(model.clone()));
+    out
+}
+

@@ -374,3 +374,23 @@ pub fn validate_config() -> Result<Vec<ValidationIssue>> {
 
     Ok(issues)
 }
+
+// ─── Environment Variable Resolution ──────────────────────
+
+pub fn resolve_env(value: &str) -> String {
+    let trimmed = value.trim();
+    // Check if it's an env var reference like $VAR or ${VAR}
+    if trimmed.starts_with('$') {
+        let var_name = trimmed
+            .trim_start_matches('$')
+            .trim_start_matches('{')
+            .trim_end_matches('}');
+        if var_name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+        {
+            return std::env::var(var_name).unwrap_or_else(|_| trimmed.to_string());
+        }
+    }
+    trimmed.to_string()
+}
