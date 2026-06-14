@@ -32,6 +32,23 @@ pub struct Toast {
     pub remaining_ticks: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadingKind {
+    DaemonStart,
+    DaemonStop,
+    Saving,
+}
+
+impl LoadingKind {
+    pub fn message(&self) -> &'static str {
+        match self {
+            LoadingKind::DaemonStart => "Starting daemon...",
+            LoadingKind::DaemonStop => "Stopping daemon...",
+            LoadingKind::Saving => "Saving...",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
     Quit,
@@ -49,6 +66,7 @@ pub enum Overlay {
     None,
     Help,
     Confirm(ConfirmOverlay),
+    Loading(LoadingKind),
 }
 
 impl Overlay {
@@ -306,6 +324,7 @@ impl App {
                 }
                 _ => {}
             },
+            Overlay::Loading(_) => {}
             Overlay::None => {}
         }
     }
@@ -633,7 +652,12 @@ impl App {
                 if self.settings_proxy_idx > 0 {
                     // Start editing a proxy field
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
-                    self.settings_edit_input = TextInput::new(text);
+                    let policy = if self.settings_proxy_idx == 2 {
+                        super::text_edit::TextInputPolicy::Digits
+                    } else {
+                        super::text_edit::TextInputPolicy::Any
+                    };
+                    self.settings_edit_input = TextInput::new(text).with_policy(policy);
                     self.settings_editing_field = Some(self.settings_proxy_idx);
                 }
             }

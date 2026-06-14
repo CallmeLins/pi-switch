@@ -1,6 +1,23 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputPolicy {
+    Any,
+    Digits,
+    Url,
+}
+
+impl TextInputPolicy {
+    pub fn allows(&self, c: char) -> bool {
+        match self {
+            TextInputPolicy::Any => true,
+            TextInputPolicy::Digits => c.is_ascii_digit(),
+            TextInputPolicy::Url => !c.is_whitespace() && !c.is_control(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextEditCommand {
     MoveLeft,
     MoveRight,
@@ -57,17 +74,29 @@ impl TextEditCommand {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TextInput {
     pub value: String,
     pub cursor: usize,
+    pub policy: TextInputPolicy,
+}
+
+impl Default for TextInput {
+    fn default() -> Self {
+        Self { value: String::new(), cursor: 0, policy: TextInputPolicy::Any }
+    }
 }
 
 impl TextInput {
     pub fn new(value: impl Into<String>) -> Self {
         let value = value.into();
         let cursor = value.chars().count();
-        Self { value, cursor }
+        Self { value, cursor, policy: TextInputPolicy::Any }
+    }
+
+    pub fn with_policy(mut self, policy: TextInputPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     pub fn set(&mut self, value: impl Into<String>) {
@@ -156,6 +185,9 @@ impl TextInput {
     }
 
     fn insert_char(&mut self, c: char) -> bool {
+        if !self.policy.allows(c) {
+            return false;
+        }
         let idx = Self::byte_index(&self.value, self.cursor);
         self.value.insert(idx, c);
         self.cursor += 1;

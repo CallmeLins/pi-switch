@@ -146,7 +146,7 @@ pub fn home_running(pid: u32, host: &str, port: u16) -> String {
 }
 pub fn home_stopped() -> &'static str { t!("stopped", "已停止") }
 pub fn home_logo() -> &'static str {
-    r"     _                     _ __       __  
+    r"        _                     _ __       __  
     ____  (_)     ______      __(_) /______/ /_ 
    / __ \/ /_____/ ___/ | /| / / / __/ ___/ __ \
   / /_/ / /_____(__  )| |/ |/ / / /_/ /__/ / / /

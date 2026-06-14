@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::tui::app::{App, Overlay, ToastKind};
+use crate::tui::app::{App, LoadingKind, Overlay, ToastKind};
 use crate::tui::i18n;
 
 use super::{centered_rect, centered_rect_fixed, display_width, render_key_bar_center};
@@ -21,6 +21,7 @@ pub(super) fn render_overlay(frame: &mut Frame<'_>, app: &App, content_area: Rec
         Overlay::Confirm(confirm) => {
             render_confirm(frame, app, content_area, &confirm.title, &confirm.message)
         }
+        Overlay::Loading(kind) => render_loading(frame, app, kind),
     }
 }
 
@@ -143,6 +144,35 @@ fn render_confirm(
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: false }),
         body,
+    );
+}
+
+fn render_loading(frame: &mut Frame<'_>, app: &App, kind: &LoadingKind) {
+    let theme = &app.theme;
+    let message = kind.message();
+    let width = (display_width(message) as u16 + 8).clamp(TOAST_MIN_WIDTH, TOAST_MAX_WIDTH);
+    let area = centered_rect_fixed(width, 5, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let tick_idx = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() / 80) % spinner.len() as u128;
+    let spinner_char = spinner[tick_idx as usize];
+
+    frame.render_widget(
+        Paragraph::new(format!("{} {}", spinner_char, message))
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(theme.accent)),
+        inner,
     );
 }
 
