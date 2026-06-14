@@ -3,6 +3,7 @@ mod daemon;
 mod error;
 mod ops;
 mod presets;
+mod proxy;
 mod stats;
 mod sync;
 mod tui;
@@ -319,6 +320,34 @@ pub fn run_native_tui() -> napi::Result<()> {
 // NOTE: Full proxy logic (failover, circuit breaker, OpenAI↔Anthropic conversion)
 // is implemented in src-rust/proxy.rs. It needs axum 0.7 serve API compatibility.
 // The JS proxy.js currently serves as the HTTP layer. Coming in next iteration.
+
+// ─── Proxy Server ─────────────────────────────────────────
+
+#[napi]
+pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let config = load_config().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let state = Arc::new(proxy::ProxyState {
+        config: Arc::new(RwLock::new(config)),
+    });
+
+    let app = proxy::make_router(state);
+    let addr = format!("{}:{}", host, port);
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| napi::Error::from_reason(format!("Failed to bind to {}: {}", addr, e)))?;
+
+    eprintln!("Proxy server listening on http://{}", addr);
+
+    let result = axum::serve(listener, app).await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(e) => Err(napi::Error::from_reason(format!("Server error: {}", e))),
+    }
+}
 
 // ─── Daemon ───────────────────────────────────────────────
 

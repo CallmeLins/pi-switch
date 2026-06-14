@@ -6,6 +6,7 @@ import {
   getUsageStats, exportConfig, importConfig,
   validateConfig, testProvider, restoreBackup, duplicateProvider,
   exportLogsJson, exportLogsCsv, fetchModels,
+  runProxyServer,
   runNativeTui,
 } from "../index.js";
 
@@ -31,7 +32,7 @@ Usage:
   pi-switch config import <path> <passphrase>
   pi-switch config backups
   pi-switch config restore <backup-path>
-  pi-switch proxy start  [--host <ip>] [--port <port>] [--profile <name>]
+  pi-switch proxy start  [--host <ip>] [--port <port>] [--profile <name>] [--daemon]
   pi-switch proxy stop
   pi-switch proxy status
   pi-switch stats
@@ -310,13 +311,31 @@ async function main() {
           if (rest[i] === "--host") args.host = rest[++i];
           else if (rest[i] === "--port") args.port = parseInt(rest[++i], 10);
           else if (rest[i] === "--profile") args.profile = rest[++i];
+          else if (rest[i] === "--daemon") args.daemon = true;
         }
-        const result = JSON.parse(daemonStartNative(args.host || null, args.port || null));
-        console.log(result.message);
-        if (result.pid) console.log(`PID: ${result.pid}`);
-        if (args.profile) {
-          const useResult = useProfile(args.profile);
-          console.log(`Using profile '${useResult.name}' as provider '${useResult.providerId}'`);
+
+        const config = JSON.parse(listProfiles());
+        const host = args.host || config.settings?.proxy?.host || "127.0.0.1";
+        const port = args.port || config.settings?.proxy?.port || 43112;
+
+        if (args.daemon) {
+          // Daemon mode: fork background process
+          const result = JSON.parse(daemonStartNative(host, port));
+          console.log(result.message);
+          if (result.pid) console.log(`PID: ${result.pid}`);
+          if (args.profile) {
+            const useResult = useProfile(args.profile);
+            console.log(`Using profile '${useResult.name}' as provider '${useResult.providerId}'`);
+          }
+        } else {
+          // Foreground mode: run server directly
+          console.log(`Starting proxy server on http://${host}:${port} (foreground mode)`);
+          console.log(`Press Ctrl+C to stop`);
+          if (args.profile) {
+            const useResult = useProfile(args.profile);
+            console.log(`Using profile '${useResult.name}' as provider '${useResult.providerId}'`);
+          }
+          await runProxyServer(host, port);
         }
         return;
       }

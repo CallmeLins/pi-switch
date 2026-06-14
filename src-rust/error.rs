@@ -22,6 +22,9 @@ pub enum AppError {
 
     #[error("{0}")]
     Message(String),
+
+    #[error("proxy error: {0}")]
+    Proxy(String),
 }
 
 impl AppError {
@@ -39,6 +42,9 @@ impl AppError {
         }
     }
 
+    pub fn proxy(msg: String) -> Self {
+        Self::Proxy(msg)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;

@@ -1,9 +1,9 @@
-use crate::config::{load_config, CircuitBreakerSettings, ProviderProfile, config_dir};
+use crate::config::{CircuitBreakerSettings, ProviderProfile, config_dir};
 use crate::error::{AppError, Result};
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode, Method},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -39,7 +39,7 @@ pub struct ProxyHealth {
     #[serde(rename = "circuitBreaker")]
     pub circuit_breaker: CircuitBreakerSettings,
     #[serde(rename = "circuitState")]
-    pub circuit_state: Value,
+    pub circuit_state: CircuitStateStore,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub struct CircuitEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub struct CircuitState {
+pub struct CircuitStateStore {
     pub providers: std::collections::HashMap<String, CircuitEntry>,
 }
 
@@ -70,10 +70,10 @@ fn circuit_path() -> PathBuf {
     config_dir().join("circuit.json")
 }
 
-pub async fn read_circuit_state() -> CircuitState {
+pub async fn read_circuit_state() -> CircuitStateStore {
     let path = circuit_path();
     if !path.exists() {
-        return CircuitState::default();
+        return CircuitStateStore::default();
     }
     std::fs::read_to_string(&path)
         .ok()
@@ -81,7 +81,7 @@ pub async fn read_circuit_state() -> CircuitState {
         .unwrap_or_default()
 }
 
-pub async fn write_circuit_state(state: &CircuitState) {
+pub async fn write_circuit_state(state: &CircuitStateStore) {
     let path = circuit_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -91,49 +91,72 @@ pub async fn write_circuit_state(state: &CircuitState) {
     }
 }
 
-fn is_circuit_open(state: &CircuitState, name: &str, settings: &CircuitBreakerSettings) -> bool {
-    if !settings.enabled { return false; }
+fn is_circuit_open(state: &CircuitStateStore, name: &str, settings: &CircuitBreakerSettings) -> (bool, bool) {
+    if !settings.enabled {
+        return (false, false);
+    }
+
     let entry = match state.providers.get(name) {
         Some(e) => e,
-        None => return false,
+        None => return (false, false),
     };
+
     match entry.opened_at {
         Some(opened) => {
             let cooldown_ms = (settings.cooldown_seconds as u64) * 1000;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            now - opened < cooldown_ms
+            let now = now_ms();
+            let elapsed = now.saturating_sub(opened);
+
+            if elapsed < cooldown_ms {
+                // Still in cooldown, circuit is open
+                (true, false)
+            } else {
+                // Cooldown expired, enter half-open
+                (false, true)
+            }
         }
-        None => false,
+        None => (false, false),
     }
 }
 
-async fn record_success(name: &str) {
+async fn record_success(name: &str, half_open: bool) {
     let mut state = read_circuit_state().await;
-    state.providers.insert(name.to_string(), CircuitEntry {
+    let entry = state.providers.entry(name.to_string()).or_insert(CircuitEntry {
         failures: 0,
         opened_at: None,
         last_failure_at: None,
         last_error: None,
-        last_success_at: Some(now_ms()),
+        last_success_at: None,
     });
+
+    entry.failures = 0;
+    entry.last_success_at = Some(now_ms());
+
+    // If in half-open state and success, transition to closed
+    if half_open {
+        entry.opened_at = None;
+    }
+
     write_circuit_state(&state).await;
 }
 
-async fn record_failure(name: &str, settings: &CircuitBreakerSettings, reason: &str) {
+async fn record_failure(name: &str, settings: &CircuitBreakerSettings, reason: &str, half_open: bool) {
     if !settings.enabled { return; }
     let mut state = read_circuit_state().await;
     let entry = state.providers.entry(name.to_string()).or_insert(CircuitEntry {
         failures: 0, opened_at: None, last_failure_at: None, last_error: None, last_success_at: None,
     });
+
     entry.failures += 1;
     entry.last_failure_at = Some(now_ms());
     entry.last_error = Some(reason.to_string());
-    if entry.failures >= settings.failure_threshold {
+
+    // If half-open and failed, immediately reopen
+    // If closed and reached threshold, open
+    if half_open || entry.failures >= settings.failure_threshold {
         entry.opened_at = Some(now_ms());
     }
+
     write_circuit_state(&state).await;
 }
 
@@ -266,13 +289,13 @@ fn anthropic_to_openai_response(anthro: &Value) -> Value {
 
 // ─── Proxy router ─────────────────────────────────────────
 
-pub fn make_router(state: Arc<ProxyState>) -> Router<Arc<ProxyState>> {
+pub fn make_router(state: Arc<ProxyState>) -> Router {
     Router::new()
-        .with_state(state)
         .route("/health", get(handle_health))
         .route("/v1/models", get(handle_models))
         .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/v1/messages", post(handle_messages))
+        .with_state(state)
 }
 
 async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
@@ -434,8 +457,9 @@ async fn forward_with_failover(
     _headers: &HeaderMap,
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
-    let circuit_state = read_circuit_state().await;
+    let mut circuit_state = read_circuit_state().await;
     let client = ReqwestClient::new();
+    let mut half_open_used = false;
 
     for name in candidates {
         let profile_value = match config.profiles.get(name) {
@@ -443,9 +467,20 @@ async fn forward_with_failover(
             None => continue,
         };
 
-        if is_circuit_open(&circuit_state, name, circuit_settings) {
+        let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
+
+        if is_open {
             log_request(name, false, Some("circuit_open"), None, None, None, None).await;
             continue;
+        }
+
+        // If half-open, only allow one probe request
+        if is_half_open {
+            if half_open_used {
+                log_request(name, false, Some("half_open_already_probing"), None, None, None, None).await;
+                continue;
+            }
+            half_open_used = true;
         }
 
         let profile: ProviderProfile = match serde_json::from_value(profile_value.clone()) {
@@ -478,13 +513,14 @@ async fn forward_with_failover(
                     if status.is_success() {
                         let anthro_data: Value = r.json().await.unwrap_or(Value::Null);
                         let openai_data = anthropic_to_openai_response(&anthro_data);
-                        record_success(name).await;
+                        record_success(name, is_half_open).await;
                         log_request(name, true, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
                         return Ok(Json(openai_data).into_response());
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
-                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code)).await;
+                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code), is_half_open).await;
                         log_request(name, false, Some(&format!("HTTP {}", status_code)), Some(status_code), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        circuit_state = read_circuit_state().await;
                         continue;
                     } else {
                         let body_bytes = r.bytes().await.unwrap_or_default();
@@ -496,8 +532,9 @@ async fn forward_with_failover(
                     }
                 }
                 Err(e) => {
-                    record_failure(name, circuit_settings, &e.to_string()).await;
+                    record_failure(name, circuit_settings, &e.to_string(), is_half_open).await;
                     log_request(name, false, Some(&e.to_string()), None, None, None, body.get("model").and_then(|v| v.as_str())).await;
+                    circuit_state = read_circuit_state().await;
                     continue;
                 }
             }
@@ -516,7 +553,7 @@ async fn forward_with_failover(
                     let status = r.status();
                     if status.is_success() {
                         let body_bytes = r.bytes().await.unwrap_or_default();
-                        record_success(name).await;
+                        record_success(name, is_half_open).await;
                         log_request(name, true, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
                         return Ok(Response::builder()
                             .status(status.as_u16())
@@ -524,8 +561,9 @@ async fn forward_with_failover(
                             .unwrap());
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
-                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code)).await;
+                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code), is_half_open).await;
                         log_request(name, false, Some(&format!("HTTP {}", status_code)), Some(status_code), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        circuit_state = read_circuit_state().await;
                         continue;
                     } else {
                         let body_bytes = r.bytes().await.unwrap_or_default();
@@ -537,8 +575,9 @@ async fn forward_with_failover(
                     }
                 }
                 Err(e) => {
-                    record_failure(name, circuit_settings, &e.to_string()).await;
+                    record_failure(name, circuit_settings, &e.to_string(), is_half_open).await;
                     log_request(name, false, Some(&e.to_string()), None, None, None, body.get("model").and_then(|v| v.as_str())).await;
+                    circuit_state = read_circuit_state().await;
                     continue;
                 }
             }
@@ -555,11 +594,24 @@ async fn forward_anthropic_with_failover(
     _headers: &HeaderMap,
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
-    let circuit_state = read_circuit_state().await;
+    let mut circuit_state = read_circuit_state().await;
     let client = ReqwestClient::new();
+    let mut half_open_used = false;
 
     for name in candidates {
-        if is_circuit_open(&circuit_state, name, circuit_settings) { continue; }
+        let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
+
+        if is_open {
+            continue;
+        }
+
+        if is_half_open {
+            if half_open_used {
+                continue;
+            }
+            half_open_used = true;
+        }
+
         let profile_value = match config.profiles.get(name) {
             Some(p) => p, None => continue,
         };
@@ -582,7 +634,9 @@ async fn forward_anthropic_with_failover(
             Ok(r) if r.status().is_success() || !should_retry(r.status().as_u16()) => {
                 let status = r.status();
                 let body_bytes = r.bytes().await.unwrap_or_default();
-                if status.is_success() { record_success(name).await; }
+                if status.is_success() {
+                    record_success(name, is_half_open).await;
+                }
                 return Ok(Response::builder()
                     .status(status.as_u16())
                     .body(Body::from(body_bytes))
@@ -590,11 +644,13 @@ async fn forward_anthropic_with_failover(
             }
             Ok(r) => {
                 let status = r.status().as_u16();
-                record_failure(name, circuit_settings, &format!("HTTP {}", status)).await;
+                record_failure(name, circuit_settings, &format!("HTTP {}", status), is_half_open).await;
+                circuit_state = read_circuit_state().await;
                 continue;
             }
             Err(e) => {
-                record_failure(name, circuit_settings, &e.to_string()).await;
+                record_failure(name, circuit_settings, &e.to_string(), is_half_open).await;
+                circuit_state = read_circuit_state().await;
                 continue;
             }
         }

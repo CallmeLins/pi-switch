@@ -30,6 +30,7 @@ export const {
   exportLogsJson,
   exportLogsCsv,
   fetchModels,
+  runProxyServer,
 } = native;
 
 export default native;

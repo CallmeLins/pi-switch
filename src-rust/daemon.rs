@@ -87,14 +87,29 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
     let host = host.unwrap_or_else(|| config.settings.proxy.host.clone());
     let port = port.unwrap_or(config.settings.proxy.port);
 
-    let child: Child = Command::new(std::env::current_exe().unwrap_or_else(|_| "pi-switch".into()))
+    // Use absolute path to pi-switch.js
+    let bin_path = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join("bin/pi-switch.js"))
+        .unwrap_or_else(|| std::path::PathBuf::from("bin/pi-switch.js"));
+
+    let log_path = config_dir().join("proxy.log");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open log file: {}", e))?;
+
+    // Spawn child process without --daemon flag, so it runs the server directly
+    let child: Child = Command::new("node")
+        .arg(&bin_path)
         .arg("proxy")
         .arg("start")
         .arg("--host").arg(&host)
         .arg("--port").arg(port.to_string())
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(log_file.try_clone().unwrap())
+        .stderr(log_file)
         .spawn()
         .map_err(|e| format!("Failed to spawn daemon: {}", e))?;
 
