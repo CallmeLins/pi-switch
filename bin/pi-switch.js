@@ -5,6 +5,7 @@ import {
   daemonStartNative, daemonStopNative, daemonStatusNative,
   getUsageStats, exportConfig, importConfig,
   validateConfig, testProvider, restoreBackup, duplicateProvider,
+  exportLogsJson, exportLogsCsv, fetchModels,
   runNativeTui,
 } from "../index.js";
 
@@ -19,6 +20,7 @@ Usage:
   pi-switch provider delete <name>
   pi-switch provider duplicate <name> [--as <new-name>]
   pi-switch provider test <name>
+  pi-switch provider fetch-models <name>
   pi-switch use <name> [--mode merge|exclusive]
   pi-switch presets [list]
   pi-switch presets show <id>
@@ -33,6 +35,7 @@ Usage:
   pi-switch proxy stop
   pi-switch proxy status
   pi-switch stats
+  pi-switch logs export [--format json|csv] [--output <file>]
   pi-switch doctor
   pi-switch tui
 
@@ -181,6 +184,23 @@ async function main() {
           console.log(`Response time: ${result.responseTimeMs}ms`);
         }
         process.exit(result.success ? 0 : 1);
+      }
+
+      if (sub === "fetch-models") {
+        const name = rest[1];
+        if (!name) fail("provider name required");
+        console.log(`Fetching models for provider '${name}'...`);
+        try {
+          const models = await fetchModels(name);
+          console.log(`\nFound ${models.length} model(s):\n`);
+          for (const model of models) {
+            console.log(`  ${model}`);
+          }
+          console.log(`\nTo use these models, edit the provider and add them to the models field.`);
+        } catch (err) {
+          fail(err.message);
+        }
+        return;
       }
 
       fail(`unknown provider subcommand: '${sub}'`);
@@ -339,6 +359,37 @@ async function main() {
           const rate = ps.total > 0 ? ((ps.ok / ps.total) * 100).toFixed(0) + "%" : "0%";
           console.log(`  ${name}: ${ps.total} req, ${ps.ok} ok (${rate})`);
         }
+      }
+      return;
+    }
+
+    // ─── Logs export ─────────────────────────────────
+
+    if (effectiveCmd === "logs") {
+      const sub = rest[0] || "export";
+      if (sub !== "export") {
+        fail("usage: pi-switch logs export [--format json|csv] [--output <file>]");
+      }
+
+      const args = parseArgs(rest.slice(1));
+      const format = args.format || "json";
+      const outputFile = args.output || args._[0] || null;
+
+      let content;
+      if (format === "csv") {
+        content = exportLogsCsv();
+      } else if (format === "json") {
+        content = exportLogsJson();
+      } else {
+        fail(`Unknown format '${format}'. Use json or csv.`);
+      }
+
+      if (outputFile) {
+        const fs = await import('fs');
+        fs.writeFileSync(outputFile, content, 'utf-8');
+        console.log(`Logs exported to: ${outputFile}`);
+      } else {
+        console.log(content);
       }
       return;
     }

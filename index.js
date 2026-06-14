@@ -27,6 +27,9 @@ export const {
   testProvider,
   restoreBackup,
   duplicateProvider,
+  exportLogsJson,
+  exportLogsCsv,
+  fetchModels,
 } = native;
 
 export default native;

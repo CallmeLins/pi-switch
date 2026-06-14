@@ -256,3 +256,71 @@ pub async fn test_provider(name: &str) -> Result<TestResult> {
         }
     }
 }
+
+// ─── Fetch Models ─────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct OpenAIModel {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIModelsResponse {
+    data: Vec<OpenAIModel>,
+}
+
+pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
+    let config = load_config()?;
+    let profile_value = config
+        .profiles
+        .get(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Message(format!("HTTP client error: {}", e)))?;
+
+    match profile.api.as_str() {
+        "openai-completions" => {
+            let url = format!("{}/models", profile.base_url.trim_end_matches('/'));
+            let resp = client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", profile.api_key))
+                .send()
+                .await
+                .map_err(|e| AppError::Message(format!("Request failed: {}", e)))?;
+
+            if !resp.status().is_success() {
+                return Err(AppError::Message(format!(
+                    "API returned HTTP {}",
+                    resp.status().as_u16()
+                )));
+            }
+
+            let models_resp: OpenAIModelsResponse = resp
+                .json()
+                .await
+                .map_err(|e| AppError::Message(format!("Failed to parse response: {}", e)))?;
+
+            Ok(models_resp.data.into_iter().map(|m| m.id).collect())
+        }
+        "anthropic-messages" => {
+            // Anthropic doesn't provide a models endpoint, return hardcoded list
+            Ok(vec![
+                "claude-3-5-sonnet-20241022".to_string(),
+                "claude-3-5-haiku-20241022".to_string(),
+                "claude-3-opus-20240229".to_string(),
+                "claude-3-sonnet-20240229".to_string(),
+                "claude-3-haiku-20240307".to_string(),
+            ])
+        }
+        _ => Err(AppError::Message(format!(
+            "Unsupported API type: {}. Only openai-completions and anthropic-messages are supported.",
+            profile.api
+        ))),
+    }
+}

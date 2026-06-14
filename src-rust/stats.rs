@@ -139,3 +139,34 @@ pub fn get_stats() -> UsageStats {
 
     stats
 }
+
+pub fn export_logs_json() -> crate::error::Result<String> {
+    let entries = parse_logs();
+    serde_json::to_string_pretty(&entries)
+        .map_err(|e| crate::error::AppError::Message(format!("Failed to serialize logs: {}", e)))
+}
+
+pub fn export_logs_csv() -> crate::error::Result<String> {
+    let entries = parse_logs();
+
+    let mut csv = String::from("timestamp,ok,provider,model,status,latency_ms,error,retry,skipped,converted,upstream_url\n");
+
+    for entry in entries {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{}\n",
+            entry.ts.as_deref().unwrap_or(""),
+            entry.ok.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
+            entry.provider.as_deref().unwrap_or(""),
+            entry.model.as_deref().unwrap_or(""),
+            entry.status.map(|s| s.to_string()).unwrap_or_default(),
+            entry.ms.map(|m| m.to_string()).unwrap_or_default(),
+            entry.error.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
+            entry.retry.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
+            entry.skipped.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
+            entry.converted.as_deref().unwrap_or(""),
+            entry.upstream_url.as_deref().unwrap_or(""),
+        ));
+    }
+
+    Ok(csv)
+}

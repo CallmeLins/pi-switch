@@ -355,6 +355,18 @@ pub fn get_usage_stats() -> napi::Result<String> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+#[napi]
+pub fn export_logs_json() -> napi::Result<String> {
+    stats::export_logs_json()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi]
+pub fn export_logs_csv() -> napi::Result<String> {
+    stats::export_logs_csv()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
 // ─── Sync ─────────────────────────────────────────────────
 
 #[napi]
@@ -413,6 +425,13 @@ pub async fn test_provider(name: String) -> napi::Result<TestResult> {
         message: result.message,
         response_time_ms: result.response_time_ms.map(|ms| ms as u32),
     })
+}
+
+#[napi]
+pub async fn fetch_models(name: String) -> napi::Result<Vec<String>> {
+    ops::fetch_models(&name)
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi]
