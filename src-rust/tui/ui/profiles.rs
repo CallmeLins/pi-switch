@@ -578,11 +578,29 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 
     if editing {
-        let (_, cursor_x) = visible_text_window(
-            &form.json_edit.value,
-            form.json_edit.cursor,
-            inner.width.saturating_sub(1).max(1),
-        );
-        frame.set_cursor_position((inner.x + 1 + cursor_x, inner.y));
+        // Calculate cursor position in multi-line text
+        let lines: Vec<&str> = form.json_edit.value.lines().collect();
+        let mut cursor_pos = 0;
+        let mut cursor_line = 0;
+        let mut cursor_col = 0;
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let line_len = line.chars().count();
+            if cursor_pos + line_len >= form.json_edit.cursor {
+                cursor_line = line_idx;
+                cursor_col = form.json_edit.cursor - cursor_pos;
+                break;
+            }
+            cursor_pos += line_len + 1; // +1 for newline
+        }
+
+        // Set cursor position with correct Y coordinate
+        let cursor_y = inner.y + cursor_line as u16;
+        let cursor_x = inner.x + 1 + cursor_col as u16;
+
+        // Only set cursor if within visible area
+        if cursor_y < inner.y + inner.height {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
     }
 }

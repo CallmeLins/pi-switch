@@ -838,6 +838,48 @@ impl App {
                         self.push_toast(ToastKind::Error, e);
                     }
                 }
+                KeyCode::Up | KeyCode::Down => {
+                    // Multi-line navigation: move cursor up/down by line
+                    let lines: Vec<&str> = form.json_edit.value.lines().collect();
+                    if lines.is_empty() {
+                        return;
+                    }
+
+                    // Find current line and column
+                    let mut cursor_pos = 0;
+                    let mut current_line = 0;
+                    let mut col_in_line = 0;
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        let line_len = line.chars().count();
+                        if cursor_pos + line_len >= form.json_edit.cursor {
+                            current_line = line_idx;
+                            col_in_line = form.json_edit.cursor - cursor_pos;
+                            break;
+                        }
+                        cursor_pos += line_len + 1; // +1 for newline
+                    }
+
+                    // Move to target line
+                    let target_line = match key.code {
+                        KeyCode::Up => current_line.saturating_sub(1),
+                        KeyCode::Down => (current_line + 1).min(lines.len() - 1),
+                        _ => current_line,
+                    };
+
+                    if target_line != current_line {
+                        // Calculate new cursor position
+                        let mut new_cursor = 0;
+                        for (idx, line) in lines.iter().enumerate() {
+                            if idx == target_line {
+                                let target_len = line.chars().count();
+                                new_cursor += col_in_line.min(target_len);
+                                break;
+                            }
+                            new_cursor += line.chars().count() + 1;
+                        }
+                        form.json_edit.cursor = new_cursor;
+                    }
+                }
                 _ => {
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(key.code, KeyCode::Char('s' | 'S'))
