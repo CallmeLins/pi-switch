@@ -167,3 +167,92 @@ pub fn duplicate_profile(src: &str, dst: &str) -> Result<Option<PathBuf>> {
 
     Ok(backup)
 }
+
+// ─── Provider Testing ─────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct TestResult {
+    pub success: bool,
+    pub message: String,
+    pub response_time_ms: Option<u64>,
+}
+
+pub async fn test_provider(name: &str) -> Result<TestResult> {
+    let config = load_config()?;
+    let profile_value = config
+        .profiles
+        .get(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    let start = std::time::Instant::now();
+
+    // Build test request based on API type
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| AppError::Message(format!("HTTP client error: {}", e)))?;
+
+    let test_body = match profile.api.as_str() {
+        "openai-completions" => serde_json::json!({
+            "model": profile.models.first().map(|m| &m.id).unwrap_or(&"gpt-3.5-turbo".to_string()),
+            "messages": [{"role": "user", "content": "test"}],
+            "max_tokens": 5
+        }),
+        "anthropic-messages" => serde_json::json!({
+            "model": profile.models.first().map(|m| &m.id).unwrap_or(&"claude-3-haiku-20240307".to_string()),
+            "messages": [{"role": "user", "content": "test"}],
+            "max_tokens": 5
+        }),
+        _ => {
+            return Ok(TestResult {
+                success: false,
+                message: format!("Unsupported API type: {}", profile.api),
+                response_time_ms: None,
+            });
+        }
+    };
+
+    let url = format!("{}/chat/completions", profile.base_url.trim_end_matches('/'));
+    let mut req = client.post(&url).json(&test_body);
+
+    // Add authorization header
+    if profile.api == "anthropic-messages" {
+        req = req.header("x-api-key", &profile.api_key)
+            .header("anthropic-version", "2023-06-01");
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", profile.api_key));
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            let status = resp.status();
+
+            if status.is_success() {
+                Ok(TestResult {
+                    success: true,
+                    message: format!("✓ Connected successfully (HTTP {})", status.as_u16()),
+                    response_time_ms: Some(elapsed),
+                })
+            } else {
+                let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".into());
+                Ok(TestResult {
+                    success: false,
+                    message: format!("✗ HTTP {} - {}", status.as_u16(), error_text.chars().take(100).collect::<String>()),
+                    response_time_ms: Some(elapsed),
+                })
+            }
+        }
+        Err(e) => {
+            let elapsed = start.elapsed().as_millis() as u64;
+            Ok(TestResult {
+                success: false,
+                message: format!("✗ Connection failed: {}", e),
+                response_time_ms: Some(elapsed),
+            })
+        }
+    }
+}

@@ -219,6 +219,158 @@ pub fn backup_config(label: &str) -> Result<Option<PathBuf>> {
     Ok(Some(dest))
 }
 
+pub fn restore_config(backup_path: &str) -> Result<PathBuf> {
+    let backup = PathBuf::from(backup_path);
+    if !backup.exists() {
+        return Err(AppError::Message(format!("Backup file not found: {}", backup_path)));
+    }
+
+    // Validate backup is valid JSON
+    let content = std::fs::read_to_string(&backup)
+        .map_err(|e| AppError::io(&backup, e))?;
+    let _: PiSwitchConfig = serde_json::from_str(&content)
+        .map_err(|e| AppError::Message(format!("Invalid backup file: {}", e)))?;
+
+    // Create backup of current config before restoring
+    let current_backup = backup_config("pre-restore")?;
+
+    // Restore from backup
+    let config_path = config_path();
+    std::fs::copy(&backup, &config_path)
+        .map_err(|e| AppError::io(&config_path, e))?;
+
+    Ok(current_backup.unwrap_or(config_path))
+}
+
 pub fn provider_id_for(config: &PiSwitchConfig, name: &str) -> String {
     format!("{}-{}", config.settings.provider_prefix, name)
+}
+
+// ─── Validation ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationIssue {
+    pub level: String,
+    pub path: String,
+    pub message: String,
+}
+
+pub fn validate_config() -> Result<Vec<ValidationIssue>> {
+    let config = load_config()?;
+    let mut issues = Vec::new();
+
+    // Validate each profile
+    for (name, value) in &config.profiles {
+        let profile: ProviderProfile = match serde_json::from_value(value.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                issues.push(ValidationIssue {
+                    level: "error".into(),
+                    path: format!("profiles.{}", name),
+                    message: format!("Invalid structure: {}", e),
+                });
+                continue;
+            }
+        };
+
+        // Check API field
+        if profile.api.is_empty() {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                path: format!("profiles.{}.api", name),
+                message: "API field is empty".into(),
+            });
+        } else if !matches!(profile.api.as_str(), "openai-completions" | "anthropic-messages") {
+            issues.push(ValidationIssue {
+                level: "warning".into(),
+                path: format!("profiles.{}.api", name),
+                message: format!("Unknown API type: {}", profile.api),
+            });
+        }
+
+        // Check base_url format
+        if profile.base_url.is_empty() {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                path: format!("profiles.{}.baseUrl", name),
+                message: "Base URL is empty".into(),
+            });
+        } else if !profile.base_url.starts_with("http://") && !profile.base_url.starts_with("https://") {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                path: format!("profiles.{}.baseUrl", name),
+                message: format!("Invalid URL format: {}", profile.base_url),
+            });
+        }
+
+        // Check API key
+        if profile.api_key.is_empty() {
+            issues.push(ValidationIssue {
+                level: "warning".into(),
+                path: format!("profiles.{}.apiKey", name),
+                message: "API key is empty".into(),
+            });
+        }
+
+        // Check models
+        if profile.models.is_empty() {
+            issues.push(ValidationIssue {
+                level: "warning".into(),
+                path: format!("profiles.{}.models", name),
+                message: "No models defined".into(),
+            });
+        } else {
+            for (i, model) in profile.models.iter().enumerate() {
+                if model.id.is_empty() {
+                    issues.push(ValidationIssue {
+                        level: "error".into(),
+                        path: format!("profiles.{}.models[{}].id", name, i),
+                        message: "Model ID is empty".into(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Check current setting
+    if let Some(ref current) = config.current {
+        if !config.profiles.contains_key(current) {
+            issues.push(ValidationIssue {
+                level: "error".into(),
+                path: "current".into(),
+                message: format!("Current profile '{}' does not exist", current),
+            });
+        }
+    }
+
+    // Check proxy settings
+    if config.settings.proxy.port == 0 {
+        issues.push(ValidationIssue {
+            level: "error".into(),
+            path: "settings.proxy.port".into(),
+            message: "Proxy port cannot be 0".into(),
+        });
+    }
+
+    if let Some(ref target) = config.settings.proxy.target {
+        if !config.profiles.contains_key(target) {
+            issues.push(ValidationIssue {
+                level: "warning".into(),
+                path: "settings.proxy.target".into(),
+                message: format!("Target provider '{}' does not exist", target),
+            });
+        }
+    }
+
+    for (i, name) in config.settings.proxy.failover.iter().enumerate() {
+        if !config.profiles.contains_key(name) {
+            issues.push(ValidationIssue {
+                level: "warning".into(),
+                path: format!("settings.proxy.failover[{}]", i),
+                message: format!("Failover provider '{}' does not exist", name),
+            });
+        }
+    }
+
+    Ok(issues)
 }

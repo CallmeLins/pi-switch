@@ -4,6 +4,7 @@ import {
   listPresets, showPreset, listBackups, doctor,
   daemonStartNative, daemonStopNative, daemonStatusNative,
   getUsageStats, exportConfig, importConfig,
+  validateConfig, testProvider, restoreBackup, duplicateProvider,
   runNativeTui,
 } from "../index.js";
 
@@ -17,14 +18,17 @@ Usage:
   pi-switch provider edit <name>
   pi-switch provider delete <name>
   pi-switch provider duplicate <name> [--as <new-name>]
+  pi-switch provider test <name>
   pi-switch use <name> [--mode merge|exclusive]
   pi-switch presets [list]
   pi-switch presets show <id>
   pi-switch config show
   pi-switch config path
+  pi-switch config validate
   pi-switch config export <passphrase>
   pi-switch config import <path> <passphrase>
   pi-switch config backups
+  pi-switch config restore <backup-path>
   pi-switch proxy start  [--host <ip>] [--port <port>] [--profile <name>]
   pi-switch proxy stop
   pi-switch proxy status
@@ -162,19 +166,21 @@ async function main() {
         if (!name) fail("provider name required");
         const args = parseArgs(rest.slice(2));
         const dst = args.as || args._[0] || `${name}-copy`;
-        // Reuse addProvider with the source's config
-        const data = JSON.parse(showProfile(name));
-        const p = data.profile;
-        const result = addProvider({
-          name: dst,
-          api: p.api,
-          baseUrl: p.baseUrl,
-          apiKey: p.apiKey,
-          models: (p.models || []).map(m => m.id),
-        });
-        console.log(`Duplicated '${name}' as '${dst}'`);
-        if (result.backup) console.log(`Backup: ${result.backup}`);
+        const result = duplicateProvider(name, dst);
+        console.log(result);
         return;
+      }
+
+      if (sub === "test") {
+        const name = rest[1];
+        if (!name) fail("provider name required");
+        console.log(`Testing provider '${name}'...`);
+        const result = await testProvider(name);
+        console.log(result.message);
+        if (result.responseTimeMs !== undefined && result.responseTimeMs !== null) {
+          console.log(`Response time: ${result.responseTimeMs}ms`);
+        }
+        process.exit(result.success ? 0 : 1);
       }
 
       fail(`unknown provider subcommand: '${sub}'`);
@@ -247,6 +253,27 @@ async function main() {
         const result = listBackups();
         if (result.length === 0) console.log("No backups found.");
         else for (const file of result) console.log(file);
+        return;
+      }
+      if (sub === "validate") {
+        const issues = validateConfig();
+        if (issues.length === 0) {
+          console.log("✓ Configuration is valid");
+          return;
+        }
+        console.log(`Found ${issues.length} issue(s):\n`);
+        for (const issue of issues) {
+          const prefix = issue.level === "error" ? "✗" : "⚠";
+          console.log(`${prefix} [${issue.level}] ${issue.path}`);
+          console.log(`  ${issue.message}\n`);
+        }
+        process.exit(issues.some(i => i.level === "error") ? 1 : 0);
+      }
+      if (sub === "restore") {
+        const backupPath = rest[1];
+        if (!backupPath) fail("backup path required");
+        const result = restoreBackup(backupPath);
+        console.log(result);
         return;
       }
       fail(`unknown config subcommand: '${sub}'`);

@@ -373,3 +373,63 @@ pub fn import_config(file_path: String, passphrase: String) -> napi::Result<Stri
 pub fn export_dir() -> String {
     sync::export_dir()
 }
+
+// ─── Validation ───────────────────────────────────────────
+
+#[napi(object)]
+pub struct ValidationIssue {
+    pub level: String,
+    pub path: String,
+    pub message: String,
+}
+
+#[napi]
+pub fn validate_config() -> napi::Result<Vec<ValidationIssue>> {
+    let issues = config::validate_config()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(issues.into_iter().map(|i| ValidationIssue {
+        level: i.level,
+        path: i.path,
+        message: i.message,
+    }).collect())
+}
+
+#[napi(object)]
+pub struct TestResult {
+    pub success: bool,
+    pub message: String,
+    pub response_time_ms: Option<u32>,
+}
+
+#[napi]
+pub async fn test_provider(name: String) -> napi::Result<TestResult> {
+    let result = ops::test_provider(&name)
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(TestResult {
+        success: result.success,
+        message: result.message,
+        response_time_ms: result.response_time_ms.map(|ms| ms as u32),
+    })
+}
+
+#[napi]
+pub fn restore_backup(backup_path: String) -> napi::Result<String> {
+    let current_backup = config::restore_config(&backup_path)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok(format!("Config restored from backup. Current config backed up to: {}", current_backup.display()))
+}
+
+#[napi]
+pub fn duplicate_provider(src_name: String, dst_name: String) -> napi::Result<String> {
+    let backup = ops::duplicate_profile(&src_name, &dst_name)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    if let Some(path) = backup {
+        Ok(format!("Provider '{}' duplicated as '{}'. Backup: {}", src_name, dst_name, path.display()))
+    } else {
+        Ok(format!("Provider '{}' duplicated as '{}'", src_name, dst_name))
+    }
+}

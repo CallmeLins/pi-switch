@@ -23,6 +23,10 @@ export const {
   importConfig,
   exportDir,
   runNativeTui,
+  validateConfig,
+  testProvider,
+  restoreBackup,
+  duplicateProvider,
 } = native;
 
 export default native;
