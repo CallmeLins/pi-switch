@@ -11,6 +11,9 @@ pub struct ProfileRow {
     pub provider_id: String,
     pub proxy: bool,
     pub exposed_count: usize,
+    pub in_failover_chain: bool,
+    pub failover_priority: Option<usize>, // 0=target, 1=p1, 2=p2, ...
+    pub circuit_breaker_open: bool,
 }
 
 pub struct UiData {
@@ -52,7 +55,19 @@ fn list_backup_files() -> Vec<String> {
     entries
 }
 
-fn profile_rows(config: &PiSwitchConfig) -> Vec<ProfileRow> {
+fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> {
+    // Build failover priority map
+    let target = config.settings.proxy.target.as_ref();
+    let failover_chain = &config.settings.proxy.failover;
+
+    let mut priority_map = std::collections::HashMap::new();
+    if let Some(t) = target {
+        priority_map.insert(t.clone(), 0);
+    }
+    for (idx, name) in failover_chain.iter().enumerate() {
+        priority_map.insert(name.clone(), idx + 1);
+    }
+
     config
         .profiles
         .iter()
@@ -62,6 +77,16 @@ fn profile_rows(config: &PiSwitchConfig) -> Vec<ProfileRow> {
                 .get("proxy")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            let priority = priority_map.get(name).copied();
+            let in_failover_chain = priority.is_some();
+
+            // Check circuit breaker status
+            let cb_status = stats.circuit_breaker.get(name);
+            let circuit_breaker_open = cb_status
+                .map(|s| s.state == "open" || s.state == "half_open")
+                .unwrap_or(false);
+
             ProfileRow {
                 name: name.clone(),
                 api: profile
@@ -91,6 +116,9 @@ fn profile_rows(config: &PiSwitchConfig) -> Vec<ProfileRow> {
                     .and_then(|v| v.as_array())
                     .map(|a| a.len())
                     .unwrap_or(0),
+                in_failover_chain,
+                failover_priority: priority,
+                circuit_breaker_open,
             }
         })
         .collect()
@@ -99,13 +127,14 @@ fn profile_rows(config: &PiSwitchConfig) -> Vec<ProfileRow> {
 impl UiData {
     pub fn load() -> Self {
         let config = load_config().unwrap_or_default();
-        let profiles = profile_rows(&config);
+        let stats = get_stats();
+        let profiles = profile_rows(&config, &stats);
         Self {
             config,
             profiles,
             presets: all_presets(),
             daemon: daemon_status().unwrap_or_else(offline_daemon),
-            stats: get_stats(),
+            stats,
             backups: list_backup_files(),
         }
     }

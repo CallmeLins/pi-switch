@@ -219,13 +219,62 @@ async function main() {
         const data = JSON.parse(listProfiles());
         const names = Object.keys(data.profiles);
         if (names.length === 0) { console.log("No profiles. Add one with: pi-switch provider add <name> ..."); return; }
+
+        // Get proxy configuration
+        const target = data.settings?.proxy?.target;
+        const failoverChain = data.settings?.proxy?.failover || [];
+
+        // Build failover priority map (target is p0, failover are p1, p2, ...)
+        const priorityMap = new Map();
+        if (target) priorityMap.set(target, 0);
+        failoverChain.forEach((name, idx) => priorityMap.set(name, idx + 1));
+
+        // Get circuit breaker status
+        const stats = JSON.parse(getUsageStats());
+        const circuitBreakerStatus = stats.circuitBreaker || {};
+
+        // ANSI colors
+        const RED = '\x1b[31m';
+        const GREEN = '\x1b[32m';
+        const DIM = '\x1b[2m';
+        const RESET = '\x1b[0m';
+
         for (const name of names) {
           const p = data.profiles[name];
-          const mark = data.current === name ? "*" : " ";
           const models = (p.models || []).map(m => m.id).join(", ");
-          console.log(`${mark} ${name}`);
-          console.log(`    api: ${p.api}    baseUrl: ${p.baseUrl}`);
-          if (models) console.log(`    models: ${models}`);
+
+          // Check if in failover chain
+          const priority = priorityMap.get(name);
+          const inChain = priority !== undefined;
+          const mark = inChain ? "*" : " ";
+
+          // Check circuit breaker status
+          const cbStatus = circuitBreakerStatus[name];
+          const isOpen = cbStatus?.state === "open" || cbStatus?.state === "half_open";
+
+          // Build priority label
+          let priorityLabel = "";
+          if (inChain) {
+            priorityLabel = priority === 0 ? " [target]" : ` [p${priority}]`;
+          }
+
+          // Color based on circuit breaker state
+          let color = "";
+          if (inChain) {
+            color = isOpen ? RED : GREEN;
+          }
+
+          // First line: name + priority
+          console.log(`${color}${mark} ${name}${priorityLabel}${RESET}`);
+
+          // Second line: api + baseUrl (dimmed if in chain)
+          const lineColor = inChain ? (isOpen ? RED + DIM : GREEN + DIM) : "";
+          console.log(`${lineColor}    api: ${p.api}    baseUrl: ${p.baseUrl}${lineColor ? RESET : ""}`);
+
+          // Third line: models (if any)
+          if (models) {
+            console.log(`${lineColor}    models: ${models}${lineColor ? RESET : ""}`);
+          }
         }
         return;
       }

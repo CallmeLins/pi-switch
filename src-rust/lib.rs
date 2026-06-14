@@ -196,6 +196,7 @@ pub fn list_profiles() -> napi::Result<String> {
     serde_json::to_string_pretty(&serde_json::json!({
         "current": config.current,
         "profiles": config.profiles,
+        "settings": config.settings,
     }))
     .map_err(|e| napi::Error::from_reason(e.to_string()))
 }

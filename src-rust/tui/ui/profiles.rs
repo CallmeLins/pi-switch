@@ -94,19 +94,44 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
     let rows = visible.iter().map(|row| {
-        let marker = if row.exposed_count > 0 {
-            format!("[{}]", row.exposed_count)
+        // Marker: * for in failover chain, space otherwise
+        let marker = if row.in_failover_chain {
+            " * "
         } else {
-            "   ".to_string()
-        };
-        let marker_style = if row.exposed_count > 0 {
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
+            "   "
         };
 
-        // Name cell: name + optional proxy badge + provider ID sub-line
+        // Row color based on circuit breaker status
+        let row_color = if row.in_failover_chain {
+            if row.circuit_breaker_open {
+                Some(theme.err)
+            } else {
+                Some(theme.ok)
+            }
+        } else {
+            None
+        };
+
+        // Priority label
+        let priority_label = if let Some(priority) = row.failover_priority {
+            if priority == 0 {
+                " [target]".to_string()
+            } else {
+                format!(" [p{}]", priority)
+            }
+        } else {
+            String::new()
+        };
+
+        // Name cell: name + priority label + optional proxy badge
         let mut name_spans = vec![Span::raw(row.name.clone())];
+
+        // Add priority label
+        if !priority_label.is_empty() {
+            name_spans.push(Span::raw(priority_label));
+        }
+
+        // Add proxy badge
         if row.proxy {
             name_spans.push(Span::raw(" "));
             name_spans.push(Span::styled(
@@ -118,14 +143,21 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 },
             ));
         }
+
+        // Add exposed models count as sub-line
+        if row.exposed_count > 0 {
+            name_spans.push(Span::raw("\n"));
+            name_spans.push(Span::styled(
+                format!("  {} exposed", row.exposed_count),
+                Style::default().fg(theme.dim),
+            ));
+        }
+
         let name_cell = Line::from(name_spans);
 
         // API URL cell: base_url + provider ID sub-line
         let api_cell = vec![
-            Span::styled(
-                row.base_url.clone(),
-                Style::default().fg(theme.dim),
-            ),
+            Span::raw(row.base_url.clone()),
             Span::raw("\n"),
             Span::styled(
                 format!("  {}", row.provider_id),
@@ -133,11 +165,18 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ),
         ];
 
-        Row::new(vec![
-            Cell::from(Span::styled(format!(" {marker}"), marker_style)),
+        let mut table_row = Row::new(vec![
+            Cell::from(Span::raw(format!(" {marker}"))),
             Cell::from(name_cell),
             Cell::from(Line::from(api_cell)),
-        ])
+        ]);
+
+        // Apply row color if in failover chain
+        if let Some(color) = row_color {
+            table_row = table_row.style(Style::default().fg(color));
+        }
+
+        table_row
     });
 
     let table = Table::new(

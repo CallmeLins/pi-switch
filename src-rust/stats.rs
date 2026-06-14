@@ -52,12 +52,37 @@ pub struct UsageStats {
     pub by_provider: HashMap<String, ProviderStats>,
     #[serde(rename = "byModel")]
     pub by_model: HashMap<String, ModelStats>,
+    #[serde(rename = "circuitBreaker")]
+    pub circuit_breaker: HashMap<String, CircuitBreakerStatus>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ModelStats {
     pub total: u64,
     pub ok: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CircuitBreakerEntry {
+    pub failures: u64,
+    #[serde(rename = "openedAt")]
+    pub opened_at: Option<u64>,
+    #[serde(rename = "lastSuccessAt")]
+    pub last_success_at: Option<u64>,
+    #[serde(rename = "lastFailureAt")]
+    pub last_failure_at: Option<u64>,
+    #[serde(rename = "lastError")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CircuitBreakerStatus {
+    pub state: String, // "open", "closed", "half_open"
+    pub failures: u64,
+    #[serde(rename = "openedAt")]
+    pub opened_at: Option<u64>,
+    #[serde(rename = "lastError")]
+    pub last_error: Option<String>,
 }
 
 fn parse_logs() -> Vec<RequestLogEntry> {
@@ -75,8 +100,61 @@ fn parse_logs() -> Vec<RequestLogEntry> {
         .collect()
 }
 
+fn read_circuit_state() -> HashMap<String, CircuitBreakerEntry> {
+    let path = config_dir().join("circuit.json");
+    if !path.exists() { return HashMap::new(); }
+
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let state: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+
+    state.get("providers")
+        .and_then(|p| p.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    serde_json::from_value(v.clone()).ok().map(|entry| (k.clone(), entry))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn circuit_breaker_status(entry: &CircuitBreakerEntry, cooldown_ms: u64) -> CircuitBreakerStatus {
+    let state = if let Some(opened_at) = entry.opened_at {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        if now - opened_at < cooldown_ms {
+            "open"
+        } else {
+            "half_open"
+        }
+    } else {
+        "closed"
+    };
+
+    CircuitBreakerStatus {
+        state: state.to_string(),
+        failures: entry.failures,
+        opened_at: entry.opened_at,
+        last_error: entry.last_error.clone(),
+    }
+}
+
 pub fn get_stats() -> UsageStats {
     let entries = parse_logs();
+
+    // Read circuit breaker state
+    let circuit_entries = read_circuit_state();
+    let cooldown_ms = 60_000; // Default 60 seconds
+    let circuit_breaker: HashMap<String, CircuitBreakerStatus> = circuit_entries
+        .iter()
+        .map(|(name, entry)| {
+            (name.clone(), circuit_breaker_status(entry, cooldown_ms))
+        })
+        .collect();
 
     let mut stats = UsageStats {
         total_requests: 0,
@@ -88,6 +166,7 @@ pub fn get_stats() -> UsageStats {
         avg_latency_ms: 0,
         by_provider: HashMap::new(),
         by_model: HashMap::new(),
+        circuit_breaker,
     };
 
     let mut total_ms: u64 = 0;
