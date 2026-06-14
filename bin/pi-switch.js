@@ -8,11 +8,15 @@ import {
   exportLogsJson, exportLogsCsv, fetchModels,
   runProxyServer,
   runNativeTui,
+  updateExposedModels,
+  updateProviderModels,
+  setProxyTarget,
+  setProxyFailover,
 } from "../index.js";
 import * as readline from "readline";
 
 function usage() {
-  console.log(`pi-switch v0.2.0 — lightweight profile switcher for pi agent
+  console.log(`pi-switch v0.3.4 — lightweight profile switcher for pi agent
 
 Usage:
   pi-switch provider list
@@ -23,7 +27,8 @@ Usage:
   pi-switch provider duplicate <name> [--as <new-name>]
   pi-switch provider test <name>
   pi-switch provider fetch-models <name>
-  pi-switch use <name> [--mode merge|exclusive]
+  pi-switch provider models <name> <model-id>...       # Update provider's model list
+  pi-switch provider expose <name> <model-id>...       # Expose models to pi agent
   pi-switch presets [list]
   pi-switch presets show <id>
   pi-switch config show
@@ -33,13 +38,22 @@ Usage:
   pi-switch config import <path> <passphrase>
   pi-switch config backups
   pi-switch config restore <backup-path>
-  pi-switch proxy start  [--host <ip>] [--port <port>] [--profile <name>] [--daemon]
+  pi-switch proxy start  [--host <ip>] [--port <port>] [--daemon]
   pi-switch proxy stop
   pi-switch proxy status
+  pi-switch proxy target <profile-name>                # Set proxy target
+  pi-switch proxy failover <profile1,profile2,...>     # Set failover chain
   pi-switch stats
   pi-switch logs export [--format json|csv] [--output <file>]
   pi-switch doctor
   pi-switch tui
+
+Transparent Proxy Workflow:
+  1. Add profiles:          pi-switch provider add <name> ...
+  2. Set target:            pi-switch proxy target <primary-profile>
+  3. Set failover:          pi-switch proxy failover <backup1,backup2>
+  4. Start proxy:           pi-switch proxy start --daemon
+  5. Use in pi:             pi-switch provider add proxy --preset proxy
 
 Aliases: remove → provider delete, rm → provider delete, interactive/ui → tui
 `);
@@ -290,27 +304,66 @@ async function main() {
           for (const model of models) {
             console.log(`  ${model}`);
           }
-          console.log(`\nTo use these models, edit the provider and add them to the models field.`);
+          console.log(`\nTo update provider models: pi-switch provider models ${name} <model-ids...>`);
+          console.log(`To expose to pi agent: pi-switch provider expose ${name} <model-ids...>`);
         } catch (err) {
           fail(err.message);
         }
         return;
       }
 
+      if (sub === "models") {
+        const name = rest[1];
+        if (!name) fail("provider name required");
+        const modelIds = rest.slice(2);
+        if (modelIds.length === 0) fail("at least one model ID required");
+
+        // Convert model IDs to ModelEntryInput format
+        const models = modelIds.map(id => ({
+          id,
+          name: undefined,
+          input: ["text"],
+          contextWindow: 1000000,
+          maxTokens: 128000,
+        }));
+
+        const result = updateProviderModels(name, models);
+        console.log(result);
+        console.log(`\nUpdated ${modelIds.length} model(s) for provider '${name}'`);
+        console.log(`To expose these to pi agent: pi-switch provider expose ${name} ${modelIds.join(' ')}`);
+        return;
+      }
+
+      if (sub === "expose") {
+        const name = rest[1];
+        if (!name) fail("provider name required");
+        const modelIds = rest.slice(2);
+        if (modelIds.length === 0) fail("at least one model ID required");
+
+        const result = updateExposedModels(name, modelIds);
+        console.log(result);
+        console.log(`\nExposed ${modelIds.length} model(s) to pi agent`);
+        console.log(`Restart pi to see changes in /model`);
+        return;
+      }
+
       fail(`unknown provider subcommand: '${sub}'`);
     }
 
-    // ─── Use (shortcut) ──────────────────────────────
+    // ─── Use (deprecated) ────────────────────────────
 
     if (effectiveCmd === "use") {
-      const args = parseArgs(rest);
-      const name = args._[0];
-      if (!name) fail("profile name required");
-      const result = useProfile(name, args.mode || undefined);
-      console.log(`Activated '${result.name}' as provider '${result.providerId}'`);
-      if (result.modelsBackup) console.log(`Backup: ${result.modelsBackup}`);
-      console.log("Open /model in pi to refresh model list if pi is already running.");
-      return;
+      console.error("⚠️  'pi-switch use' is deprecated with transparent proxy routing.");
+      console.error("");
+      console.error("New workflow:");
+      console.error("  1. Set proxy target:    pi-switch proxy target <profile-name>");
+      console.error("  2. Set failover chain:  pi-switch proxy failover <profile1,profile2,...>");
+      console.error("  3. Start proxy:         pi-switch proxy start --daemon");
+      console.error("  4. Install proxy in pi: pi-switch provider add proxy --preset proxy");
+      console.error("");
+      console.error("The proxy will automatically route to target profile with failover.");
+      console.error("See: pi-switch tui → Settings → Proxy configuration");
+      process.exit(1);
     }
 
     // ─── Presets ─────────────────────────────────────
@@ -403,7 +456,6 @@ async function main() {
         for (let i = 1; i < rest.length; i++) {
           if (rest[i] === "--host") args.host = rest[++i];
           else if (rest[i] === "--port") args.port = parseInt(rest[++i], 10);
-          else if (rest[i] === "--profile") args.profile = rest[++i];
           else if (rest[i] === "--daemon") args.daemon = true;
         }
 
@@ -416,18 +468,10 @@ async function main() {
           const result = JSON.parse(daemonStartNative(host, port));
           console.log(result.message);
           if (result.pid) console.log(`PID: ${result.pid}`);
-          if (args.profile) {
-            const useResult = useProfile(args.profile);
-            console.log(`Using profile '${useResult.name}' as provider '${useResult.providerId}'`);
-          }
         } else {
           // Foreground mode: run server directly
           console.log(`Starting proxy server on http://${host}:${port} (foreground mode)`);
           console.log(`Press Ctrl+C to stop`);
-          if (args.profile) {
-            const useResult = useProfile(args.profile);
-            console.log(`Using profile '${useResult.name}' as provider '${useResult.providerId}'`);
-          }
           await runProxyServer(host, port);
         }
         return;
@@ -452,7 +496,24 @@ async function main() {
         return;
       }
 
-      fail("usage: pi-switch proxy [start|stop|status]");
+      if (sub === "target") {
+        const target = rest[1];
+        if (!target) fail("target profile name required");
+        const result = setProxyTarget(target);
+        console.log(result);
+        return;
+      }
+
+      if (sub === "failover") {
+        const profiles = rest[1];
+        if (!profiles) fail("failover profiles required (comma-separated)");
+        const profileList = profiles.split(',').map(s => s.trim()).filter(Boolean);
+        const result = setProxyFailover(profileList);
+        console.log(result);
+        return;
+      }
+
+      fail("usage: pi-switch proxy [start|stop|status|target|failover]");
     }
 
     // ─── Stats ───────────────────────────────────────

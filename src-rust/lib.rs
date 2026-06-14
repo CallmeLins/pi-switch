@@ -553,3 +553,82 @@ pub fn update_provider_models(name: String, models: Vec<ModelEntryInput>) -> nap
         Ok("Provider models updated".to_string())
     }
 }
+
+// ─── Proxy Configuration ──────────────────────────────────────────────────────
+
+#[napi]
+pub fn set_proxy_target(target: String) -> napi::Result<String> {
+    let mut config = config::load_config()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    // Validate target profile exists
+    if !config.profiles.contains_key(&target) {
+        return Err(napi::Error::from_reason(format!("Profile '{}' does not exist", target)));
+    }
+
+    // Validate target is not a proxy profile
+    if let Some(profile_value) = config.profiles.get(&target) {
+        if let Ok(profile) = serde_json::from_value::<config::ProviderProfile>(profile_value.clone()) {
+            if profile.proxy {
+                return Err(napi::Error::from_reason(format!("Cannot set proxy profile '{}' as target", target)));
+            }
+        }
+    }
+
+    let backup = config::backup_config("config")
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    config.settings.proxy.target = Some(target.clone());
+    config::save_config(&config)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    // Sync all profiles to apply new proxy routing
+    ops::sync_all_profiles_to_pi()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let mut msg = format!("Proxy target set to '{}'", target);
+    if let Some(path) = backup {
+        msg.push_str(&format!("\nBackup: {}", path.display()));
+    }
+    Ok(msg)
+}
+
+#[napi]
+pub fn set_proxy_failover(failover_profiles: Vec<String>) -> napi::Result<String> {
+    let mut config = config::load_config()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    // Validate all profiles exist and are not proxy profiles
+    for name in &failover_profiles {
+        if !config.profiles.contains_key(name) {
+            return Err(napi::Error::from_reason(format!("Profile '{}' does not exist", name)));
+        }
+
+        if let Some(profile_value) = config.profiles.get(name) {
+            if let Ok(profile) = serde_json::from_value::<config::ProviderProfile>(profile_value.clone()) {
+                if profile.proxy {
+                    return Err(napi::Error::from_reason(format!("Cannot use proxy profile '{}' in failover chain", name)));
+                }
+            }
+        }
+    }
+
+    let backup = config::backup_config("config")
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    config.settings.proxy.failover = failover_profiles.clone();
+    config::save_config(&config)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let mut msg = if failover_profiles.is_empty() {
+        "Failover chain cleared".to_string()
+    } else {
+        format!("Failover chain set: {}", failover_profiles.join(" → "))
+    };
+
+    if let Some(path) = backup {
+        msg.push_str(&format!("\nBackup: {}", path.display()));
+    }
+    Ok(msg)
+}
+

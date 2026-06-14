@@ -41,11 +41,21 @@ Use the full-screen interface to manage providers, browse presets, inspect proxy
 
 **Command-Line Mode**
 ```bash
+# Provider Management
 pi-switch provider list              # List all provider profiles
 pi-switch provider add <name> [--preset <id>] [--api-key <key>]  # Add a profile
-pi-switch use <name>                 # Switch pi to this profile
 pi-switch provider show <name>       # Show profile details
 pi-switch provider delete <name>     # Delete a profile
+pi-switch provider models <name> <model-ids...>  # Update provider's model list
+pi-switch provider expose <name> <model-ids...>  # Expose models to pi agent
+
+# Transparent Proxy
+pi-switch proxy target <name>        # Set proxy target profile
+pi-switch proxy failover <p1,p2>     # Set failover chain
+pi-switch proxy start --daemon       # Start proxy daemon
+pi-switch proxy status               # Check proxy status
+
+# Other
 pi-switch presets list               # List built-in provider presets
 pi-switch config show                # Display current config
 pi-switch config backups             # List backup files
@@ -108,29 +118,29 @@ Profiles → 'a' → fill form → models: "deepseek-v4-pro, deepseek-chat" → 
 
 **Result:** Provider created with `models` list configured.
 
-#### 2️⃣ Fetch & Select Models (Optional)
+#### 2️⃣ Update Provider Models (Optional)
 
-Automatically fetch all available models from the provider:
+Update which models the provider supports:
 
 ```bash
-# TUI only (coming soon)
-Profiles → select provider → 'f' (fetch models)
-```
+# CLI
+pi-switch provider models relay-a deepseek-v4-pro deepseek-chat
 
-The system will:
-- Call the provider's `/models` API
-- Show a checklist with existing models pre-selected
-- Let you add/remove models
-- Save updated `models` list
+# Or fetch from provider's API
+pi-switch provider fetch-models relay-a
+```
 
 **Purpose:** `models` defines which models this provider **supports** (used for failover routing).
 
-#### 3️⃣ Expose Models to Pi Config
+#### 3️⃣ Expose Models to Pi Agent
 
 Select which models to expose in `~/.pi/agent/models.json`:
 
 ```bash
-# TUI only (coming soon)
+# CLI
+pi-switch provider expose relay-a deepseek-v4-pro
+
+# TUI
 Profiles → select provider → 'x' (expose models)
 ```
 
@@ -147,19 +157,44 @@ Available models:
 
 **Purpose:** `exposedModels` controls which models **appear in pi agent** (prevents config bloat).
 
-#### 4️⃣ Configure Failover Priority
+#### 4️⃣ Configure Transparent Proxy
 
-Set up failover chain in Settings:
+Set up proxy target and failover chain:
 
 ```bash
-# TUI
+# Set the primary target
+pi-switch proxy target deepseek-official
+
+# Set failover chain
+pi-switch proxy failover relay-a,relay-b
+
+# Start proxy daemon
+pi-switch proxy start --daemon
+
+# Or configure in TUI
 Settings → Target: deepseek-official
 Settings → Failover: relay-a, relay-b
 ```
 
-**Result:** Request priority order: `deepseek-official` → `relay-a` → `relay-b`
+**Result:** The `deepseek-official` profile's baseUrl automatically points to the proxy server. When pi uses this profile, requests are transparently routed through the proxy with failover to `relay-a` → `relay-b`.
 
-#### 5️⃣ Intelligent Model-Based Failover
+#### 5️⃣ Install Proxy Provider in Pi
+
+Add the proxy provider to pi agent:
+
+```bash
+# CLI
+pi-switch provider add proxy --preset proxy
+
+# Or in TUI
+Profiles → 'a' → select "proxy" preset → Ctrl+S
+```
+
+Now when you select models from the proxy-routed profile in pi's `/model`, all requests go through the proxy with intelligent failover.
+
+---
+
+### How Intelligent Failover Works
 
 When a request comes in, the proxy intelligently routes based on model availability:
 
@@ -236,7 +271,7 @@ node bin/pi-switch.js tui
 
 Manage provider configurations for pi agent. Built-in presets: OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI.
 
-**Features:** add, edit, delete, duplicate, current marker, proxy badge, provider ID display, search/filter.
+**Features:** add, edit, delete, duplicate, model management, expose to pi agent, proxy badge, provider ID display, search/filter.
 
 ```bash
 pi-switch provider list              # List all provider profiles
@@ -244,7 +279,9 @@ pi-switch provider show <name>       # Show profile details
 pi-switch provider add <name> [--preset <preset>]
 pi-switch provider delete <name>     # Delete profile
 pi-switch provider duplicate <name> [--as <new-name>]
-pi-switch use <name> [--mode merge|exclusive]  # Switch pi to profile
+pi-switch provider models <name> <model-ids...>  # Update provider's model list
+pi-switch provider expose <name> <model-ids...>  # Expose models to pi agent
+pi-switch provider fetch-models <name>           # Fetch available models from API
 ```
 
 ### 💡 Built-in Presets
@@ -272,13 +309,17 @@ pi-switch config import <path> <passphrase>  # Encrypted import
 
 ### 🌉 Local Proxy
 
-OpenAI-compatible proxy with Anthropic auto-conversion, failover chain, and circuit breaker.
+OpenAI-compatible proxy with transparent routing, Anthropic auto-conversion, intelligent failover, and circuit breaker.
 
 ```bash
-pi-switch proxy start  [--host <ip>] [--port <port>] [--profile <name>]
+pi-switch proxy target <name>        # Set proxy target profile
+pi-switch proxy failover <p1,p2,...> # Set failover chain
+pi-switch proxy start  [--host <ip>] [--port <port>] [--daemon]
 pi-switch proxy stop
 pi-switch proxy status
 ```
+
+**Transparent Routing:** When a profile is set as proxy target, its baseUrl automatically points to the proxy server. Pi requests are transparently routed through the proxy with intelligent failover.
 
 Endpoints:
 - `GET /health`

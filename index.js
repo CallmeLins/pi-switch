@@ -32,6 +32,10 @@ export const {
   fetchModels,
   runProxyServer,
   upsertProfileRaw,
+  updateExposedModels,
+  updateProviderModels,
+  setProxyTarget,
+  setProxyFailover,
 } = native;
 
 export default native;
