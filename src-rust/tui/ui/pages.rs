@@ -102,64 +102,6 @@ pub(super) fn render_home(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-pub(super) fn render_presets(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let block = content_block(app, i18n::page_presets());
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-    render_key_bar_center(
-        frame,
-        &app.theme,
-        chunks[0],
-        &[("↑↓", i18n::key_move()), ("Enter", i18n::key_use_template()), ("Esc", i18n::key_back())],
-    );
-
-    let items: Vec<ListItem<'_>> = app
-        .data
-        .presets
-        .iter()
-        .map(|preset| {
-            let models = preset
-                .models
-                .iter()
-                .map(|m| m.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            ListItem::new(vec![
-                Line::from(Span::styled(
-                    format!("● {}", preset.name),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::styled(
-                    format!("    {}", preset.description),
-                    Style::default().fg(app.theme.dim),
-                )),
-                Line::from(Span::styled(
-                    format!("    {} → {}", preset.api, preset.base_url),
-                    Style::default().fg(app.theme.dim),
-                )),
-                Line::from(Span::styled(
-                    format!("    models: {models}"),
-                    Style::default().fg(app.theme.cyan),
-                )),
-                Line::default(),
-            ])
-        })
-        .collect();
-
-    let list = List::new(items)
-        .highlight_style(selection_style(&app.theme))
-        .highlight_symbol(super::highlight_symbol(&app.theme));
-
-    let mut state = ListState::default();
-    state.select(Some(app.presets_idx));
-    frame.render_stateful_widget(list, chunks[1], &mut state);
-}
-
 pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let theme = &app.theme;
     let block = content_block(app, i18n::page_proxy());

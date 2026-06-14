@@ -5,7 +5,6 @@ pub enum Route {
     Home,
     Profiles,
     ProfileDetail(String),
-    Presets,
     Proxy,
     Stats,
     Backups,
@@ -17,7 +16,6 @@ pub enum Route {
 pub enum NavItem {
     Home,
     Profiles,
-    Presets,
     Proxy,
     Stats,
     Backups,
@@ -26,10 +24,9 @@ pub enum NavItem {
 }
 
 impl NavItem {
-    pub const ALL: [NavItem; 8] = [
+    pub const ALL: [NavItem; 7] = [
         NavItem::Home,
         NavItem::Profiles,
-        NavItem::Presets,
         NavItem::Proxy,
         NavItem::Stats,
         NavItem::Backups,
@@ -41,7 +38,6 @@ impl NavItem {
         match self {
             NavItem::Home => i18n::nav_home(),
             NavItem::Profiles => i18n::nav_profiles(),
-            NavItem::Presets => i18n::nav_presets(),
             NavItem::Proxy => i18n::nav_proxy(),
             NavItem::Stats => i18n::nav_stats(),
             NavItem::Backups => i18n::nav_backups(),
@@ -54,7 +50,6 @@ impl NavItem {
         match self {
             NavItem::Home => "⌂",
             NavItem::Profiles => "▤",
-            NavItem::Presets => "◇",
             NavItem::Proxy => "⇄",
             NavItem::Stats => "∑",
             NavItem::Backups => "⊙",
@@ -67,7 +62,6 @@ impl NavItem {
         match self {
             NavItem::Home => Some(Route::Home),
             NavItem::Profiles => Some(Route::Profiles),
-            NavItem::Presets => Some(Route::Presets),
             NavItem::Proxy => Some(Route::Proxy),
             NavItem::Stats => Some(Route::Stats),
             NavItem::Backups => Some(Route::Backups),

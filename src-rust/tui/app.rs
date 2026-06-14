@@ -33,6 +33,7 @@ pub struct Toast {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LoadingKind {
     DaemonStart,
     DaemonStop,
@@ -66,6 +67,7 @@ pub enum Overlay {
     None,
     Help,
     Confirm(ConfirmOverlay),
+    #[allow(dead_code)]
     Loading(LoadingKind),
 }
 
@@ -87,7 +89,6 @@ pub struct App {
     pub form: Option<ProviderFormState>,
     pub form_return: Route,
     pub profiles_idx: usize,
-    pub presets_idx: usize,
     pub proxy_idx: usize,
     pub backups_idx: usize,
     pub settings_lang_idx: usize,
@@ -118,7 +119,6 @@ impl App {
             form: None,
             form_return: Route::Profiles,
             profiles_idx: 0,
-            presets_idx: 0,
             proxy_idx: 0,
             backups_idx: 0,
             settings_lang_idx: if i18n::is_zh() { 1 } else { 0 },
@@ -163,7 +163,6 @@ impl App {
     fn clamp_indices(&mut self) {
         let visible = self.visible_profiles().len();
         self.profiles_idx = self.profiles_idx.min(visible.saturating_sub(1));
-        self.presets_idx = self.presets_idx.min(self.data.presets.len().saturating_sub(1));
         self.proxy_idx = self.proxy_idx.min(proxy_actions().len() - 1);
         self.backups_idx = self.backups_idx.min(self.data.backups.len().saturating_sub(1));
     }
@@ -412,7 +411,6 @@ impl App {
             Route::Home => self.on_home_key(key),
             Route::Profiles => self.on_profiles_key(key),
             Route::ProfileDetail(name) => self.on_profile_detail_key(key, &name),
-            Route::Presets => self.on_presets_key(key),
             Route::Proxy => self.on_proxy_key(key),
             Route::Stats => self.on_stats_key(key),
             Route::Backups => self.on_backups_key(key),
@@ -508,34 +506,6 @@ impl App {
             KeyCode::Char('e') => self.open_edit_form(name),
             KeyCode::Char(' ') | KeyCode::Char('s') => self.switch_profile(name),
             KeyCode::Char('d') => self.confirm_delete(name),
-            _ => {}
-        }
-    }
-
-    fn on_presets_key(&mut self, key: KeyEvent) {
-        if self.back_to_nav_on_esc(&key) {
-            return;
-        }
-        let len = self.data.presets.len();
-        match key.code {
-            KeyCode::Up => {
-                self.presets_idx = self.presets_idx.saturating_sub(1);
-            }
-            KeyCode::Down => {
-                if len > 0 {
-                    self.presets_idx = (self.presets_idx + 1).min(len - 1);
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(preset) = self.data.presets.get(self.presets_idx) {
-                    self.form = Some(ProviderFormState::from_preset(
-                        preset,
-                        self.presets_idx + 1,
-                    ));
-                    self.form_return = Route::Presets;
-                    self.route = Route::Form;
-                }
-            }
             _ => {}
         }
     }

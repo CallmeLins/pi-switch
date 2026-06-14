@@ -85,7 +85,6 @@ macro_rules! t {
 
 pub fn nav_home() -> &'static str { t!("Home", "首页") }
 pub fn nav_profiles() -> &'static str { t!("Profiles", "供应商") }
-pub fn nav_presets() -> &'static str { t!("Presets", "模板") }
 pub fn nav_proxy() -> &'static str { t!("Proxy", "代理") }
 pub fn nav_stats() -> &'static str { t!("Stats", "统计") }
 pub fn nav_backups() -> &'static str { t!("Backups", "备份") }
@@ -121,7 +120,6 @@ pub fn footer_act_quit() -> &'static str { t!("quit", "退出") }
 // ─── Pages ───────────────────────────────────────────────
 
 pub fn page_home() -> &'static str { t!(" Home ", " 首页 ") }
-pub fn page_presets() -> &'static str { t!(" Presets ", " 模板 ") }
 pub fn page_proxy() -> &'static str { t!(" Proxy ", " 代理 ") }
 pub fn page_stats() -> &'static str { t!(" Stats ", " 统计 ") }
 pub fn page_backups_count(n: usize) -> String {
@@ -146,7 +144,7 @@ pub fn home_running(pid: u32, host: &str, port: u16) -> String {
 }
 pub fn home_stopped() -> &'static str { t!("stopped", "已停止") }
 pub fn home_logo() -> &'static str {
-    r"        _                     _ __       __  
+    r"          _                     _ __       __  
     ____  (_)     ______      __(_) /______/ /_ 
    / __ \/ /_____/ ___/ | /| / / / __/ ___/ __ \
   / /_/ / /_____(__  )| |/ |/ / / /_/ /__/ / / /
@@ -265,7 +263,6 @@ pub fn key_refresh() -> &'static str { t!("refresh", "刷新") }
 pub fn key_move() -> &'static str { t!("move", "移动") }
 pub fn key_back() -> &'static str { t!("back", "返回") }
 pub fn key_scroll() -> &'static str { t!("scroll", "滚动") }
-pub fn key_use_template() -> &'static str { t!("use as template", "作为模板") }
 pub fn key_run_action() -> &'static str { t!("run action", "运行") }
 pub fn key_focus() -> &'static str { t!("focus", "焦点") }
 pub fn key_field() -> &'static str { t!("field", "字段") }

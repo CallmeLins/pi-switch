@@ -127,14 +127,6 @@ impl ProviderFormState {
         form
     }
 
-    pub fn from_preset(preset: &Preset, template_idx: usize) -> Self {
-        let mut form = Self::new_add();
-        form.template_idx = template_idx;
-        form.apply_preset(preset);
-        form.baseline = form.snapshot();
-        form
-    }
-
     pub fn from_existing(name: &str, profile: &ProviderProfile) -> Self {
         let mut form = Self {
             mode: FormMode::Edit(name.to_string()),

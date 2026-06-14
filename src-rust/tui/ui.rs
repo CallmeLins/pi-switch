@@ -46,7 +46,6 @@ fn render_content(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Route::Profiles => profiles::render_profiles(frame, app, area),
         Route::ProfileDetail(name) => profiles::render_profile_detail(frame, app, area, &name),
         Route::Form => profiles::render_form(frame, app, area),
-        Route::Presets => pages::render_presets(frame, app, area),
         Route::Proxy => pages::render_proxy(frame, app, area),
         Route::Stats => pages::render_stats(frame, app, area),
         Route::Backups => pages::render_backups(frame, app, area),
