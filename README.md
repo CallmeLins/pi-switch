@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blue.svg)](https://github.com/user/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.5-blue.svg)](https://github.com/user/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -226,9 +226,40 @@ Or directly edit `~/.pi-switch/config.json` under `settings.proxy.failover`.
 
 <details>
 <summary><b>What does the [proxy] badge mean?</b></summary>
+
 <br>
 
-The profile has `"proxy": true` — it routes through the local proxy, which can auto-convert between OpenAI/Anthropic formats and apply failover/circuit-breaker policies.
+The `[proxy]` badge indicates this profile is configured to route through the local transparent proxy. When a profile is set as the proxy target, its baseUrl automatically points to the proxy server (e.g., `http://127.0.0.1:8190`), and all requests are transparently routed with automatic failover and circuit breaker protection.
+
+To use the proxy:
+1. Set a target profile: `pi-switch proxy target <name>`
+2. Configure failover chain: `pi-switch proxy failover <p1,p2,...>`
+3. Start the proxy: `pi-switch proxy start --daemon`
+4. Add the proxy profile to pi: `pi-switch provider add proxy --preset proxy`
+
+</details>
+
+<details>
+<summary><b>How does transparent proxy routing work?</b></summary>
+
+<br>
+
+When you set a profile as the proxy target, its `baseUrl` is automatically rewritten to point to the local proxy server. Pi's requests are transparently routed through the proxy with intelligent failover:
+
+```bash
+# 1. Set proxy target
+pi-switch proxy target deepseek-official
+
+# 2. Set failover chain (optional)
+pi-switch proxy failover relay-a,relay-b
+
+# 3. Start proxy daemon
+pi-switch proxy start --daemon
+```
+
+Now when pi uses the `deepseek-official` configuration, all requests automatically go through the proxy with smart failover to `relay-a` → `relay-b` on 429/5xx errors.
+
+The proxy routes by model availability — only providers with the requested model in their `models` list are tried.
 
 </details>
 

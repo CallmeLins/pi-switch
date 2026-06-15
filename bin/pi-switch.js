@@ -16,7 +16,7 @@ import {
 import * as readline from "readline";
 
 function usage() {
-  console.log(`pi-switch v0.3.4 — lightweight profile switcher for pi agent
+  console.log(`pi-switch v0.3.5 — lightweight profile switcher for pi agent
 
 Usage:
   pi-switch provider list
