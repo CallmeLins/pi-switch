@@ -29,10 +29,10 @@
 
 ```bash
 # npm（推荐）
-npm install -g cokefenta@pi-switch
+npm install -g @cokefenta/pi-switch
 
 # 或通过 pi 安装
-pi install npm:cokefenta@pi-switch
+pi install npm:@cokefenta/pi-switch
 ```
 
 **从源码构建**（需要 Node.js >= 20, Rust 1.80+）：
