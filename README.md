@@ -254,6 +254,15 @@ cargo fmt                      # Format
 
 ---
 
+## 🙏 Acknowledgments
+
+- **[cc-switch](https://github.com/farion1231/cc-switch)** — the original TUI-based profile switcher for Claude Code, which pioneered the interactive terminal UI pattern and proxy failover design
+- **[cc-switch-cli](https://github.com/SaladDay/cc-switch-cli)** — the CLI counterpart, providing a clean command-line interface for provider management
+
+Thanks also to the **[LINUX DO](https://linux.do/)** community for the discussions that sparked this project.
+
+---
+
 ## 📜 License
 
 MIT

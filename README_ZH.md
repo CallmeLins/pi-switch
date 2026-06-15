@@ -254,6 +254,15 @@ cargo fmt                      # 格式化
 
 ---
 
+## 🙏 致谢
+
+- **[cc-switch](https://github.com/farion1231/cc-switch)** — Claude Code 的原版 TUI 配置切换工具，开创了交互式终端界面和代理故障转移的设计模式
+- **[cc-switch-cli](https://github.com/SaladDay/cc-switch-cli)** — CLI 版本，提供了简洁的命令行 provider 管理接口
+
+也感谢 **[LINUX DO](https://linux.do/)** 社区的讨论催生了这个项目。
+
+---
+
 ## 📜 许可证
 
 MIT
