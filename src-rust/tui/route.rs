@@ -51,13 +51,13 @@ impl NavItem {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            NavItem::Home => "⌂",
-            NavItem::Profiles => "▤",
-            NavItem::Proxy => "⇄",
-            NavItem::Stats => "∑",
-            NavItem::Backups => "⊙",
-            NavItem::Settings => "⚙",
-            NavItem::Exit => "✕",
+            NavItem::Home => "🏠",
+            NavItem::Profiles => "👤",
+            NavItem::Proxy => "🔄",
+            NavItem::Stats => "📊",
+            NavItem::Backups => "💾",
+            NavItem::Settings => "⚙️",
+            NavItem::Exit => "🚪",
         }
     }
 

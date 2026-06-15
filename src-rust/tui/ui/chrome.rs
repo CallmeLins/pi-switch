@@ -88,7 +88,7 @@ pub(super) fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 pub(super) fn nav_pane_width(theme: &Theme) -> u16 {
     const NAV_BORDER_WIDTH: u16 = 2;
-    const NAV_ICON_COL_WIDTH: u16 = 3;
+    const NAV_ICON_COL_WIDTH: u16 = 4;
     const NAV_COL_SPACING: u16 = 1;
     const NAV_TEXT_MIN_WIDTH: u16 = 10;
     const NAV_TEXT_EXTRA_WIDTH: u16 = 2;
@@ -120,7 +120,7 @@ pub(super) fn render_nav(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
     });
 
-    let table = Table::new(rows, [ratatui::layout::Constraint::Length(3), ratatui::layout::Constraint::Min(10)])
+    let table = Table::new(rows, [ratatui::layout::Constraint::Length(4), ratatui::layout::Constraint::Min(10)])
         .column_spacing(1)
         .block(
             Block::default()

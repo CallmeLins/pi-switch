@@ -1,7 +1,6 @@
 use crate::config::{config_dir, load_config};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Command;
 
 fn pid_path() -> PathBuf { config_dir().join("proxy.pid") }
 
@@ -51,6 +50,7 @@ fn read_pid_file() -> Option<DaemonInfo> {
         .and_then(|s| serde_json::from_str(&s).ok())
 }
 
+#[cfg(unix)]
 fn write_pid_file(info: &DaemonInfo) {
     if let Some(parent) = pid_path().parent() {
         std::fs::create_dir_all(parent).ok();
@@ -66,7 +66,7 @@ fn remove_pid_file() {
 
 #[cfg(unix)]
 pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonResult, String> {
-    use std::process::Child;
+    use std::process::{Child, Command};
 
     if let Some(info) = read_pid_file() {
         if is_alive(info.pid) {
