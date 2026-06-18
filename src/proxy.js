@@ -406,9 +406,9 @@ export async function daemonStop() {
     return { running: false, message: `PID ${info.pid} is not alive (cleaned up stale PID file)` };
   }
 
-  // Try graceful shutdown first
+  // Try graceful shutdown (kill without signal works cross-platform)
   try {
-    process.kill(info.pid, "SIGTERM");
+    process.kill(info.pid);
   } catch {
     await removePidFile();
     return { running: false, message: `Failed to signal PID ${info.pid}` };
@@ -423,8 +423,8 @@ export async function daemonStop() {
     }
   }
 
-  // Force kill
-  try { process.kill(info.pid, "SIGKILL"); } catch {}
+  // Force kill (retry, on Windows same as above)
+  try { process.kill(info.pid); } catch {}
   await removePidFile();
   return { running: false, pid: info.pid, message: `Proxy daemon (PID ${info.pid}) force killed` };
 }
