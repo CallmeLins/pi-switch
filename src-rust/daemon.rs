@@ -80,12 +80,24 @@ fn is_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn is_alive(pid: u32) -> bool {
     let output = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .args(["/FI", &format!("PID eq {}", pid), "/NH", "/FO", "CSV"])
         .output();
     match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.contains(&pid.to_string())
+            // CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+            // Parse second column (PID) for exact match
+            for line in stdout.lines() {
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() >= 2 {
+                    if let Some(pid_str) = parts[1].strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                        if pid_str.trim() == pid.to_string() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
         }
         Err(_) => false,
     }
