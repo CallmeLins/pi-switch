@@ -100,12 +100,16 @@ pub struct App {
     pub stats_scroll: u16,
     pub settings_lang_idx: usize,
     pub settings_proxy_idx: usize,
+    pub settings_user_agent_idx: usize,  // 0=custom, 1=claude-code, 2=codex, 3=gemini
     pub settings_editing_field: Option<usize>,
     pub settings_edit_input: TextInput,
     pub detail_scroll: u16,
     pub toast: Option<Toast>,
     pub tick: u64,
     pub should_quit: bool,
+    // Pi settings sync
+    pub pi_last_provider: Option<String>,
+    pub pi_settings_mtime: Option<std::time::SystemTime>,
     // Model selection state
     pub model_selection_list: Vec<(String, bool)>, // (model_id, selected)
     pub model_selection_idx: usize,
@@ -120,8 +124,30 @@ pub fn proxy_actions() -> [&'static str; 3] {
     [i18n::proxy_action_start(), i18n::proxy_action_stop(), i18n::proxy_action_status()]
 }
 
+pub fn user_agent_presets() -> [&'static str; 4] {
+    ["Custom", "Claude Code", "Codex", "Gemini"]
+}
+
+pub fn user_agent_preset_value(idx: usize) -> Option<&'static str> {
+    match idx {
+        0 => None,  // Custom
+        1 => Some("Claude Code/1.0 (https://claude.ai)"),
+        2 => Some("Codex/1.0"),
+        3 => Some("Gemini/1.0 (https://gemini.google.com)"),
+        _ => None,
+    }
+}
+
 impl App {
     pub fn new(data: UiData) -> Self {
+        // Detect User-Agent preset index
+        let user_agent_idx = match data.config.settings.proxy.user_agent.as_deref() {
+            Some("Claude Code/1.0 (https://claude.ai)") => 1,
+            Some("Codex/1.0") => 2,
+            Some("Gemini/1.0 (https://gemini.google.com)") => 3,
+            _ => 0,  // Custom or None
+        };
+
         Self {
             theme: theme(),
             data,
@@ -139,12 +165,15 @@ impl App {
             stats_scroll: 0,
             settings_lang_idx: if i18n::is_zh() { 1 } else { 0 },
             settings_proxy_idx: 0,
+            settings_user_agent_idx: user_agent_idx,
             settings_editing_field: None,
             settings_edit_input: TextInput::default(),
             detail_scroll: 0,
             toast: None,
             tick: 0,
             should_quit: false,
+            pi_last_provider: None,
+            pi_settings_mtime: None,
             model_selection_list: vec![],
             model_selection_idx: 0,
             model_selection_loading: false,
@@ -206,6 +235,12 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+
+        // Check pi settings.json every 10 ticks (~2 seconds)
+        if self.tick % 10 == 0 {
+            self.check_and_sync_pi_provider();
+        }
+
         if let Some(toast) = &mut self.toast {
             toast.remaining_ticks = toast.remaining_ticks.saturating_sub(1);
             if toast.remaining_ticks == 0 {
@@ -686,7 +721,7 @@ impl App {
             return;
         }
 
-        let row_count = 4; // Language + host + port + failover
+        let row_count = 6; // Language + host + port + target + user-agent + failover
         match key.code {
             KeyCode::Up => {
                 self.settings_proxy_idx = self.settings_proxy_idx.saturating_sub(1);
@@ -706,14 +741,36 @@ impl App {
                         }
                         Err(e) => self.push_toast(ToastKind::Error, e),
                     }
+                } else if self.settings_proxy_idx == 4 {
+                    // Cycle User-Agent presets
+                    let presets = user_agent_presets();
+                    let direction = if matches!(key.code, KeyCode::Left) { -1i32 } else { 1i32 };
+                    let new_idx = ((self.settings_user_agent_idx as i32 + direction)
+                        .rem_euclid(presets.len() as i32)) as usize;
+                    self.settings_user_agent_idx = new_idx;
+
+                    // Apply preset value to config
+                    if let Ok(mut config) = crate::config::load_config() {
+                        config.settings.proxy.user_agent = user_agent_preset_value(new_idx).map(|s| s.to_string());
+                        if let Ok(()) = crate::config::save_config(&config) {
+                            self.refresh();
+                            let preset_name = presets[new_idx];
+                            self.push_toast(ToastKind::Success, format!("User-Agent: {}", preset_name));
+                        }
+                    }
                 }
             }
             KeyCode::Enter => {
-                if self.settings_proxy_idx == 3 {
+                if self.settings_proxy_idx == 5 {
                     // Open failover editor
                     self.open_failover_editor();
-                } else if self.settings_proxy_idx > 0 {
-                    // Start editing a proxy field
+                } else if self.settings_proxy_idx == 4 && self.settings_user_agent_idx == 0 {
+                    // Custom User-Agent - allow editing
+                    let text = self.get_settings_field_value(self.settings_proxy_idx);
+                    self.settings_edit_input = TextInput::new(text).with_policy(super::text_edit::TextInputPolicy::Any);
+                    self.settings_editing_field = Some(self.settings_proxy_idx);
+                } else if self.settings_proxy_idx > 0 && self.settings_proxy_idx != 4 {
+                    // Other editable fields (not User-Agent preset)
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
                     let policy = if self.settings_proxy_idx == 2 {
                         super::text_edit::TextInputPolicy::Digits
@@ -734,7 +791,9 @@ impl App {
             0 => String::new(),
             1 => proxy.host.clone(),
             2 => proxy.port.to_string(),
-            3 => if proxy.failover.is_empty() {
+            3 => proxy.target.as_deref().unwrap_or("").to_string(),
+            4 => proxy.user_agent.as_deref().unwrap_or("").to_string(),
+            5 => if proxy.failover.is_empty() {
                 String::new()
             } else {
                 proxy.failover.join(", ")
@@ -762,6 +821,16 @@ impl App {
                     self.push_toast(ToastKind::Error, "Invalid port number");
                     return;
                 }
+            }
+            3 => {
+                // Proxy target
+                config.settings.proxy.target = if value.is_empty() { None } else { Some(value) };
+            }
+            4 => {
+                // User-Agent custom value
+                config.settings.proxy.user_agent = if value.is_empty() { None } else { Some(value) };
+                // Set to Custom mode when manually edited
+                self.settings_user_agent_idx = 0;
             }
             _ => return,
         }
@@ -1499,6 +1568,80 @@ impl App {
             }
             Err(e) => {
                 self.push_toast(ToastKind::Error, e.to_string());
+            }
+        }
+    }
+
+    fn check_and_sync_pi_provider(&mut self) {
+        let pi_settings_path = match dirs::home_dir() {
+            Some(home) => home.join(".pi/agent/settings.json"),
+            None => return,
+        };
+
+        // Check if file exists and get mtime
+        let metadata = match std::fs::metadata(&pi_settings_path) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        let mtime = match metadata.modified() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        // Skip if file hasn't changed
+        if let Some(last_mtime) = self.pi_settings_mtime {
+            if mtime == last_mtime {
+                return;
+            }
+        }
+
+        self.pi_settings_mtime = Some(mtime);
+
+        // Read pi settings
+        let content = match std::fs::read_to_string(&pi_settings_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let json: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+
+        let pi_provider = match json.get("defaultProvider").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => return,
+        };
+
+        // Check if changed
+        if self.pi_last_provider.as_ref() == Some(&pi_provider) {
+            return;
+        }
+
+        self.pi_last_provider = Some(pi_provider.clone());
+
+        // Check if provider exists in config
+        if !self.data.config.profiles.contains_key(&pi_provider) {
+            return;
+        }
+
+        // Check if already set as target
+        if self.data.config.settings.proxy.target.as_ref() == Some(&pi_provider) {
+            return;
+        }
+
+        // Auto-sync: set as proxy target
+        match ops::set_proxy_target(Some(&pi_provider)) {
+            Ok(_) => {
+                self.refresh();
+                self.push_toast(
+                    ToastKind::Success,
+                    format!("Auto-synced proxy target: {}", pi_provider),
+                );
+            }
+            Err(e) => {
+                self.push_toast(ToastKind::Error, format!("Auto-sync failed: {}", e));
             }
         }
     }

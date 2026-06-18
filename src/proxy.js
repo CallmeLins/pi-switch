@@ -88,11 +88,17 @@ function shouldRetryStatus(status) {
   return RETRY_STATUSES.has(status);
 }
 
-async function fetchOpenAI(profile, req, body, targetPath) {
+async function fetchOpenAI(profile, req, body, targetPath, config) {
   const upstreamUrl = joinUrl(profile.baseUrl, targetPath);
   const headers = stripHopByHopHeaders(req.headers);
   headers.authorization = `Bearer ${resolveEnvLike(profile.apiKey)}`;
   headers["content-type"] = headers["content-type"] || "application/json";
+
+  // Apply custom User-Agent if configured
+  if (config?.settings?.proxy?.userAgent) {
+    headers["user-agent"] = config.settings.proxy.userAgent;
+  }
+
   if (profile.headers) {
     for (const [key, value] of Object.entries(profile.headers)) headers[key.toLowerCase()] = resolveEnvLike(value);
   }
@@ -202,12 +208,18 @@ function anthropicToOpenAIResponse(anthropicResponse) {
   };
 }
 
-async function fetchAnthropic(profile, req, body, targetPath) {
+async function fetchAnthropic(profile, req, body, targetPath, config) {
   const upstreamUrl = joinUrl(profile.baseUrl, targetPath);
   const headers = stripHopByHopHeaders(req.headers);
   headers["x-api-key"] = resolveEnvLike(profile.apiKey);
   headers["anthropic-version"] = headers["anthropic-version"] || "2023-06-01";
   headers["content-type"] = "application/json";
+
+  // Apply custom User-Agent if configured
+  if (config?.settings?.proxy?.userAgent) {
+    headers["user-agent"] = config.settings.proxy.userAgent;
+  }
+
   if (profile.headers) {
     for (const [key, value] of Object.entries(profile.headers)) headers[key.toLowerCase()] = resolveEnvLike(value);
   }
@@ -526,7 +538,7 @@ async function forwardWithFailover(req, res, config, candidateNames, targetPath)
           headers: { ...req.headers, "content-type": "application/json" },
         };
         const { response: upstreamResp, upstreamUrl: upstreamUrlResp } = await fetchAnthropic(
-          profile, anthropicReq, Buffer.from(JSON.stringify(anthropicBody)), "messages"
+          profile, anthropicReq, Buffer.from(JSON.stringify(anthropicBody)), "messages", config
         );
         response = upstreamResp;
         upstreamUrl = upstreamUrlResp;
@@ -563,7 +575,7 @@ async function forwardWithFailover(req, res, config, candidateNames, targetPath)
       }
 
       // OpenAI path
-      const { response: openaiResp, upstreamUrl: openaiUrl } = await fetchOpenAI(profile, req, body, targetPath);
+      const { response: openaiResp, upstreamUrl: openaiUrl } = await fetchOpenAI(profile, req, body, targetPath, config);
       response = openaiResp;
       upstreamUrl = openaiUrl;
       attempts.push({ provider: name, status: response.status, upstreamUrl });
@@ -692,7 +704,7 @@ async function forwardAnthropicWithFailover(req, res, config, candidateNames) {
     }
 
     try {
-      const { response, upstreamUrl } = await fetchAnthropic(profile, req, body, "messages");
+      const { response, upstreamUrl } = await fetchAnthropic(profile, req, body, "messages", config);
       attempts.push({ provider: name, status: response.status, upstreamUrl });
 
       if (shouldRetryStatus(response.status)) {

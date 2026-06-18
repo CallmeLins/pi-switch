@@ -685,3 +685,20 @@ pub fn parse_model_ids(payload: &serde_json::Value) -> Vec<String> {
     out
 }
 
+pub fn set_proxy_target(target: Option<&str>) -> Result<()> {
+    let mut config = load_config()?;
+
+    if let Some(name) = target {
+        if !config.profiles.contains_key(name) {
+            return Err(AppError::Message(format!("Profile '{}' not found", name)));
+        }
+        config.settings.proxy.target = Some(name.to_string());
+    } else {
+        config.settings.proxy.target = None;
+    }
+
+    save_config(&config)?;
+    sync_all_profiles_to_pi()?;
+    Ok(())
+}
+

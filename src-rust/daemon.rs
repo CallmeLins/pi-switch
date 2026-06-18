@@ -311,7 +311,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
 
     // Graceful stop first
     kill_process(info.pid);
-    for _ in 0..50 {
+    for _ in 0..20 {  // Reduced from 50 to 20 (2 seconds max)
         std::thread::sleep(std::time::Duration::from_millis(100));
         if !is_alive(info.pid) {
             remove_pid_file();

@@ -97,6 +97,8 @@ pub struct ProxySettings {
     pub target: Option<String>,
     #[serde(default)]
     pub failover: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "userAgent")]
+    pub user_agent: Option<String>,
     #[serde(default, rename = "circuitBreaker")]
     pub circuit_breaker: CircuitBreakerSettings,
 }
@@ -154,6 +156,7 @@ impl Default for PiSwitchConfig {
                     port: default_port(),
                     target: None,
                     failover: vec![],
+                    user_agent: None,
                     circuit_breaker: CircuitBreakerSettings {
                         enabled: true,
                         failure_threshold: 3,
