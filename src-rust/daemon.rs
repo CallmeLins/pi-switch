@@ -2,8 +2,45 @@ use crate::config::{config_dir, load_config};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::net::TcpStream;
+use std::time::Duration;
 
 fn pid_path() -> PathBuf { config_dir().join("proxy.pid") }
+
+// Check if proxy server is actually listening on the port
+fn check_health(host: &str, port: u16, max_attempts: u32) -> bool {
+    for _ in 0..max_attempts {
+        if let Ok(addr) = format!("{}:{}", host, port).parse() {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+// Get pi-switch.js path relative to executable location
+fn get_bin_path() -> PathBuf {
+    // Try executable directory first (works when installed via npm)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let bin_path = exe_dir.join("bin").join("pi-switch.js");
+            if bin_path.exists() {
+                return bin_path;
+            }
+            // Also try parent/bin (for development)
+            if let Some(parent) = exe_dir.parent() {
+                let bin_path = parent.join("bin").join("pi-switch.js");
+                if bin_path.exists() {
+                    return bin_path;
+                }
+            }
+        }
+    }
+    // Fallback to current directory
+    PathBuf::from("bin").join("pi-switch.js")
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DaemonInfo {
@@ -113,7 +150,7 @@ fn remove_pid_file() {
 
 pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonResult, String> {
     if let Some(info) = read_pid_file() {
-        if is_alive(info.pid) {
+        if is_alive(info.pid) && check_health(&info.host, info.port, 2) {
             let msg = format!(
                 "Proxy daemon already running (PID {}) on http://{}:{}",
                 info.pid, info.host, info.port
@@ -136,11 +173,10 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
     let host = host.unwrap_or_else(|| config.settings.proxy.host.clone());
     let port = port.unwrap_or(config.settings.proxy.port);
 
-    // Locate pi-switch CLI script
-    let bin_path = std::env::current_dir()
-        .ok()
-        .map(|cwd| cwd.join("bin").join("pi-switch.js"))
-        .unwrap_or_else(|| PathBuf::from("bin").join("pi-switch.js"));
+    let bin_path = get_bin_path();
+    if !bin_path.exists() {
+        return Err(format!("pi-switch.js not found at {:?}", bin_path));
+    }
 
     let log_path = config_dir().join("proxy.log");
     let log_file = std::fs::OpenOptions::new()
@@ -200,6 +236,21 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
     };
 
     write_pid_file(&info);
+
+    // Wait for server to be ready (max 5 seconds)
+    if !check_health(&host, port, 25) {
+        // Cleanup on failure
+        remove_pid_file();
+        #[cfg(windows)]
+        { force_kill(pid); }
+        #[cfg(not(windows))]
+        unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+
+        return Err(format!(
+            "Proxy daemon started but failed health check on http://{}:{}. Check ~/.pi-switch/proxy.log for errors.",
+            host, port
+        ));
+    }
 
     Ok(DaemonResult {
         running: true,
@@ -300,6 +351,24 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
     };
 
     if is_alive(info.pid) {
+        // Verify port is actually listening
+        if !check_health(&info.host, info.port, 2) {
+            remove_pid_file();
+            return Ok(DaemonResult {
+                running: false,
+                pid: Some(info.pid),
+                host: None,
+                port: None,
+                targets: None,
+                failover: None,
+                started_at: None,
+                message: format!(
+                    "Proxy daemon process exists (PID {}) but port {}:{} is not responding. Cleaned up stale PID.",
+                    info.pid, info.host, info.port
+                ),
+            });
+        }
+
         let config = load_config().map(|c| c.settings.proxy).unwrap_or_default();
         let config_full = load_config().ok();
         let targets: Vec<String> = config_full

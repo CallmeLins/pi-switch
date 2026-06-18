@@ -97,6 +97,7 @@ pub struct App {
     pub profiles_idx: usize,
     pub proxy_idx: usize,
     pub backups_idx: usize,
+    pub stats_scroll: u16,
     pub settings_lang_idx: usize,
     pub settings_proxy_idx: usize,
     pub settings_editing_field: Option<usize>,
@@ -135,6 +136,7 @@ impl App {
             profiles_idx: 0,
             proxy_idx: 0,
             backups_idx: 0,
+            stats_scroll: 0,
             settings_lang_idx: if i18n::is_zh() { 1 } else { 0 },
             settings_proxy_idx: 0,
             settings_editing_field: None,
@@ -628,9 +630,18 @@ impl App {
         if self.back_to_nav_on_esc(&key) {
             return;
         }
-        if key.code == KeyCode::Char('r') {
-            self.refresh();
-            self.push_toast(ToastKind::Info, i18n::toast_refreshed());
+        match key.code {
+            KeyCode::Char('r') => {
+                self.refresh();
+                self.push_toast(ToastKind::Info, i18n::toast_refreshed());
+            }
+            KeyCode::Up => {
+                self.stats_scroll = self.stats_scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.stats_scroll = self.stats_scroll.saturating_add(1);
+            }
+            _ => {}
         }
     }
 

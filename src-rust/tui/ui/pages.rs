@@ -206,7 +206,7 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
         frame,
         &app.theme,
         chunks[0],
-        &[("r", i18n::key_refresh()), ("Esc", i18n::key_back())],
+        &[("↑↓", i18n::key_scroll()), ("r", i18n::key_refresh()), ("Esc", i18n::key_back())],
     );
 
     let stats = &app.data.stats;
@@ -311,7 +311,12 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .title("Details");
     let details_inner = details_block.inner(sections[1]);
     frame.render_widget(details_block, sections[1]);
-    frame.render_widget(Paragraph::new(detail_lines).wrap(Wrap { trim: false }), details_inner);
+    frame.render_widget(
+        Paragraph::new(detail_lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.stats_scroll, 0)),
+        details_inner
+    );
 }
 
 pub(super) fn render_backups(frame: &mut Frame<'_>, app: &App, area: Rect) {

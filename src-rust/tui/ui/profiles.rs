@@ -756,7 +756,9 @@ pub fn render_model_selection(
         .highlight_symbol(highlight_symbol(&app.theme))
         .highlight_style(selection_style(&app.theme));
 
-    frame.render_widget(list, chunks[0]);
+    let mut list_state = ratatui::widgets::ListState::default();
+    list_state.select(Some(app.model_selection_idx));
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
     // Render help
     let help_text = if is_expose_mode {
