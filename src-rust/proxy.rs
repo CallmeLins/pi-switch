@@ -15,6 +15,78 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+
+// ─── Disguise: per-process session identifiers ─────────────
+
+/// Generate a random UUID v4 string.
+fn gen_uuid_v4() -> String {
+    use std::fmt::Write;
+    let bytes: [u8; 16] = rand::random();
+    let mut s = String::with_capacity(36);
+    for (i, b) in bytes.iter().enumerate() {
+        if i == 4 || i == 6 || i == 8 || i == 10 { s.push('-'); }
+        if i == 6 {
+            write!(&mut s, "{:02x}", (b & 0x0f) | 0x40).unwrap();
+        } else if i == 8 {
+            write!(&mut s, "{:02x}", (b & 0x3f) | 0x80).unwrap();
+        } else {
+            write!(&mut s, "{:02x}", b).unwrap();
+        }
+    }
+    s
+}
+
+/// Per-proxy-process session ID, used by Codex disguise preset.
+static SESSION_ID: LazyLock<String> = LazyLock::new(gen_uuid_v4);
+
+/// Per-proxy-process trace ID, regenerated per request as span-id.
+static TRACE_ID: LazyLock<String> = LazyLock::new(|| {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(32);
+    for _ in 0..32 {
+        write!(&mut s, "{:x}", rand::random::<u8>()).unwrap();
+    }
+    s
+});
+
+fn gen_span_id() -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(16);
+    for _ in 0..16 {
+        write!(&mut s, "{:x}", rand::random::<u8>()).unwrap();
+    }
+    s
+}
+
+/// Resolve the actual User-Agent string from a disguise preset key.
+fn resolve_user_agent(preset: &str) -> &str {
+    match preset {
+        "claude-code" => "claude-code/1.0 (https://claude.ai)",
+        "codex" => "codex_cli_rs/0.1.0",
+        "gemini" => "gemini-cli/1.0 (https://gemini.google.com)",
+        _ => preset, // raw UA string (legacy)
+    }
+}
+
+/// Generate extra headers for the selected disguise preset.
+fn disguise_headers(preset: Option<&str>) -> Vec<(&'static str, String)> {
+    let mut h = Vec::new();
+    match preset {
+        Some("codex") => {
+            h.push(("x-session-id", SESSION_ID.clone()));
+            h.push(("traceparent", format!("00-{}-{}-01", *TRACE_ID, gen_span_id())));
+        }
+        Some("claude-code") => {
+            h.push(("anthropic-version", "2023-06-01".to_string()));
+        }
+        Some("gemini") => {
+            h.push(("x-goog-api-client", "gemini-cli/1.0".to_string()));
+        }
+        _ => {}
+    }
+    h
+}
 
 // ─── Shared proxy state ───────────────────────────────────
 
@@ -508,12 +580,15 @@ async fn forward_with_failover(
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
     let mut client_builder = ReqwestClient::builder();
-    if let Some(ua) = config.settings.proxy.user_agent.as_deref() {
+    let raw_ua = config.settings.proxy.user_agent.as_deref();
+    let resolved_ua: Option<String> = raw_ua.map(|p| resolve_user_agent(p).to_string());
+    if let Some(ref ua) = resolved_ua {
         client_builder = client_builder.user_agent(ua);
     }
     let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
     let mut half_open_used = false;
-    let user_agent = config.settings.proxy.user_agent.clone();
+    let user_agent = resolved_ua.clone();
+    let disguise = disguise_headers(raw_ua);
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -568,7 +643,10 @@ async fn forward_with_failover(
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
             if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+        req = req.header(reqwest::header::USER_AGENT, ua);
+    }
+    for (k, v) in &disguise {
+        req = req.header(*k, v.as_str());
     }
             let resp = req.json(&anthro_body).send().await;
 
@@ -610,7 +688,10 @@ async fn forward_with_failover(
             let mut req = client.post(&url)
                 .header("Authorization", format!("Bearer {}", api_key));
             if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+        req = req.header(reqwest::header::USER_AGENT, ua);
+    }
+    for (k, v) in &disguise {
+        req = req.header(*k, v.as_str());
     }
             let resp = req.json(body).send().await;
 
@@ -663,12 +744,15 @@ async fn forward_anthropic_with_failover(
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
     let mut client_builder = ReqwestClient::builder();
-    if let Some(ua) = config.settings.proxy.user_agent.as_deref() {
+    let raw_ua = config.settings.proxy.user_agent.as_deref();
+    let resolved_ua: Option<String> = raw_ua.map(|p| resolve_user_agent(p).to_string());
+    if let Some(ref ua) = resolved_ua {
         client_builder = client_builder.user_agent(ua);
     }
     let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
     let mut half_open_used = false;
-    let user_agent = config.settings.proxy.user_agent.clone();
+    let user_agent = resolved_ua.clone();
+    let disguise = disguise_headers(raw_ua);
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -709,7 +793,10 @@ async fn forward_anthropic_with_failover(
             .header("x-api-key", &api_key)
             .header("anthropic-version", "2023-06-01");
         if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+        req = req.header(reqwest::header::USER_AGENT, ua);
+    }
+    for (k, v) in &disguise {
+        req = req.header(*k, v.as_str());
     }
         let resp = req.json(body).send().await;
 

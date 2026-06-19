@@ -100,7 +100,7 @@ pub struct App {
     pub stats_scroll: u16,
     pub settings_lang_idx: usize,
     pub settings_proxy_idx: usize,
-    pub settings_user_agent_idx: usize,  // 0=custom, 1=claude-code, 2=codex, 3=gemini
+    pub settings_user_agent_idx: usize,  // 0=claude-code, 1=codex, 2=gemini
     pub settings_editing_field: Option<usize>,
     pub settings_edit_input: TextInput,
     pub detail_scroll: u16,
@@ -125,16 +125,15 @@ pub fn proxy_actions() -> [&'static str; 3] {
     [i18n::proxy_action_start(), i18n::proxy_action_stop(), i18n::proxy_action_status()]
 }
 
-pub fn user_agent_presets() -> [&'static str; 4] {
-    ["Custom", "Claude Code", "Codex", "Gemini"]
+pub fn user_agent_presets() -> [&'static str; 3] {
+    ["Claude Code", "Codex", "Gemini"]
 }
 
 pub fn user_agent_preset_value(idx: usize) -> Option<&'static str> {
     match idx {
-        0 => None,  // Custom
-        1 => Some("Claude Code/1.0 (https://claude.ai)"),
-        2 => Some("Codex/1.0"),
-        3 => Some("Gemini/1.0 (https://gemini.google.com)"),
+        0 => Some("claude-code"),
+        1 => Some("codex"),
+        2 => Some("gemini"),
         _ => None,
     }
 }
@@ -143,10 +142,10 @@ impl App {
     pub fn new(data: UiData) -> Self {
         // Detect User-Agent preset index
         let user_agent_idx = match data.config.settings.proxy.user_agent.as_deref() {
-            Some("Claude Code/1.0 (https://claude.ai)") => 1,
-            Some("Codex/1.0") => 2,
-            Some("Gemini/1.0 (https://gemini.google.com)") => 3,
-            _ => 0,  // Custom or None
+            Some("claude-code") => 0,
+            Some("codex") => 1,
+            Some("gemini") => 2,
+            _ => 0,
         };
 
         Self {
@@ -761,7 +760,7 @@ impl App {
                         if let Ok(()) = crate::config::save_config(&config) {
                             self.refresh();
                             let preset_name = presets[new_idx];
-                            self.push_toast(ToastKind::Success, format!("User-Agent: {}", preset_name));
+                            self.push_toast(ToastKind::Success, format!("Spoof: {}", preset_name));
                         }
                     }
                 }
@@ -770,11 +769,6 @@ impl App {
                 if self.settings_proxy_idx == 4 {
                     // Open failover editor
                     self.open_failover_editor();
-                } else if self.settings_proxy_idx == 3 && self.settings_user_agent_idx == 0 {
-                    // Custom User-Agent - allow editing
-                    let text = self.get_settings_field_value(self.settings_proxy_idx);
-                    self.settings_edit_input = TextInput::new(text).with_policy(super::text_edit::TextInputPolicy::Any);
-                    self.settings_editing_field = Some(self.settings_proxy_idx);
                 } else if self.settings_proxy_idx == 1 || self.settings_proxy_idx == 2 {
                     // Host / port text fields
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
@@ -828,10 +822,8 @@ impl App {
                 }
             }
             3 => {
-                // User-Agent custom value
-                config.settings.proxy.user_agent = if value.is_empty() { None } else { Some(value) };
-                // Set to Custom mode when manually edited
-                self.settings_user_agent_idx = 0;
+                // User-Agent value is set by cycling presets (←/→), not manually edited
+                return;
             }
             _ => return,
         }

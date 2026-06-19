@@ -432,8 +432,6 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ("←→/Space", if app.settings_proxy_idx == 0 || app.settings_proxy_idx == 3 { i18n::key_switch() } else { "" }),
             ("Enter", if app.settings_proxy_idx == 4 {
                 if i18n::is_zh() { "编辑" } else { "Edit" }
-            } else if app.settings_proxy_idx == 3 && app.settings_user_agent_idx == 0 {
-                i18n::key_edit()
             } else if app.settings_proxy_idx == 1 || app.settings_proxy_idx == 2 {
                 i18n::key_edit()
             } else {
@@ -456,15 +454,12 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         proxy.failover.join(", ")
     };
 
-    // User-Agent preset display
+    // Disguise preset display
     let user_agent_presets = crate::tui::app::user_agent_presets();
-    let user_agent_display = if app.settings_user_agent_idx == 0 {
-        // Custom mode - show actual value or "—"
-        proxy.user_agent.as_deref().unwrap_or("—").to_string()
-    } else {
-        // Preset mode - show preset name
-        user_agent_presets[app.settings_user_agent_idx].to_string()
-    };
+    let user_agent_display = user_agent_presets
+        .get(app.settings_user_agent_idx)
+        .unwrap_or(&"?")
+        .to_string();
 
     let rows_data: Vec<(&str, String)> = vec![
         (i18n::settings_lang_label(), if app.settings_lang_idx == 0 {
@@ -474,7 +469,7 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }),
         (i18n::settings_proxy_host(), proxy.host.clone()),
         (i18n::settings_proxy_port(), proxy.port.to_string()),
-        (if i18n::is_zh() { "用户代理" } else { "User-Agent" }, user_agent_display),
+        (if i18n::is_zh() { "伪装" } else { "Spoof" }, user_agent_display),
         (i18n::settings_proxy_failover(), failover_str),
     ];
 
