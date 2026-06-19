@@ -67,16 +67,13 @@ fn list_backup_files() -> Vec<String> {    let dir = crate::config::backup_dir()
 }
 
 fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> {
-    // Build failover priority map
-    let target = config.settings.proxy.target.as_ref();
+    // Build failover priority map — only from the failover chain.
+    // (proxy.target is deprecated in gateway mode; routing is by model name.)
     let failover_chain = &config.settings.proxy.failover;
 
     let mut priority_map = std::collections::HashMap::new();
-    if let Some(t) = target {
-        priority_map.insert(t.clone(), 0);
-    }
     for (idx, name) in failover_chain.iter().enumerate() {
-        priority_map.insert(name.clone(), idx + 1);
+        priority_map.insert(name.clone(), idx);
     }
 
     config

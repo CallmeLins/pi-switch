@@ -213,12 +213,7 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ];
         if row.in_failover_chain {
             if let Some(p) = row.failover_priority {
-                let label = if p == 0 { "[target]" } else { "" };
-                if !label.is_empty() {
-                    spans.push(Span::styled(label, Style::default().fg(theme.dim)));
-                } else {
-                    spans.push(Span::styled(format!("[p{}]", p), Style::default().fg(theme.dim)));
-                }
+                spans.push(Span::styled(format!("[p{}]", p), Style::default().fg(theme.dim)));
             }
         }
         spans.push(Span::styled(

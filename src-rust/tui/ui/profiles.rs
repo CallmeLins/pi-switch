@@ -111,13 +111,9 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
             None
         };
 
-        // Priority label
+        // Priority label — position in failover chain
         let priority_label = if let Some(priority) = row.failover_priority {
-            if priority == 0 {
-                " [target]".to_string()
-            } else {
-                format!(" [p{}]", priority)
-            }
+            format!(" [p{}]", priority)
         } else {
             String::new()
         };
