@@ -15,13 +15,12 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // ─── Shared proxy state ───────────────────────────────────
 
-pub struct ProxyState {
-    pub config: Arc<RwLock<crate::config::PiSwitchConfig>>,
-}
+/// Marker state for the axum router. Config is reloaded from disk per request (so live
+/// target changes take effect on the running proxy), so no shared config is stored here.
+pub struct ProxyState {}
 
 // ─── Request / health types ───────────────────────────────
 
@@ -299,9 +298,9 @@ pub fn make_router(state: Arc<ProxyState>) -> Router {
         .with_state(state)
 }
 
-async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
-    let config = state.config.read().await;
-    let candidates = build_candidates(&config, None);
+async fn handle_health(State(_state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let config = crate::config::load_config().unwrap_or_default();
+    let candidates = exposed_profiles(&config);
 
     let mut supported_apis = HashSet::new();
     for name in &candidates {
@@ -324,54 +323,23 @@ async fn handle_health(State(state): State<Arc<ProxyState>>) -> impl IntoRespons
     }))
 }
 
-async fn handle_models(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
-    let config = state.config.read().await;
-    let candidates = build_candidates(&config, None);
+async fn handle_models(State(_state): State<Arc<ProxyState>>) -> impl IntoResponse {
+    let config = crate::config::load_config().unwrap_or_default();
 
     let mut seen = HashSet::new();
     let mut data = Vec::new();
 
-    // Check if any provider has exposedModels set
-    let has_exposed = config.profiles.values().any(|p| {
-        p.get("exposedModels")
-            .and_then(|v| v.as_array())
-            .map(|arr| !arr.is_empty())
-            .unwrap_or(false)
-    });
-
-    if has_exposed {
-        // New mode: only return exposedModels from providers that have them
-        for name in &candidates {
-            if let Some(profile) = config.profiles.get(name) {
-                if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
-                    for model_id in exposed {
-                        if let Some(id) = model_id.as_str() {
-                            if seen.insert(id.to_string()) {
-                                data.push(json!({
-                                    "id": id,
-                                    "object": "model",
-                                    "owned_by": name,
-                                }));
-                            }
-                        }
-                    }
-                }
-            }
+    // Advertise the union of every non-proxy profile's exposedModels, namespaced as
+    // "profile/realModelId" so pi can pick a model that unambiguously selects an upstream.
+    for (name, profile) in &config.profiles {
+        if profile.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false) {
+            continue;
         }
-    } else {
-        // Fallback mode: return all models from all non-proxy profiles
-        for (name, profile) in &config.profiles {
-            let is_proxy = profile.get("proxy")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_proxy {
-                continue;
-            }
-
-            if let Some(models) = profile.get("models").and_then(|v| v.as_array()) {
-                for model in models {
-                    let id = model.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    if seen.insert(id.to_string()) {
+        if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
+            for model_id in exposed {
+                if let Some(real) = model_id.as_str() {
+                    let id = format!("{}/{}", name, real);
+                    if seen.insert(id.clone()) {
                         data.push(json!({
                             "id": id,
                             "object": "model",
@@ -389,37 +357,29 @@ async fn handle_models(State(state): State<Arc<ProxyState>>) -> impl IntoRespons
 // ─── Chat completions with failover ───────────────────────
 
 async fn handle_chat_completions(
-    State(state): State<Arc<ProxyState>>,
+    State(_state): State<Arc<ProxyState>>,
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let config = state.config.read().await;
+    let config = crate::config::load_config().unwrap_or_default();
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
 
-    // Get requested model from body
-    let requested_model = body_value.get("model").and_then(|v| v.as_str());
+    // Route purely by the model name in the body: "profile/realModel" → that profile
+    // (+ same-model failover), and the real model id to send upstream.
+    let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let (candidates, real_model) = resolve_route(&config, requested_model);
 
-    // Build candidates and filter by model availability
-    let all_candidates = build_candidates(&config, None);
+    if candidates.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": {
+                "message": format!("No upstream exposes model '{}'", requested_model),
+                "type": "no_route",
+            } })),
+        ).into_response();
+    }
 
-    // If no candidates (no exposedModels set), fall back to all non-proxy profiles
-    let all_candidates = if all_candidates.is_empty() {
-        config.profiles.keys()
-            .filter(|name| {
-                !config.profiles.get(*name)
-                    .and_then(|p| p.get("proxy"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            })
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        all_candidates
-    };
-
-    let candidates = filter_candidates_by_model(&config, all_candidates, requested_model);
-
-    let result = forward_with_failover(&config, &candidates, &body_value, "chat/completions", &headers).await;
+    let result = forward_with_failover(&config, &candidates, &body_value, &real_model, "chat/completions", &headers).await;
 
     match result {
         Ok(resp) => resp,
@@ -431,43 +391,24 @@ async fn handle_chat_completions(
 }
 
 async fn handle_messages(
-    State(state): State<Arc<ProxyState>>,
+    State(_state): State<Arc<ProxyState>>,
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    let config = state.config.read().await;
+    let config = crate::config::load_config().unwrap_or_default();
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
 
-    // Get requested model from body
-    let requested_model = body_value.get("model").and_then(|v| v.as_str());
+    let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let (candidates, real_model) = resolve_route(&config, requested_model);
 
-    // Build candidates, filter by Anthropic API and model availability
-    let all_candidates = build_candidates(&config, None);
-
-    // If no candidates (no exposedModels set), fall back to all non-proxy profiles
-    let all_candidates = if all_candidates.is_empty() {
-        config.profiles.keys()
-            .filter(|name| {
-                !config.profiles.get(*name)
-                    .and_then(|p| p.get("proxy"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            })
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        all_candidates
-    };
-
-    let anthropic_candidates: Vec<String> = all_candidates
+    // Native Anthropic endpoint: only route to anthropic-messages upstreams.
+    let candidates: Vec<String> = candidates
         .into_iter()
         .filter(|name| {
             config.profiles.get(name)
                 .and_then(|p| p.get("api").and_then(|v| v.as_str())) == Some("anthropic-messages")
         })
         .collect();
-
-    let candidates = filter_candidates_by_model(&config, anthropic_candidates, requested_model);
 
     if candidates.is_empty() {
         return (
@@ -476,7 +417,7 @@ async fn handle_messages(
         ).into_response();
     }
 
-    let result = forward_anthropic_with_failover(&config, &candidates, &body_value, &headers).await;
+    let result = forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers).await;
 
     match result {
         Ok(resp) => resp,
@@ -487,83 +428,80 @@ async fn handle_messages(
     }
 }
 
-// ─── Failover logic ───────────────────────────────────────
+// ─── Routing ──────────────────────────────────────────────
 
-fn build_candidates(config: &crate::config::PiSwitchConfig, explicit: Option<&str>) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut seen = HashSet::new();
-
-    let mut add = |name: &str| {
-        if name.is_empty() { return; }
-        if seen.contains(name) { return; }
-        if let Some(p) = config.profiles.get(name) {
-            if p.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false) { return; }
-        }
-        seen.insert(name.to_string());
-        names.push(name.to_string());
-    };
-
-    if let Some(e) = explicit { add(e); }
-
-    // Auto-select all providers with non-empty exposedModels as targets
-    for (name, profile) in &config.profiles {
-        if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
-            if !exposed.is_empty() {
-                add(name);
-            }
-        }
-    }
-
-    for name in &config.settings.proxy.failover { add(name); }
-
-    // Pick first non-proxy profile that hasn't been added yet
-    let fallback = config.profiles.keys()
-        .filter(|name| {
-            !config.profiles.get(*name)
-                .and_then(|p| p.get("proxy"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        })
-        .find(|name| !seen.contains(name.as_str()));
-
-    if let Some(fb) = fallback {
-        names.push(fb.clone());
-    }
-
-    names
+/// Whether `name` is a known, non-proxy profile.
+fn is_non_proxy(config: &crate::config::PiSwitchConfig, name: &str) -> bool {
+    config.profiles.get(name)
+        .map(|p| !p.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false))
+        .unwrap_or(false)
 }
 
-/// Filter candidates to only those that have the requested model
-fn filter_candidates_by_model(
-    config: &crate::config::PiSwitchConfig,
-    candidates: Vec<String>,
-    requested_model: Option<&str>,
-) -> Vec<String> {
-    // If no specific model requested, return all candidates
-    let Some(model) = requested_model else {
-        return candidates;
-    };
+/// Whether profile `name` exposes the (real) model id `model`.
+fn exposes(config: &crate::config::PiSwitchConfig, name: &str, model: &str) -> bool {
+    config.profiles.get(name)
+        .and_then(|p| p.get("exposedModels"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().any(|m| m.as_str() == Some(model)))
+        .unwrap_or(false)
+}
 
-    candidates.into_iter().filter(|name| {
-        config.profiles.get(name)
-            .and_then(|p| p.get("models"))
-            .and_then(|v| v.as_array())
-            .map(|models| {
-                models.iter().any(|m| {
-                    m.get("id")
-                        .and_then(|id| id.as_str())
-                        .map(|id| id == model)
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false)
-    }).collect()
+/// All non-proxy profiles that expose at least one model.
+fn exposed_profiles(config: &crate::config::PiSwitchConfig) -> Vec<String> {
+    config.profiles.iter()
+        .filter(|(_, p)| !p.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|(_, p)| {
+            p.get("exposedModels").and_then(|v| v.as_array())
+                .map(|a| !a.is_empty()).unwrap_or(false)
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Resolve a (namespaced) requested model into the ordered list of profiles to try and the
+/// real upstream model id to send. Stateless — derived entirely from the request + config.
+///
+/// - `"profile/real"` → primary `profile`, then failover-chain profiles that also expose `real`.
+/// - bare `"id"` (defensive fallback) → every non-proxy profile exposing `id`, failover-first.
+///
+/// Splits on the FIRST `/` only, so real ids that themselves contain `/`
+/// (e.g. `openrouter/anthropic/claude-sonnet-4.5`) resolve correctly.
+fn resolve_route(config: &crate::config::PiSwitchConfig, requested: &str) -> (Vec<String>, String) {
+    if let Some((prefix, rest)) = requested.split_once('/') {
+        if is_non_proxy(config, prefix) && exposes(config, prefix, rest) {
+            let mut profiles = vec![prefix.to_string()];
+            for fo in &config.settings.proxy.failover {
+                if fo != prefix && is_non_proxy(config, fo) && exposes(config, fo, rest)
+                    && !profiles.contains(fo)
+                {
+                    profiles.push(fo.clone());
+                }
+            }
+            return (profiles, rest.to_string());
+        }
+    }
+
+    // Bare / unknown namespacing: any non-proxy profile exposing the whole string,
+    // failover-chain order first.
+    let mut profiles = Vec::new();
+    for fo in &config.settings.proxy.failover {
+        if is_non_proxy(config, fo) && exposes(config, fo, requested) && !profiles.contains(fo) {
+            profiles.push(fo.clone());
+        }
+    }
+    for name in config.profiles.keys() {
+        if is_non_proxy(config, name) && exposes(config, name, requested) && !profiles.contains(name) {
+            profiles.push(name.clone());
+        }
+    }
+    (profiles, requested.to_string())
 }
 
 async fn forward_with_failover(
     config: &crate::config::PiSwitchConfig,
     candidates: &[String],
     body: &Value,
+    real_model: &str,
     target_path: &str,
     _headers: &HeaderMap,
 ) -> Result<Response> {
@@ -571,6 +509,17 @@ async fn forward_with_failover(
     let mut circuit_state = read_circuit_state().await;
     let client = ReqwestClient::new();
     let mut half_open_used = false;
+    let user_agent = config.settings.proxy.user_agent.as_deref();
+
+    // Rewrite the namespaced "profile/model" back to the real upstream model id.
+    let out_body = {
+        let mut b = body.clone();
+        if !real_model.is_empty() {
+            b["model"] = json!(real_model);
+        }
+        b
+    };
+    let body = &out_body;
 
     for name in candidates {
         let profile_value = match config.profiles.get(name) {
@@ -611,12 +560,13 @@ async fn forward_with_failover(
             let anthro_body = openai_to_anthropic_body(body);
             let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
-            let resp = client.post(&url)
+            let mut req = client.post(&url)
                 .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&anthro_body)
-                .send()
-                .await;
+                .header("anthropic-version", "2023-06-01");
+            if let Some(ua) = user_agent {
+                req = req.header("user-agent", ua);
+            }
+            let resp = req.json(&anthro_body).send().await;
 
             match resp {
                 Ok(r) => {
@@ -653,11 +603,12 @@ async fn forward_with_failover(
             // OpenAI-compatible
             let url = format!("{}/{}", profile.base_url.trim_end_matches('/'), target_path);
 
-            let resp = client.post(&url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .json(body)
-                .send()
-                .await;
+            let mut req = client.post(&url)
+                .header("Authorization", format!("Bearer {}", api_key));
+            if let Some(ua) = user_agent {
+                req = req.header("user-agent", ua);
+            }
+            let resp = req.json(body).send().await;
 
             match resp {
                 Ok(r) => {
@@ -702,12 +653,24 @@ async fn forward_anthropic_with_failover(
     config: &crate::config::PiSwitchConfig,
     candidates: &[String],
     body: &Value,
+    real_model: &str,
     _headers: &HeaderMap,
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
     let client = ReqwestClient::new();
     let mut half_open_used = false;
+    let user_agent = config.settings.proxy.user_agent.as_deref();
+
+    // Rewrite the namespaced "profile/model" back to the real upstream model id.
+    let out_body = {
+        let mut b = body.clone();
+        if !real_model.is_empty() {
+            b["model"] = json!(real_model);
+        }
+        b
+    };
+    let body = &out_body;
 
     for name in candidates {
         let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
@@ -734,12 +697,13 @@ async fn forward_anthropic_with_failover(
         let api_key = crate::config::resolve_env(&profile.api_key);
         let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
-        let resp = client.post(&url)
+        let mut req = client.post(&url)
             .header("x-api-key", &api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(body)
-            .send()
-            .await;
+            .header("anthropic-version", "2023-06-01");
+        if let Some(ua) = user_agent {
+            req = req.header("user-agent", ua);
+        }
+        let resp = req.json(body).send().await;
 
         match resp {
             Ok(r) if r.status().is_success() || !should_retry(r.status().as_u16()) => {
@@ -805,5 +769,72 @@ async fn log_request(
             use std::io::Write;
             let _ = writeln!(file, "{}", json);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_route;
+    use crate::config::PiSwitchConfig;
+
+    fn cfg(profiles: serde_json::Value, failover: Vec<&str>) -> PiSwitchConfig {
+        let mut c = PiSwitchConfig::default();
+        if let Some(obj) = profiles.as_object() {
+            c.profiles = obj.clone();
+        }
+        c.settings.proxy.failover = failover.into_iter().map(String::from).collect();
+        c
+    }
+
+    #[test]
+    fn namespaced_routes_to_profile() {
+        let c = cfg(serde_json::json!({
+            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
+        }), vec![]);
+        let (profiles, real) = resolve_route(&c, "hyb/gpt-5.4");
+        assert_eq!(profiles, vec!["hyb".to_string()]);
+        assert_eq!(real, "gpt-5.4");
+    }
+
+    #[test]
+    fn namespaced_adds_failover_sharing_model() {
+        let c = cfg(serde_json::json!({
+            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+            "fox": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+        }), vec!["fox"]);
+        let (profiles, real) = resolve_route(&c, "hyb/gpt-5.4");
+        assert_eq!(profiles, vec!["hyb".to_string(), "fox".to_string()]);
+        assert_eq!(real, "gpt-5.4");
+    }
+
+    #[test]
+    fn bare_id_failover_first() {
+        let c = cfg(serde_json::json!({
+            "aiapi": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+        }), vec!["hyb"]);
+        let (profiles, real) = resolve_route(&c, "gpt-5.4");
+        assert_eq!(profiles.first(), Some(&"hyb".to_string())); // failover-first
+        assert!(profiles.contains(&"aiapi".to_string()));
+        assert_eq!(real, "gpt-5.4");
+    }
+
+    #[test]
+    fn splits_on_first_slash_only() {
+        let c = cfg(serde_json::json!({
+            "or": { "proxy": false, "exposedModels": ["anthropic/claude-sonnet-4.5"] }
+        }), vec![]);
+        let (profiles, real) = resolve_route(&c, "or/anthropic/claude-sonnet-4.5");
+        assert_eq!(profiles, vec!["or".to_string()]);
+        assert_eq!(real, "anthropic/claude-sonnet-4.5");
+    }
+
+    #[test]
+    fn unknown_model_yields_empty() {
+        let c = cfg(serde_json::json!({
+            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
+        }), vec![]);
+        let (profiles, _real) = resolve_route(&c, "hyb/does-not-exist");
+        assert!(profiles.is_empty());
     }
 }

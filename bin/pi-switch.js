@@ -41,19 +41,19 @@ Usage:
   pi-switch proxy start  [--host <ip>] [--port <port>] [--daemon]
   pi-switch proxy stop
   pi-switch proxy status
-  pi-switch proxy target <profile-name>                # Set proxy target
-  pi-switch proxy failover <profile1,profile2,...>     # Set failover chain
+  pi-switch proxy failover <profile1,profile2,...>     # Same-model fallback order
   pi-switch stats
   pi-switch logs export [--format json|csv] [--output <file>]
   pi-switch doctor
   pi-switch tui
 
-Transparent Proxy Workflow:
+Gateway Workflow:
   1. Add profiles:          pi-switch provider add <name> ...
-  2. Set target:            pi-switch proxy target <primary-profile>
-  3. Set failover:          pi-switch proxy failover <backup1,backup2>
+  2. Expose models:         choose models per profile (tui: 'x'), or expose all
+  3. (optional) Failover:   pi-switch proxy failover <backup1,backup2>
   4. Start proxy:           pi-switch proxy start --daemon
-  5. Use in pi:             pi-switch provider add proxy --preset proxy
+  5. Use in pi:             select the 'pi-switch' provider, then a 'profile/model'
+     The proxy routes by the model name in each request — no target to set.
 
 Aliases: remove → provider delete, rm → provider delete, interactive/ui → tui
 `);
@@ -402,15 +402,15 @@ async function main() {
     // ─── Use (deprecated) ────────────────────────────
 
     if (effectiveCmd === "use") {
-      console.error("⚠️  'pi-switch use' is deprecated with transparent proxy routing.");
+      console.error("⚠️  'pi-switch use' is deprecated with gateway proxy routing.");
       console.error("");
       console.error("New workflow:");
-      console.error("  1. Set proxy target:    pi-switch proxy target <profile-name>");
-      console.error("  2. Set failover chain:  pi-switch proxy failover <profile1,profile2,...>");
+      console.error("  1. Expose models:       pick models per profile (tui: 'x')");
+      console.error("  2. (optional) Failover: pi-switch proxy failover <profile1,profile2,...>");
       console.error("  3. Start proxy:         pi-switch proxy start --daemon");
-      console.error("  4. Install proxy in pi: pi-switch provider add proxy --preset proxy");
+      console.error("  4. Use in pi:           select the 'pi-switch' provider, then a 'profile/model'");
       console.error("");
-      console.error("The proxy will automatically route to target profile with failover.");
+      console.error("The proxy routes by the model name in each request — no target to set.");
       console.error("See: pi-switch tui → Settings → Proxy configuration");
       process.exit(1);
     }
@@ -548,6 +548,7 @@ async function main() {
       if (sub === "target") {
         const target = rest[1];
         if (!target) fail("target profile name required");
+        // Deprecated: gateway routes by model name (profile/model). Recorded for back-compat.
         const result = setProxyTarget(target);
         console.log(result);
         return;
@@ -562,7 +563,7 @@ async function main() {
         return;
       }
 
-      fail("usage: pi-switch proxy [start|stop|status|target|failover]");
+      fail("usage: pi-switch proxy [start|stop|status|failover]");
     }
 
     // ─── Stats ───────────────────────────────────────

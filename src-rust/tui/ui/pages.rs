@@ -160,23 +160,79 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
     status_lines.push(Line::default());
     status_lines.push(label_line(app, i18n::proxy_listen(), format!("{}:{}", proxy.host, proxy.port)));
 
-    // Show targets (auto-selected from exposedModels)
-    let targets_display = if let Some(ref targets) = app.data.daemon.targets {
-        if targets.is_empty() {
-            "—".into()
-        } else {
-            targets.join(", ")
-        }
-    } else {
-        "—".into()
-    };
-    status_lines.push(label_line(app, i18n::proxy_target(), targets_display));
+    // Gateway mode: pi sees one provider that advertises every exposed model as
+    // "profile/model"; the proxy routes by the model name in each request — no single target.
+    let exposed_total: usize = app.data.profiles.iter().map(|p| p.exposed_count).sum();
+    let with_models = app.data.profiles.iter().filter(|p| p.exposed_count > 0).count();
+    status_lines.push(label_line(
+        app,
+        if i18n::is_zh() { "网关" } else { "Gateway" },
+        app.data.config.settings.provider_prefix.clone(),
+    ));
+    status_lines.push(label_line(
+        app,
+        if i18n::is_zh() { "暴露模型" } else { "Models" },
+        format!("{} ({} {})", exposed_total, with_models, if i18n::is_zh() { "个供应商" } else { "providers" }),
+    ));
+    // Informational: the model pi currently has selected.
+    if let Some(ref model) = app.data.pi_default_model {
+        status_lines.push(label_line(
+            app,
+            if i18n::is_zh() { "Pi 当前模型" } else { "Pi model" },
+            model.clone(),
+        ));
+    }
 
     status_lines.push(label_line(
         app,
         i18n::proxy_failover(),
         if proxy.failover.is_empty() { "—".into() } else { proxy.failover.join(" → ") },
     ));
+
+    // Provider health: one line per profile with exposed models, color-coded by circuit breaker state
+    status_lines.push(Line::default());
+    status_lines.push(Line::from(Span::styled(
+        if i18n::is_zh() { "  供应商健康状态:" } else { "  Provider Health:" },
+        Style::default().fg(theme.accent),
+    )));
+    let mut any_profile = false;
+    for row in &app.data.profiles {
+        if row.exposed_count == 0 || row.proxy {
+            continue;
+        }
+        any_profile = true;
+        let dot = if row.circuit_breaker_open {
+            ("●", theme.err, "OPEN")
+        } else {
+            ("●", theme.ok, "OK")
+        };
+        let mut spans = vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(dot.0, Style::default().fg(dot.1).add_modifier(Modifier::BOLD)),
+            Span::raw(format!(" {} ", row.name)),
+        ];
+        if row.in_failover_chain {
+            if let Some(p) = row.failover_priority {
+                let label = if p == 0 { "[target]" } else { "" };
+                if !label.is_empty() {
+                    spans.push(Span::styled(label, Style::default().fg(theme.dim)));
+                } else {
+                    spans.push(Span::styled(format!("[p{}]", p), Style::default().fg(theme.dim)));
+                }
+            }
+        }
+        spans.push(Span::styled(
+            format!(" ({} models)", row.exposed_count),
+            Style::default().fg(theme.dim),
+        ));
+        status_lines.push(Line::from(spans));
+    }
+    if !any_profile {
+        status_lines.push(Line::from(Span::styled(
+            if i18n::is_zh() { "    (无已暴露模型的供应商)" } else { "    (no profiles with exposed models)" },
+            Style::default().fg(theme.dim),
+        )));
+    }
     status_lines.push(Line::default());
     status_lines.push(Line::from(Span::styled(
         format!("  {}", app.data.daemon.message),
@@ -373,13 +429,15 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         &[
             ("↑↓", i18n::key_move()),
-            ("←→/Space", if app.settings_proxy_idx == 0 || app.settings_proxy_idx == 4 { i18n::key_switch() } else { "" }),
-            ("Enter", if app.settings_proxy_idx == 5 {
+            ("←→/Space", if app.settings_proxy_idx == 0 || app.settings_proxy_idx == 3 { i18n::key_switch() } else { "" }),
+            ("Enter", if app.settings_proxy_idx == 4 {
                 if i18n::is_zh() { "编辑" } else { "Edit" }
-            } else if app.settings_proxy_idx == 3 || (app.settings_proxy_idx == 4 && app.settings_user_agent_idx == 0) {
+            } else if app.settings_proxy_idx == 3 && app.settings_user_agent_idx == 0 {
+                i18n::key_edit()
+            } else if app.settings_proxy_idx == 1 || app.settings_proxy_idx == 2 {
                 i18n::key_edit()
             } else {
-                i18n::key_edit()
+                ""
             }),
             ("Esc", i18n::key_back()),
         ]
@@ -397,7 +455,6 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         proxy.failover.join(", ")
     };
-    let target_str = proxy.target.as_deref().unwrap_or("—");
 
     // User-Agent preset display
     let user_agent_presets = crate::tui::app::user_agent_presets();
@@ -417,7 +474,6 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }),
         (i18n::settings_proxy_host(), proxy.host.clone()),
         (i18n::settings_proxy_port(), proxy.port.to_string()),
-        (if i18n::is_zh() { "代理目标" } else { "Proxy Target" }, target_str.to_string()),
         (if i18n::is_zh() { "用户代理" } else { "User-Agent" }, user_agent_display),
         (i18n::settings_proxy_failover(), failover_str),
     ];

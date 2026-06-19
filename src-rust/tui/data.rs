@@ -23,6 +23,8 @@ pub struct UiData {
     pub daemon: DaemonResult,
     pub stats: UsageStats,
     pub backups: Vec<String>,
+    /// Pi's currently selected model (from ~/.pi/agent/settings.json defaultModel)
+    pub pi_default_model: Option<String>,
 }
 
 fn offline_daemon(message: String) -> DaemonResult {
@@ -38,8 +40,17 @@ fn offline_daemon(message: String) -> DaemonResult {
     }
 }
 
-fn list_backup_files() -> Vec<String> {
-    let dir = crate::config::backup_dir();
+/// Read Pi's currently selected model from ~/.pi/agent/settings.json (defaultModel field).
+fn read_pi_default_model() -> Option<String> {
+    let path = dirs::home_dir()?.join(".pi/agent/settings.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("defaultModel")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn list_backup_files() -> Vec<String> {    let dir = crate::config::backup_dir();
     if !dir.exists() {
         return vec![];
     }
@@ -136,10 +147,16 @@ impl UiData {
             daemon: daemon_status().unwrap_or_else(offline_daemon),
             stats,
             backups: list_backup_files(),
+            pi_default_model: read_pi_default_model(),
         }
     }
 
     pub fn refresh(&mut self) {
         *self = Self::load();
+    }
+
+    /// Cheaply re-read just pi's current model (no daemon/stats reload).
+    pub fn refresh_pi_model(&mut self) {
+        self.pi_default_model = read_pi_default_model();
     }
 }

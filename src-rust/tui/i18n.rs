@@ -164,7 +164,6 @@ pub fn home_requests_fmt(total: u64, ok: u64, rate: &str) -> String {
 
 // ─── Proxy labels ────────────────────────────────────────
 
-pub fn proxy_target() -> &'static str { t!("Target", "目标") }
 pub fn proxy_failover() -> &'static str { t!("Failover", "故障转移") }
 pub fn proxy_listen() -> &'static str { t!("Listen", "监听") }
 pub fn proxy_running(pid: u32) -> String {

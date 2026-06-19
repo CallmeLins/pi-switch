@@ -6,7 +6,7 @@ edition = "2021"
 
 [lib]
 path = "src-rust/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # napi-rs

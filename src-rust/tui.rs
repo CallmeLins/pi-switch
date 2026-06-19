@@ -41,6 +41,15 @@ pub fn run_tui() -> Result<(), String> {
         }
     }
 
-    terminal.restore_best_effort()?;
+    let restore_result = terminal.restore_best_effort();
+
+    // Auto-stop the proxy daemon on exit only if this TUI session started it. A daemon
+    // started independently (e.g. `pi-switch proxy start --daemon` from the command line)
+    // is left running.
+    if app.proxy_started_by_tui {
+        let _ = crate::daemon::daemon_stop();
+    }
+
+    restore_result?;
     Ok(())
 }

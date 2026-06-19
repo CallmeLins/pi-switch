@@ -101,13 +101,12 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "   "
         };
 
-        // Row color based on circuit breaker status
-        let row_color = if row.in_failover_chain {
-            if row.circuit_breaker_open {
-                Some(theme.err)
-            } else {
-                Some(theme.ok)
-            }
+        // Row color: red if circuit breaker is open (any profile),
+        // green if in failover chain and healthy, default otherwise.
+        let row_color = if row.circuit_breaker_open {
+            Some(theme.err)
+        } else if row.in_failover_chain {
+            Some(theme.ok)
         } else {
             None
         };
@@ -141,6 +140,15 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 } else {
                     Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
                 },
+            ));
+        }
+
+        // Circuit breaker indicator — red badge for open/half_open
+        if row.circuit_breaker_open {
+            name_spans.push(Span::raw(" "));
+            name_spans.push(Span::styled(
+                "⚠ OPEN",
+                Style::default().fg(theme.err).add_modifier(Modifier::BOLD),
             ));
         }
 

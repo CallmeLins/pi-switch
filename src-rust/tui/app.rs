@@ -107,9 +107,10 @@ pub struct App {
     pub toast: Option<Toast>,
     pub tick: u64,
     pub should_quit: bool,
-    // Pi settings sync
-    pub pi_last_provider: Option<String>,
-    pub pi_settings_mtime: Option<std::time::SystemTime>,
+    /// True only when this TUI session spawned the proxy daemon itself (not when the
+    /// daemon was already running, e.g. started from the command line). Used to decide
+    /// whether to auto-stop the daemon on TUI exit.
+    pub proxy_started_by_tui: bool,
     // Model selection state
     pub model_selection_list: Vec<(String, bool)>, // (model_id, selected)
     pub model_selection_idx: usize,
@@ -172,8 +173,7 @@ impl App {
             toast: None,
             tick: 0,
             should_quit: false,
-            pi_last_provider: None,
-            pi_settings_mtime: None,
+            proxy_started_by_tui: false,
             model_selection_list: vec![],
             model_selection_idx: 0,
             model_selection_loading: false,
@@ -236,9 +236,9 @@ impl App {
     pub fn on_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
 
-        // Check pi settings.json every 10 ticks (~2 seconds)
+        // Refresh pi's current model (~every 2s) so the proxy page stays informative.
         if self.tick % 10 == 0 {
-            self.check_and_sync_pi_provider();
+            self.data.refresh_pi_model();
         }
 
         if let Some(toast) = &mut self.toast {
@@ -640,6 +640,11 @@ impl App {
             KeyCode::Enter => match self.proxy_idx {
                 0 => match daemon_start(None, None) {
                     Ok(result) => {
+                        // started_at is Some only when we actually spawned the daemon
+                        // (not when it was already running). Only then do we own it.
+                        if result.started_at.is_some() {
+                            self.proxy_started_by_tui = true;
+                        }
                         self.push_toast(ToastKind::Success, result.message);
                         self.refresh();
                     }
@@ -647,6 +652,7 @@ impl App {
                 },
                 1 => match daemon_stop() {
                     Ok(result) => {
+                        self.proxy_started_by_tui = false;
                         self.push_toast(ToastKind::Info, result.message);
                         self.refresh();
                     }
@@ -721,7 +727,7 @@ impl App {
             return;
         }
 
-        let row_count = 6; // Language + host + port + target + user-agent + failover
+        let row_count = 5; // Language + host + port + user-agent + failover
         match key.code {
             KeyCode::Up => {
                 self.settings_proxy_idx = self.settings_proxy_idx.saturating_sub(1);
@@ -741,7 +747,7 @@ impl App {
                         }
                         Err(e) => self.push_toast(ToastKind::Error, e),
                     }
-                } else if self.settings_proxy_idx == 4 {
+                } else if self.settings_proxy_idx == 3 {
                     // Cycle User-Agent presets
                     let presets = user_agent_presets();
                     let direction = if matches!(key.code, KeyCode::Left) { -1i32 } else { 1i32 };
@@ -761,16 +767,16 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.settings_proxy_idx == 5 {
+                if self.settings_proxy_idx == 4 {
                     // Open failover editor
                     self.open_failover_editor();
-                } else if self.settings_proxy_idx == 4 && self.settings_user_agent_idx == 0 {
+                } else if self.settings_proxy_idx == 3 && self.settings_user_agent_idx == 0 {
                     // Custom User-Agent - allow editing
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
                     self.settings_edit_input = TextInput::new(text).with_policy(super::text_edit::TextInputPolicy::Any);
                     self.settings_editing_field = Some(self.settings_proxy_idx);
-                } else if self.settings_proxy_idx > 0 && self.settings_proxy_idx != 4 {
-                    // Other editable fields (not User-Agent preset)
+                } else if self.settings_proxy_idx == 1 || self.settings_proxy_idx == 2 {
+                    // Host / port text fields
                     let text = self.get_settings_field_value(self.settings_proxy_idx);
                     let policy = if self.settings_proxy_idx == 2 {
                         super::text_edit::TextInputPolicy::Digits
@@ -791,9 +797,8 @@ impl App {
             0 => String::new(),
             1 => proxy.host.clone(),
             2 => proxy.port.to_string(),
-            3 => proxy.target.as_deref().unwrap_or("").to_string(),
-            4 => proxy.user_agent.as_deref().unwrap_or("").to_string(),
-            5 => if proxy.failover.is_empty() {
+            3 => proxy.user_agent.as_deref().unwrap_or("").to_string(),
+            4 => if proxy.failover.is_empty() {
                 String::new()
             } else {
                 proxy.failover.join(", ")
@@ -823,10 +828,6 @@ impl App {
                 }
             }
             3 => {
-                // Proxy target
-                config.settings.proxy.target = if value.is_empty() { None } else { Some(value) };
-            }
-            4 => {
                 // User-Agent custom value
                 config.settings.proxy.user_agent = if value.is_empty() { None } else { Some(value) };
                 // Set to Custom mode when manually edited
@@ -1568,80 +1569,6 @@ impl App {
             }
             Err(e) => {
                 self.push_toast(ToastKind::Error, e.to_string());
-            }
-        }
-    }
-
-    fn check_and_sync_pi_provider(&mut self) {
-        let pi_settings_path = match dirs::home_dir() {
-            Some(home) => home.join(".pi/agent/settings.json"),
-            None => return,
-        };
-
-        // Check if file exists and get mtime
-        let metadata = match std::fs::metadata(&pi_settings_path) {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-
-        let mtime = match metadata.modified() {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-
-        // Skip if file hasn't changed
-        if let Some(last_mtime) = self.pi_settings_mtime {
-            if mtime == last_mtime {
-                return;
-            }
-        }
-
-        self.pi_settings_mtime = Some(mtime);
-
-        // Read pi settings
-        let content = match std::fs::read_to_string(&pi_settings_path) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        let json: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(j) => j,
-            Err(_) => return,
-        };
-
-        let pi_provider = match json.get("defaultProvider").and_then(|v| v.as_str()) {
-            Some(p) => p.to_string(),
-            None => return,
-        };
-
-        // Check if changed
-        if self.pi_last_provider.as_ref() == Some(&pi_provider) {
-            return;
-        }
-
-        self.pi_last_provider = Some(pi_provider.clone());
-
-        // Check if provider exists in config
-        if !self.data.config.profiles.contains_key(&pi_provider) {
-            return;
-        }
-
-        // Check if already set as target
-        if self.data.config.settings.proxy.target.as_ref() == Some(&pi_provider) {
-            return;
-        }
-
-        // Auto-sync: set as proxy target
-        match ops::set_proxy_target(Some(&pi_provider)) {
-            Ok(_) => {
-                self.refresh();
-                self.push_toast(
-                    ToastKind::Success,
-                    format!("Auto-synced proxy target: {}", pi_provider),
-                );
-            }
-            Err(e) => {
-                self.push_toast(ToastKind::Error, format!("Auto-sync failed: {}", e));
             }
         }
     }

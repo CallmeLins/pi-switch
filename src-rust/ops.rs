@@ -59,8 +59,8 @@ pub fn update_exposed_models(name: &str, model_ids: Vec<String>) -> Result<Optio
 
     save_config(&config)?;
 
-    // Sync all profiles to pi config to keep models.json consistent
-    sync_all_profiles_to_pi()?;
+    // Refresh the single gateway provider in pi's models.json
+    sync_gateway_to_pi()?;
 
     Ok(backup)
 }
@@ -84,6 +84,9 @@ pub fn update_provider_models(name: &str, models: Vec<config::ModelEntry>) -> Re
         .map_err(|e| AppError::json(config::config_path(), e))?;
 
     save_config(&config)?;
+
+    // Refresh the gateway so model metadata in pi's models.json stays current
+    sync_gateway_to_pi()?;
 
     Ok(backup)
 }
@@ -126,8 +129,8 @@ pub fn use_profile(name: &str, mode: Option<&str>) -> Result<UseOutcome> {
         }
     }
 
-    // Sync exposed models to pi config
-    sync_exposed_models_to_pi(name)?;
+    // Sync the gateway provider to pi config
+    sync_gateway_to_pi()?;
 
     let config_backup = backup_config("config")?;
 
@@ -172,6 +175,9 @@ pub fn upsert_profile(
     }
     save_config(&config)?;
 
+    // Keep pi's gateway model list in sync with the profiles
+    sync_gateway_to_pi()?;
+
     Ok(backup)
 }
 
@@ -183,27 +189,14 @@ pub fn remove_profile(name: &str) -> Result<Option<PathBuf>> {
 
     let backup = backup_config("config")?;
 
-    // Remove from models.json
-    let provider_id = provider_id_for(&config, name);
-    let models_path = config::models_path();
-    if models_path.exists() {
-        let mut models: serde_json::Value = {
-            let text = std::fs::read_to_string(&models_path)
-                .map_err(|e| AppError::io(&models_path, e))?;
-            serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
-        };
-
-        if let Some(providers) = models["providers"].as_object_mut() {
-            providers.remove(&provider_id);
-            write_models_atomic(&models)?;
-        }
-    }
-
     config.profiles.remove(name);
     if config.current.as_deref() == Some(name) {
         config.current = config.profiles.keys().next().cloned();
     }
     save_config(&config)?;
+
+    // Rebuild the gateway provider without the removed profile's models
+    sync_gateway_to_pi()?;
 
     Ok(backup)
 }
@@ -388,22 +381,18 @@ pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
 }
 
 
-// ─── Sync Exposed Models to Pi Config ────────────────────
+// ─── Sync Gateway Provider to Pi Config ──────────────────
 
-pub fn sync_exposed_models_to_pi(name: &str) -> Result<()> {
+/// Write a single "gateway" provider into pi's models.json. It advertises every non-proxy
+/// profile's exposedModels as `profile/realModelId`, all pointing at the local proxy, so pi
+/// sees one provider and the proxy routes by the model name in the request body.
+///
+/// This is the only pi provider pi-switch manages. Any legacy per-profile `{prefix}-*` entries
+/// (from the old routing model) are removed; foreign providers are left untouched.
+pub fn sync_gateway_to_pi() -> Result<()> {
     let config = load_config()?;
-    let profile_value = config
-        .profiles
-        .get(name)
-        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
-
-    let profile: ProviderProfile = serde_json::from_value(profile_value.clone())
-        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
-
-    let provider_id = provider_id_for(&config, name);
     let models_path = config::models_path();
 
-    // Load existing models.json
     let mut models: serde_json::Value = if models_path.exists() {
         let text = std::fs::read_to_string(&models_path)
             .map_err(|e| AppError::io(&models_path, e))?;
@@ -416,159 +405,48 @@ pub fn sync_exposed_models_to_pi(name: &str) -> Result<()> {
         .as_object_mut()
         .ok_or_else(|| AppError::Message("invalid models.json".into()))?;
 
-    // Filter models to only exposed ones
-    let exposed_models: Vec<serde_json::Value> = profile.models
-        .into_iter()
-        .filter(|m| profile.exposed_models.contains(&m.id))
-        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
-        .collect();
+    let gateway_id = config.settings.provider_prefix.clone();
+    let legacy_prefix = format!("{}-", gateway_id);
 
-    // Determine baseUrl: use proxy if enabled and target is set
-    let base_url = if let Some(proxy_target) = config.settings.proxy.target.as_ref() {
-        if proxy_target == name {
-            // This is the proxy target, route through proxy server
-            let host = &config.settings.proxy.host;
-            let port = config.settings.proxy.port;
-            format!("http://{}:{}/v1", host, port)
-        } else {
-            // Not the target, use original baseUrl
-            profile.base_url.clone()
-        }
-    } else {
-        // No proxy target configured, use original baseUrl
-        profile.base_url.clone()
-    };
+    // Remove the gateway entry and any legacy per-profile entries, then rebuild fresh.
+    providers.retain(|k, _| k != &gateway_id && !k.starts_with(&legacy_prefix));
 
-    // Build provider entry
-    let mut provider_entry = serde_json::json!({
-        "api": profile.api,
-        "baseUrl": base_url,
-        "apiKey": profile.api_key,
-        "models": exposed_models,
-        "proxy": profile.proxy,
-    });
-
-    if let Some(preset) = profile.preset {
-        provider_entry["preset"] = serde_json::json!(preset);
-    }
-    if let Some(headers) = profile.headers {
-        provider_entry["headers"] = headers;
-    }
-    if let Some(auth_header) = profile.auth_header {
-        provider_entry["authHeader"] = serde_json::json!(auth_header);
-    }
-    if let Some(compat) = profile.compat {
-        provider_entry["compat"] = serde_json::json!(compat);
-    }
-    if let Some(updated_at) = profile.updated_at {
-        provider_entry["updatedAt"] = serde_json::json!(updated_at);
-    }
-
-    providers.insert(provider_id, provider_entry);
-
-    // Write atomically
-    let tmp = config::config_dir().join("models.json.tmp");
-    let json = serde_json::to_string_pretty(&models)
-        .map_err(|e| AppError::json(&models_path, e))?;
-    std::fs::write(&tmp, json + "\n")
-        .map_err(|e| AppError::io(&tmp, e))?;
-    std::fs::rename(&tmp, &models_path)
-        .map_err(|e| AppError::io(&models_path, e))?;
-
-    Ok(())
-}
-
-pub fn sync_all_profiles_to_pi() -> Result<()> {
-    let config = load_config()?;
-    let models_path = config::models_path();
-
-    // Load existing models.json
-    let mut models: serde_json::Value = if models_path.exists() {
-        let text = std::fs::read_to_string(&models_path)
-            .map_err(|e| AppError::io(&models_path, e))?;
-        serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
-    } else {
-        serde_json::json!({ "providers": {} })
-    };
-
-    let providers = models["providers"]
-        .as_object_mut()
-        .ok_or_else(|| AppError::Message("invalid models.json".into()))?;
-
-    // Sync all non-proxy profiles
+    // Build the namespaced model union across all non-proxy profiles.
+    let mut gateway_models: Vec<serde_json::Value> = Vec::new();
     for (name, profile_value) in &config.profiles {
         let profile: ProviderProfile = match serde_json::from_value(profile_value.clone()) {
             Ok(p) => p,
             Err(_) => continue,
         };
-
         if profile.proxy {
             continue;
         }
-
-        let provider_id = provider_id_for(&config, name);
-
-        // Filter models to only exposed ones
-        let exposed_models: Vec<serde_json::Value> = profile.models
-            .into_iter()
-            .filter(|m| profile.exposed_models.contains(&m.id))
-            .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
-            .collect();
-
-        // Determine baseUrl: use proxy if enabled and target is set
-        let base_url = if let Some(proxy_target) = config.settings.proxy.target.as_ref() {
-            if proxy_target == name {
-                // This is the proxy target, route through proxy server
-                let host = &config.settings.proxy.host;
-                let port = config.settings.proxy.port;
-                format!("http://{}:{}/v1", host, port)
-            } else {
-                // Not the target, use original baseUrl
-                profile.base_url.clone()
+        for real_id in &profile.exposed_models {
+            // Reuse the profile's model metadata (contextWindow/maxTokens/...) when available.
+            let mut entry = profile.models.iter()
+                .find(|m| &m.id == real_id)
+                .cloned()
+                .unwrap_or_else(|| config::ModelEntry { id: real_id.clone(), ..Default::default() });
+            entry.id = format!("{}/{}", name, real_id);
+            if let Ok(v) = serde_json::to_value(&entry) {
+                gateway_models.push(v);
             }
-        } else {
-            // No proxy target configured, use original baseUrl
-            profile.base_url.clone()
-        };
-
-        // Build provider entry
-        let mut provider_entry = serde_json::json!({
-            "api": profile.api,
-            "baseUrl": base_url,
-            "apiKey": profile.api_key,
-            "models": exposed_models,
-            "proxy": profile.proxy,
-        });
-
-        if let Some(preset) = profile.preset {
-            provider_entry["preset"] = serde_json::json!(preset);
         }
-        if let Some(headers) = profile.headers {
-            provider_entry["headers"] = headers;
-        }
-        if let Some(auth_header) = profile.auth_header {
-            provider_entry["authHeader"] = serde_json::json!(auth_header);
-        }
-        if let Some(compat) = profile.compat {
-            provider_entry["compat"] = serde_json::json!(compat);
-        }
-        if let Some(updated_at) = profile.updated_at {
-            provider_entry["updatedAt"] = serde_json::json!(updated_at);
-        }
-
-        providers.insert(provider_id, provider_entry);
     }
 
-    // Write atomically
-    let tmp = config::config_dir().join("models.json.tmp");
-    let json = serde_json::to_string_pretty(&models)
-        .map_err(|e| AppError::json(&models_path, e))?;
-    std::fs::write(&tmp, json + "\n")
-        .map_err(|e| AppError::io(&tmp, e))?;
-    std::fs::rename(&tmp, &models_path)
-        .map_err(|e| AppError::io(&models_path, e))?;
+    let host = &config.settings.proxy.host;
+    let port = config.settings.proxy.port;
+    let gateway_entry = serde_json::json!({
+        "api": "openai-completions",
+        "baseUrl": format!("http://{}:{}/v1", host, port),
+        "apiKey": "pi-switch-proxy",
+        "models": gateway_models,
+        "proxy": false,
+    });
 
-    Ok(())
+    providers.insert(gateway_id, gateway_entry);
+
+    write_models_atomic(&models)
 }
 
 // Build multiple candidate URLs to try (following cc-switch logic)
@@ -685,6 +563,9 @@ pub fn parse_model_ids(payload: &serde_json::Value) -> Vec<String> {
     out
 }
 
+/// Deprecated: routing is now driven by the model name in the request body (gateway mode),
+/// so there is no single "target". Kept for config back-compat — it records the field and
+/// refreshes the gateway, but the value no longer affects routing.
 pub fn set_proxy_target(target: Option<&str>) -> Result<()> {
     let mut config = load_config()?;
 
@@ -698,7 +579,7 @@ pub fn set_proxy_target(target: Option<&str>) -> Result<()> {
     }
 
     save_config(&config)?;
-    sync_all_profiles_to_pi()?;
+    sync_gateway_to_pi()?;
     Ok(())
 }
 

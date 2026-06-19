@@ -354,12 +354,15 @@ pub fn run_native_tui() -> napi::Result<()> {
 #[napi]
 pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
     use std::sync::Arc;
-    use tokio::sync::RwLock;
 
-    let config = load_config().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let state = Arc::new(proxy::ProxyState {
-        config: Arc::new(RwLock::new(config)),
-    });
+    // Ensure pi's models.json has a fresh gateway provider before serving.
+    if let Err(e) = ops::sync_gateway_to_pi() {
+        eprintln!("Warning: failed to sync gateway provider: {}", e);
+    }
+
+    // Config is loaded per request inside the handlers, so the running proxy always
+    // reflects the latest target/failover without needing a restart.
+    let state = Arc::new(proxy::ProxyState {});
 
     let app = proxy::make_router(state);
     let addr = format!("{}:{}", host, port);
@@ -559,39 +562,16 @@ pub fn update_provider_models(name: String, models: Vec<ModelEntryInput>) -> nap
 
 #[napi]
 pub fn set_proxy_target(target: String) -> napi::Result<String> {
-    let mut config = config::load_config()
+    // Deprecated: gateway mode routes by the model name in the request body, so there is no
+    // single target. Kept for back-compat — records the field and refreshes the gateway.
+    ops::set_proxy_target(Some(&target))
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    // Validate target profile exists
-    if !config.profiles.contains_key(&target) {
-        return Err(napi::Error::from_reason(format!("Profile '{}' does not exist", target)));
-    }
-
-    // Validate target is not a proxy profile
-    if let Some(profile_value) = config.profiles.get(&target) {
-        if let Ok(profile) = serde_json::from_value::<config::ProviderProfile>(profile_value.clone()) {
-            if profile.proxy {
-                return Err(napi::Error::from_reason(format!("Cannot set proxy profile '{}' as target", target)));
-            }
-        }
-    }
-
-    let backup = config::backup_config("config")
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    config.settings.proxy.target = Some(target.clone());
-    config::save_config(&config)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    // Sync all profiles to apply new proxy routing
-    ops::sync_all_profiles_to_pi()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    let mut msg = format!("Proxy target set to '{}'", target);
-    if let Some(path) = backup {
-        msg.push_str(&format!("\nBackup: {}", path.display()));
-    }
-    Ok(msg)
+    Ok(format!(
+        "Note: 'proxy target' is deprecated. The gateway now routes by model name (profile/model). \
+         Recorded '{}' for back-compat.",
+        target
+    ))
 }
 
 #[napi]
