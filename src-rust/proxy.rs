@@ -507,9 +507,13 @@ async fn forward_with_failover(
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
-    let client = ReqwestClient::new();
+    let mut client_builder = ReqwestClient::builder();
+    if let Some(ua) = config.settings.proxy.user_agent.as_deref() {
+        client_builder = client_builder.user_agent(ua);
+    }
+    let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
     let mut half_open_used = false;
-    let user_agent = config.settings.proxy.user_agent.as_deref();
+    let user_agent = config.settings.proxy.user_agent.clone();
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -563,9 +567,9 @@ async fn forward_with_failover(
             let mut req = client.post(&url)
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
-            if let Some(ua) = user_agent {
-                req = req.header("user-agent", ua);
-            }
+            if let Some(ref ua) = user_agent {
+        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+    }
             let resp = req.json(&anthro_body).send().await;
 
             match resp {
@@ -605,9 +609,9 @@ async fn forward_with_failover(
 
             let mut req = client.post(&url)
                 .header("Authorization", format!("Bearer {}", api_key));
-            if let Some(ua) = user_agent {
-                req = req.header("user-agent", ua);
-            }
+            if let Some(ref ua) = user_agent {
+        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+    }
             let resp = req.json(body).send().await;
 
             match resp {
@@ -658,9 +662,13 @@ async fn forward_anthropic_with_failover(
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
-    let client = ReqwestClient::new();
+    let mut client_builder = ReqwestClient::builder();
+    if let Some(ua) = config.settings.proxy.user_agent.as_deref() {
+        client_builder = client_builder.user_agent(ua);
+    }
+    let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
     let mut half_open_used = false;
-    let user_agent = config.settings.proxy.user_agent.as_deref();
+    let user_agent = config.settings.proxy.user_agent.clone();
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -700,9 +708,9 @@ async fn forward_anthropic_with_failover(
         let mut req = client.post(&url)
             .header("x-api-key", &api_key)
             .header("anthropic-version", "2023-06-01");
-        if let Some(ua) = user_agent {
-            req = req.header("user-agent", ua);
-        }
+        if let Some(ref ua) = user_agent {
+        req = req.header(reqwest::header::USER_AGENT, ua.as_str());
+    }
         let resp = req.json(body).send().await;
 
         match resp {
