@@ -139,11 +139,19 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ));
         }
 
-        // Circuit breaker indicator — red badge for open/half_open
+        // Circuit breaker indicator — show status code (e.g. "502") instead of icon
         if row.circuit_breaker_open {
             name_spans.push(Span::raw(" "));
+            let code = row.circuit_breaker_error
+                .as_deref()
+                .and_then(|e| {
+                    // Extract status code from "HTTP 502" or "status 503" etc.
+                    e.split_whitespace()
+                        .find(|w| w.chars().all(|c| c.is_ascii_digit()))
+                })
+                .unwrap_or("ERR");
             name_spans.push(Span::styled(
-                "⚠ OPEN",
+                code,
                 Style::default().fg(theme.err).add_modifier(Modifier::BOLD),
             ));
         }

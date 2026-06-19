@@ -14,6 +14,8 @@ pub struct ProfileRow {
     pub in_failover_chain: bool,
     pub failover_priority: Option<usize>, // 0=target, 1=p1, 2=p2, ...
     pub circuit_breaker_open: bool,
+    /// Last circuit breaker error (e.g. "HTTP 502"), used for status display.
+    pub circuit_breaker_error: Option<String>,
 }
 
 pub struct UiData {
@@ -94,6 +96,8 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
             let circuit_breaker_open = cb_status
                 .map(|s| s.state == "open" || s.state == "half_open")
                 .unwrap_or(false);
+            let circuit_breaker_error = cb_status
+                .and_then(|s| s.last_error.clone());
 
             ProfileRow {
                 name: name.clone(),
@@ -127,6 +131,7 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
                 in_failover_chain,
                 failover_priority: priority,
                 circuit_breaker_open,
+                circuit_breaker_error,
             }
         })
         .collect()

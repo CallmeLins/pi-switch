@@ -201,15 +201,20 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
             continue;
         }
         any_profile = true;
-        let dot = if row.circuit_breaker_open {
-            ("●", theme.err, "OPEN")
+        let dot_color = if row.circuit_breaker_open { theme.err } else { theme.ok };
+        let status_text: String = if row.circuit_breaker_open {
+            row.circuit_breaker_error
+                .as_deref()
+                .and_then(|e| e.split_whitespace().find(|w| w.chars().all(|c| c.is_ascii_digit())))
+                .unwrap_or("ERR")
+                .to_string()
         } else {
-            ("●", theme.ok, "OK")
+            "OK".to_string()
         };
         let mut spans = vec![
             Span::styled("    ", Style::default()),
-            Span::styled(dot.0, Style::default().fg(dot.1).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(" {} ", row.name)),
+            Span::styled(format!("{} ", status_text), Style::default().fg(dot_color).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("{} ", row.name)),
         ];
         if row.in_failover_chain {
             if let Some(p) = row.failover_priority {
