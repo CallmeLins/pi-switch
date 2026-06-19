@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {
-  initConfig, addProvider, listProfiles, showProfile, useProfile, removeProfile,
+  initConfig, addProvider, listProfiles, showProfile, removeProfile,
   listPresets, showPreset, listBackups, doctor,
   daemonStartNative, daemonStopNative, daemonStatusNative,
   getUsageStats, exportConfig, importConfig,
@@ -10,7 +10,6 @@ import {
   runNativeTui,
   updateExposedModels,
   updateProviderModels,
-  setProxyTarget,
   setProxyFailover,
 } from "../index.js";
 import * as readline from "readline";
@@ -399,22 +398,6 @@ async function main() {
       fail(`unknown provider subcommand: '${sub}'`);
     }
 
-    // ─── Use (deprecated) ────────────────────────────
-
-    if (effectiveCmd === "use") {
-      console.error("⚠️  'pi-switch use' is deprecated with gateway proxy routing.");
-      console.error("");
-      console.error("New workflow:");
-      console.error("  1. Expose models:       pick models per profile (tui: 'x')");
-      console.error("  2. (optional) Failover: pi-switch proxy failover <profile1,profile2,...>");
-      console.error("  3. Start proxy:         pi-switch proxy start --daemon");
-      console.error("  4. Use in pi:           select the 'pi-switch' provider, then a 'profile/model'");
-      console.error("");
-      console.error("The proxy routes by the model name in each request — no target to set.");
-      console.error("See: pi-switch tui → Settings → Proxy configuration");
-      process.exit(1);
-    }
-
     // ─── Presets ─────────────────────────────────────
 
     if (effectiveCmd === "presets" || effectiveCmd === "preset") {
@@ -542,15 +525,6 @@ async function main() {
         } else {
           console.log(result.message);
         }
-        return;
-      }
-
-      if (sub === "target") {
-        const target = rest[1];
-        if (!target) fail("target profile name required");
-        // Deprecated: gateway routes by model name (profile/model). Recorded for back-compat.
-        const result = setProxyTarget(target);
-        console.log(result);
         return;
       }
 

@@ -9,7 +9,7 @@
 
 **TUI + CLI dual-mode profile switcher for pi agent**
 
-Manage provider profiles, switch models.json, and run a local proxy with failover — via an interactive TUI or CLI.
+Manage provider profiles and run a local model-name routing gateway with failover — via an interactive TUI or CLI.
 
 [English](#) | [中文](README_ZH.md)
 
@@ -65,9 +65,8 @@ pi-switch provider delete <name>
 pi-switch provider expose <name> <model-ids...>    # Expose models to pi agent
 pi-switch provider fetch-models <name>             # Fetch models from API
 
-# Proxy
-pi-switch proxy target <name>                      # Set proxy target
-pi-switch proxy failover <p1,p2,...>               # Set failover chain
+# Proxy (gateway)
+pi-switch proxy failover <p1,p2,...>               # Same-model fallback chain
 pi-switch proxy start --daemon                     # Start proxy daemon
 pi-switch proxy status
 
@@ -88,7 +87,7 @@ pi-switch stats                                     # View request statistics
 |----------|------------|
 | 🔌 **Provider Management** | CRUD, duplicate, search/filter, model management, expose to pi agent |
 | 💡 **Built-in Presets** | OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI — add profiles instantly |
-| 🌉 **Local Proxy** | OpenAI-compatible, transparent routing, Anthropic auto-conversion, failover, circuit breaker |
+| 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, custom User-Agent, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
 | 📊 **Usage Stats** | Per-provider, per-model request metrics & latency |
@@ -99,7 +98,7 @@ pi-switch stats                                     # View request statistics
 
 ## 🎯 Core Workflow
 
-### Provider Management & Intelligent Failover
+### Gateway Routing & Failover
 
 ```mermaid
 graph LR
@@ -108,13 +107,13 @@ graph LR
         B --> C[Expose to Pi]
         C --> D[Set Failover Chain]
     end
-    
+
     subgraph Runtime["🚀 Runtime"]
-        E[Request] --> F{Filter by Model}
-        F --> G[Try Target]
+        E["Request<br/>model: provider-a/gpt-5.4"] --> F{Resolve Route}
+        F --> G[Try provider-a]
         G --> H{Success?}
         H -->|✓| I[Response]
-        H -->|✗ 429/5xx| J[Try Failover]
+        H -->|✗ 429/5xx| J[Try provider-b]
         J --> K{Success?}
         K -->|✓| I
         K -->|✗| L[Circuit Breaker]
@@ -123,7 +122,7 @@ graph LR
         N -->|✓| G
         N -->|✗| M
     end
-    
+
     Setup --> Runtime
 
     style A fill:#50fa7b,stroke:#50fa7b,color:#282a36
@@ -134,35 +133,37 @@ graph LR
 
 ### Step by Step
 
-**1. Add a provider** (CLI or TUI)  
+**1. Add a provider** (CLI or TUI)
 ```bash
-pi-switch provider add relay-a --api openai --base-url https://relay.example.com/v1 \
-    --api-key '$API_KEY' --models deepseek-v4-pro,deepseek-chat
+pi-switch provider add provider-a --api openai-completions --base-url https://api.example.com/v1 \
+    --api-key '$API_KEY' --models gpt-5.4,claude-sonnet-4-5
 ```
 In TUI: `Profiles → a → fill form → Ctrl+S`
 
-**2. Expose models to pi agent** — choose which models appear in `~/.pi/agent/models.json`  
+**2. Expose models to pi agent** — choose which models appear in `~/.pi/agent/models.json`
 ```bash
-pi-switch provider expose relay-a deepseek-v4-pro
+pi-switch provider expose provider-a gpt-5.4
 ```
 In TUI: `Profiles → select provider → x`
 
-**3. Set up proxy failover** — define primary target + fallback chain  
+**3. Start the proxy** — it writes a single `pi-switch` gateway provider to pi
 ```bash
-pi-switch proxy target deepseek-official
-pi-switch proxy failover relay-a,relay-b
+pi-switch proxy failover provider-b,provider-c          # optional same-model fallback
 pi-switch proxy start --daemon
 ```
 
-**4. Use it in pi** — models routed through proxy now appear in pi's `/model`
+**4. Use in pi** — select the `pi-switch` provider, then pick a `profile/model` like `provider-a/gpt-5.4`
 
-### How Failover Works
+### How Gateway Routing Works
 
-Requests are intelligently routed by model availability:
-- **Smart routing** — only tries providers that support the requested model
-- **Automatic failover** — switches on 429/5xx errors or network failures
+Requests are routed by the model name in the request body — no out-of-band state, no "current target":
+
+- **Model-name routing** — `"model": "provider-a/gpt-5.4"` resolves to profile `provider-a`, real model `gpt-5.4`; the proxy rewrites the body before forwarding upstream
+- **Single gateway provider** — pi sees one `pi-switch` provider advertising every exposed model as `profile/realModelId`; switching model in pi = sending a different model string = instant routing change
+- **Automatic failover** — same-model fallback across the configured chain on 429/5xx errors or network failures
 - **Circuit breaker** — after 3 consecutive failures, provider enters 60s cooldown; auto-recovery on half-open probe success
-- **Model isolation** — `exposedModels` keeps pi config clean while `models` enables full failover
+- **OpenAI ↔ Anthropic** — transparently converts between chat completions and messages APIs
+- **Custom User-Agent** — set a custom User-Agent string (e.g. `Codex/1.0`) to pass client checks from upstream channels
 
 ---
 
@@ -178,7 +179,7 @@ pi-switch/
 │   ├── config.rs            # Config load/save, types
 │   ├── ops.rs               # Core operations
 │   ├── presets.rs           # Built-in provider presets
-│   ├── proxy.rs             # Proxy server (failover, circuit breaker)
+│   ├── proxy.rs             # Proxy server (gateway routing, failover, circuit breaker)
 │   ├── daemon.rs            # Daemon lifecycle
 │   ├── stats.rs             # Request log aggregation
 │   ├── sync.rs              # Encrypted export/import
@@ -187,31 +188,30 @@ pi-switch/
 │       ├── form.rs          # Provider form state
 │       ├── i18n.rs          # Bilingual (EN/ZH)
 │       └── ui/              # Rendering (chrome, pages, overlays)
-├── src/                     # JavaScript layer
-│   ├── commands.js          # CLI commands
-│   ├── proxy.js             # JS proxy server
-│   └── tui.js               # JS TUI wrapper
+├── src/                     # JavaScript layer (pi extension support)
 ├── extensions/index.ts      # Pi agent extension (/piswitch)
 └── Cargo.toml
 ```
 
 **Config files:**
-- `~/.pi-switch/config.json` — profiles, proxy settings, current selection
+- `~/.pi-switch/config.json` — profiles, proxy settings, failover chain
 - `~/.pi-switch/backups/` — timestamped auto-backups on every mutation
-- `~/.pi/agent/models.json` — pi's provider registry (written by pi-switch)
+- `~/.pi/agent/models.json` — pi's provider registry (pi-switch writes a single gateway provider)
 
 ---
 
 ## ❓ FAQ
 
 <details>
-<summary><b>How do I switch pi to a different provider?</b></summary>
+<summary><b>How do I switch models in pi?</b></summary>
 <br>
 
+In pi, open `/model` and pick any advertised `profile/model` (e.g. `provider-a/gpt-5.4`). The proxy routes by the model name in each request — no extra step needed.
+
+To add more models, expose them in TUI (`Profiles → select provider → x`) or via CLI:
 ```bash
-pi-switch use <name>
+pi-switch provider expose <name> <model-id>...
 ```
-Or in TUI: navigate to Profiles, press `Space` on any profile.
 
 </details>
 
@@ -219,8 +219,13 @@ Or in TUI: navigate to Profiles, press `Space` on any profile.
 <summary><b>How do I set up failover?</b></summary>
 <br>
 
-In TUI: `Settings → Failover chain → Enter` → enter comma-separated names → `Enter`.
-Or directly edit `~/.pi-switch/config.json` under `settings.proxy.failover`.
+In TUI: `Settings → Failover` → `Enter` → enter comma-separated profile names → `Enter`.
+Or via CLI:
+```bash
+pi-switch proxy failover provider-b,provider-c
+```
+
+Profiles in the failover chain that expose the same model are tried in order when the primary fails.
 
 </details>
 
@@ -229,37 +234,36 @@ Or directly edit `~/.pi-switch/config.json` under `settings.proxy.failover`.
 
 <br>
 
-The `[proxy]` badge indicates this profile is configured to route through the local transparent proxy. When a profile is set as the proxy target, its baseUrl automatically points to the proxy server (e.g., `http://127.0.0.1:8190`), and all requests are transparently routed with automatic failover and circuit breaker protection.
+The `[proxy]` badge indicates this profile is a meta-profile (with `"proxy": true`). Proxy profiles are used to register a pi provider that points to the local gateway. They are excluded from upstream routing.
 
-To use the proxy:
-1. Set a target profile: `pi-switch proxy target <name>`
-2. Configure failover chain: `pi-switch proxy failover <p1,p2,...>`
-3. Start the proxy: `pi-switch proxy start --daemon`
-4. Add the proxy profile to pi: `pi-switch provider add proxy --preset proxy`
+In the current gateway mode, proxy profiles are typically not needed — the proxy automatically writes a single `pi-switch` gateway provider to pi's models.json on startup.
 
 </details>
 
 <details>
-<summary><b>How does transparent proxy routing work?</b></summary>
+<summary><b>How does gateway routing work?</b></summary>
 
 <br>
 
-When you set a profile as the proxy target, its `baseUrl` is automatically rewritten to point to the local proxy server. Pi's requests are transparently routed through the proxy with intelligent failover:
+The proxy advertises every exposed model as `profile/realModelId` under a single `pi-switch` provider. When pi sends a request with `"model": "provider-a/gpt-5.4"`, the proxy:
+
+1. Splits on the first `/` — profile `provider-a`, real model `gpt-5.4`
+2. Routes to the `provider-a` profile's upstream, rewriting `body.model` to `gpt-5.4`
+3. On failure (429/5xx), tries the failover chain for any other profile exposing `gpt-5.4`
 
 ```bash
-# 1. Set proxy target
-pi-switch proxy target deepseek-official
+# 1. Expose models (per profile)
+pi-switch provider expose provider-a gpt-5.4
+pi-switch provider expose provider-b gpt-5.4
 
 # 2. Set failover chain (optional)
-pi-switch proxy failover relay-a,relay-b
+pi-switch proxy failover provider-b
 
 # 3. Start proxy daemon
 pi-switch proxy start --daemon
 ```
 
-Now when pi uses the `deepseek-official` configuration, all requests automatically go through the proxy with smart failover to `relay-a` → `relay-b` on 429/5xx errors.
-
-The proxy routes by model availability — only providers with the requested model in their `models` list are tried.
+In pi, select the `pi-switch` provider, then `provider-a/gpt-5.4`. The model name in each request determines the route — no "target" to manage.
 
 </details>
 
@@ -281,7 +285,10 @@ npm run build:native           # Build Rust addon (release)
 cargo build                    # Rust-only build
 cargo clippy                   # Lint
 cargo fmt                      # Format
+cargo test --release --lib     # Run unit tests
 ```
+
+**Note:** Stop the TUI/daemon before `npm run build:native` to avoid file-lock errors on Windows.
 
 ---
 
