@@ -87,7 +87,7 @@ pi-switch stats                                     # View request statistics
 |----------|------------|
 | 🔌 **Provider Management** | CRUD, duplicate, search/filter, model management, expose to pi agent |
 | 💡 **Built-in Presets** | OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI — add profiles instantly |
-| 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, User-Agent disguise, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
+| 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, SSE streaming, User-Agent disguise, request-body filtering, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
 | 📊 **Usage Stats** | Per-provider, per-model request metrics & latency |
@@ -162,8 +162,11 @@ Requests are routed by the model name in the request body — no out-of-band sta
 - **Single gateway provider** — pi sees one `pi-switch` provider advertising every exposed model as `profile/realModelId`; switching model in pi = sending a different model string = instant routing change
 - **Automatic failover** — same-model fallback across the configured chain on 429/5xx errors or network failures
 - **Circuit breaker** — after 3 consecutive failures, provider enters 60s cooldown; auto-recovery on half-open probe success
+- **Streaming (SSE)** — same-format requests (openai→openai, anthropic→anthropic) stream token-by-token; upstream response headers (Content-Type, etc.) are preserved
 - **OpenAI ↔ Anthropic** — transparently converts between chat completions and messages APIs
 - **User-Agent disguise** — built-in presets (Claude Code / Codex / Gemini) send the matching client's real User-Agent (and headers like `anthropic-beta`) to pass upstream client checks; settable globally or per-profile
+
+> **Known limitation** — the OpenAI ↔ Anthropic **conversion** path can't stream: it parses the full JSON to convert formats. If pi sends `stream: true` but the model routes to a cross-format upstream (OpenAI request → Anthropic upstream, or vice-versa), the reply comes back as a single non-streamed response. Same-format routes stream normally.
 
 ---
 

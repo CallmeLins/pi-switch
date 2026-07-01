@@ -87,7 +87,7 @@ pi-switch stats                                     # 查看请求统计
 |------|------|
 | 🔌 **Provider 管理** | 增删改查、复制、搜索/过滤、模型管理、暴露到 pi agent |
 | 💡 **内置预设** | OpenRouter、Anthropic、DeepSeek、SiliconFlow、OpenAI — 一键创建配置 |
-| 🌉 **模型名网关** | 无状态按 `profile/model` 路由、User-Agent 伪装、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
+| 🌉 **模型名网关** | 无状态按 `profile/model` 路由、SSE 流式、User-Agent 伪装、请求体过滤、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
 | 🖥️ **交互式 TUI** | ratatui 驱动、Dracula 主题、鼠标支持、vim 键位 (`hjkl`) |
 | 🌐 **双语支持** | English / 中文，持久化到配置，Settings 中切换 |
 | 📊 **使用统计** | 按 provider、按模型的请求指标与延迟 |
@@ -162,8 +162,11 @@ pi-switch proxy start --daemon
 - **单个网关 provider** — pi 只看到一个 `pi-switch` provider，下面列出所有暴露模型（格式 `profile/真实模型ID`）；在 pi 中切换模型 = 发送不同的 model 字符串 = 即时路由切换
 - **自动故障转移** — 429/5xx 或网络错误时，按配置链进行同模型 fallback
 - **断路器保护** — 连续 3 次失败后进入 60s 冷却，半开探测成功后自动恢复
+- **流式（SSE）** — 同格式请求（openai→openai、anthropic→anthropic）逐字流式转发；保留上游响应头（Content-Type 等）
 - **OpenAI ↔ Anthropic** — 自动在 chat completions 和 messages API 间转换
 - **User-Agent 伪装** — 内置 Claude Code / Codex / Gemini 预设，发送对应客户端的真实 User-Agent（及 `anthropic-beta` 等头）以通过上游客户端校验；支持全局或按 profile 设置
+
+> **已知限制** — OpenAI ↔ Anthropic **转换**路径无法流式：它需要解析完整 JSON 来转换格式。如果 pi 发 `stream: true` 但模型路由到跨格式上游（OpenAI 请求 → Anthropic 上游，或反之），响应会以单次非流式返回。同格式路由正常流式。
 
 ---
 
