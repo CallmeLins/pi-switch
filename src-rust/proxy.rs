@@ -408,6 +408,7 @@ async fn handle_chat_completions(
 ) -> Response {
     let config = crate::config::load_config().unwrap_or_default();
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let body_value = filter_private_params(body_value);
 
     // Route purely by the model name in the body: "profile/realModel" → that profile
     // (+ same-model failover), and the real model id to send upstream.
@@ -442,6 +443,7 @@ async fn handle_messages(
 ) -> Response {
     let config = crate::config::load_config().unwrap_or_default();
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let body_value = filter_private_params(body_value);
 
     let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let (candidates, real_model) = resolve_route(&config, requested_model);
@@ -540,6 +542,80 @@ fn resolve_route(config: &crate::config::PiSwitchConfig, requested: &str) -> (Ve
         }
     }
     (profiles, requested.to_string())
+}
+
+// ─── Request body filtering ───────────────────────────────
+
+/// Strip `_`-prefixed private fields recursively before forwarding upstream, so internal
+/// tracking params don't leak or trip strict upstream channels. JSON-Schema field names
+/// (under properties / patternProperties / definitions / $defs) are user data and kept.
+/// Ported from cc-switch's body_filter.
+fn filter_private_params(value: Value) -> Value {
+    fn recurse(value: Value, parent_key: Option<&str>) -> Value {
+        match value {
+            Value::Object(map) => {
+                let in_schema_names = matches!(
+                    parent_key,
+                    Some("properties" | "patternProperties" | "definitions" | "$defs")
+                );
+                let filtered = map
+                    .into_iter()
+                    .filter_map(|(key, val)| {
+                        if key.starts_with('_') && !in_schema_names {
+                            None
+                        } else {
+                            let child = recurse(val, Some(&key));
+                            Some((key, child))
+                        }
+                    })
+                    .collect();
+                Value::Object(filtered)
+            }
+            Value::Array(arr) => {
+                Value::Array(arr.into_iter().map(|v| recurse(v, parent_key)).collect())
+            }
+            other => other,
+        }
+    }
+    recurse(value, None)
+}
+
+// ─── Response passthrough (streaming + header preservation) ─
+
+/// Upstream headers to forward to the client, minus per-hop framing headers the
+/// server recomputes. Keeps Content-Type / Content-Encoding / SSE headers intact.
+fn forward_headers(
+    src: &reqwest::header::HeaderMap,
+) -> Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> {
+    src.iter()
+        .filter(|(n, _)| {
+            let s = n.as_str();
+            !s.eq_ignore_ascii_case("content-length")
+                && !s.eq_ignore_ascii_case("transfer-encoding")
+                && !s.eq_ignore_ascii_case("connection")
+        })
+        .map(|(n, v)| (n.clone(), v.clone()))
+        .collect()
+}
+
+/// Stream an upstream response straight through to the client, preserving status and
+/// headers. Enables token-by-token SSE and keeps Content-Type (which the old buffered
+/// path dropped). Used for same-format passthrough (not the OpenAI↔Anthropic convert path).
+fn stream_response(r: reqwest::Response) -> Response {
+    let status = r.status().as_u16();
+    let headers = forward_headers(r.headers());
+    let mut builder = Response::builder().status(status);
+    for (name, value) in headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Body::from_stream(r.bytes_stream()))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(Body::empty())
+                .unwrap()
+        })
 }
 
 async fn forward_with_failover(
@@ -668,13 +744,10 @@ async fn forward_with_failover(
                 Ok(r) => {
                     let status = r.status();
                     if status.is_success() {
-                        let body_bytes = r.bytes().await.unwrap_or_default();
                         record_success(name, is_half_open).await;
                         log_request(name, true, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
-                        return Ok(Response::builder()
-                            .status(status.as_u16())
-                            .body(Body::from(body_bytes))
-                            .unwrap());
+                        // Stream straight through (preserves Content-Type + enables SSE).
+                        return Ok(stream_response(r));
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
                         record_failure(name, circuit_settings, &format!("HTTP {}", status_code), is_half_open).await;
@@ -682,12 +755,9 @@ async fn forward_with_failover(
                         circuit_state = read_circuit_state().await;
                         continue;
                     } else {
-                        let body_bytes = r.bytes().await.unwrap_or_default();
+                        // Non-retryable error: pass the upstream response through unchanged.
                         log_request(name, false, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
-                        return Ok(Response::builder()
-                            .status(status.as_u16())
-                            .body(Body::from(body_bytes))
-                            .unwrap());
+                        return Ok(stream_response(r));
                     }
                 }
                 Err(e) => {
@@ -768,14 +838,12 @@ async fn forward_anthropic_with_failover(
         match resp {
             Ok(r) if r.status().is_success() || !should_retry(r.status().as_u16()) => {
                 let status = r.status();
-                let body_bytes = r.bytes().await.unwrap_or_default();
                 if status.is_success() {
                     record_success(name, is_half_open).await;
                 }
-                return Ok(Response::builder()
-                    .status(status.as_u16())
-                    .body(Body::from(body_bytes))
-                    .unwrap());
+                log_request(name, status.is_success(), None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                // Anthropic → Anthropic passthrough: stream through, preserve headers.
+                return Ok(stream_response(r));
             }
             Ok(r) => {
                 let status = r.status().as_u16();
@@ -834,7 +902,7 @@ async fn log_request(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_route;
+    use super::{filter_private_params, resolve_route};
     use crate::config::PiSwitchConfig;
 
     fn cfg(profiles: serde_json::Value, failover: Vec<&str>) -> PiSwitchConfig {
@@ -896,5 +964,41 @@ mod tests {
         }), vec![]);
         let (profiles, _real) = resolve_route(&c, "hyb/does-not-exist");
         assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn filter_strips_top_level_and_nested_private_fields() {
+        let input = serde_json::json!({
+            "model": "gpt-5.4",
+            "_internal_id": "abc",
+            "messages": [{ "role": "user", "content": "hi", "_token": "secret" }],
+        });
+        let out = filter_private_params(input);
+        assert!(out.get("model").is_some());
+        assert!(out.get("_internal_id").is_none());
+        let msg = &out["messages"][0];
+        assert!(msg.get("content").is_some());
+        assert!(msg.get("_token").is_none());
+    }
+
+    #[test]
+    fn filter_keeps_underscore_schema_property_names() {
+        // A tool's JSON-schema may legitimately define a property named `_foo`.
+        let input = serde_json::json!({
+            "tools": [{
+                "function": {
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "_foo": { "type": "string" }, "bar": { "type": "string" } }
+                    }
+                }
+            }],
+            "_private": 1
+        });
+        let out = filter_private_params(input);
+        assert!(out.get("_private").is_none());
+        let props = &out["tools"][0]["function"]["parameters"]["properties"];
+        assert!(props.get("_foo").is_some(), "schema property names must be preserved");
+        assert!(props.get("bar").is_some());
     }
 }
