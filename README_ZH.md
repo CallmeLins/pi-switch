@@ -87,7 +87,7 @@ pi-switch stats                                     # 查看请求统计
 |------|------|
 | 🔌 **Provider 管理** | 增删改查、复制、搜索/过滤、模型管理、暴露到 pi agent |
 | 💡 **内置预设** | OpenRouter、Anthropic、DeepSeek、SiliconFlow、OpenAI — 一键创建配置 |
-| 🌉 **模型名网关** | 无状态按 `profile/model` 路由、伪装 User-Agent、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
+| 🌉 **模型名网关** | 无状态按 `profile/model` 路由、User-Agent 伪装、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
 | 🖥️ **交互式 TUI** | ratatui 驱动、Dracula 主题、鼠标支持、vim 键位 (`hjkl`) |
 | 🌐 **双语支持** | English / 中文，持久化到配置，Settings 中切换 |
 | 📊 **使用统计** | 按 provider、按模型的请求指标与延迟 |
@@ -163,7 +163,7 @@ pi-switch proxy start --daemon
 - **自动故障转移** — 429/5xx 或网络错误时，按配置链进行同模型 fallback
 - **断路器保护** — 连续 3 次失败后进入 60s 冷却，半开探测成功后自动恢复
 - **OpenAI ↔ Anthropic** — 自动在 chat completions 和 messages API 间转换
-- **伪装 User-Agent** — 设置自定义 User-Agent（如 `Codex/1.0`），通过上游渠道的客户端校验
+- **User-Agent 伪装** — 内置 Claude Code / Codex / Gemini 预设，发送对应客户端的真实 User-Agent（及 `anthropic-beta` 等头）以通过上游客户端校验；支持全局或按 profile 设置
 
 ---
 
@@ -264,6 +264,25 @@ pi-switch proxy start --daemon
 ```
 
 在 pi 中选择 `pi-switch` provider，然后选 `provider-a/gpt-5.4`。每个请求的模型名决定路由 — 不需要管理"target"。
+
+</details>
+
+<details>
+<summary><b>User-Agent 伪装如何工作？</b></summary>
+<br>
+
+有些上游渠道只接受白名单内的客户端（校验 User-Agent 名称前缀）。pi-switch 内置三个预设，发送对应客户端的真实身份：
+
+| 预设 | User-Agent | 额外头 |
+|------|------------|--------|
+| Claude Code | `claude-cli/2.1.161 (external, cli)` | `anthropic-version`、`anthropic-beta` |
+| Codex | `codex_cli_rs/0.1.0` | — |
+| Gemini | `gemini-cli/0.1.5` | `x-goog-api-client` |
+
+- **全局**：`Settings → User-Agent`，用 `←/→` 切换。
+- **按 profile**：在 profile 详情页按 `u` 循环切换；profile 级的值会覆盖全局。适合只有部分上游有 UA 白名单的情况。
+
+注意：这只能通过"看客户端名称"的校验，不会伪造更深的请求级令牌（turn state、session id 等）——严格的一方端点会校验这些。
 
 </details>
 

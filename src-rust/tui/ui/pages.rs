@@ -469,7 +469,7 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }),
         (i18n::settings_proxy_host(), proxy.host.clone()),
         (i18n::settings_proxy_port(), proxy.port.to_string()),
-        (if i18n::is_zh() { "伪装" } else { "Spoof" }, user_agent_display),
+        (if i18n::is_zh() { "用户代理" } else { "User-Agent" }, user_agent_display),
         (i18n::settings_proxy_failover(), failover_str),
     ];
 

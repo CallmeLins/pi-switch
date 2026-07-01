@@ -87,7 +87,7 @@ pi-switch stats                                     # View request statistics
 |----------|------------|
 | 🔌 **Provider Management** | CRUD, duplicate, search/filter, model management, expose to pi agent |
 | 💡 **Built-in Presets** | OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI — add profiles instantly |
-| 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, custom User-Agent, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
+| 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, User-Agent disguise, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
 | 📊 **Usage Stats** | Per-provider, per-model request metrics & latency |
@@ -163,7 +163,7 @@ Requests are routed by the model name in the request body — no out-of-band sta
 - **Automatic failover** — same-model fallback across the configured chain on 429/5xx errors or network failures
 - **Circuit breaker** — after 3 consecutive failures, provider enters 60s cooldown; auto-recovery on half-open probe success
 - **OpenAI ↔ Anthropic** — transparently converts between chat completions and messages APIs
-- **Custom User-Agent** — set a custom User-Agent string (e.g. `Codex/1.0`) to pass client checks from upstream channels
+- **User-Agent disguise** — built-in presets (Claude Code / Codex / Gemini) send the matching client's real User-Agent (and headers like `anthropic-beta`) to pass upstream client checks; settable globally or per-profile
 
 ---
 
@@ -264,6 +264,25 @@ pi-switch proxy start --daemon
 ```
 
 In pi, select the `pi-switch` provider, then `provider-a/gpt-5.4`. The model name in each request determines the route — no "target" to manage.
+
+</details>
+
+<details>
+<summary><b>How does User-Agent disguise work?</b></summary>
+<br>
+
+Some upstream channels only accept requests from whitelisted clients (checking the User-Agent name prefix). pi-switch has three built-in presets that send the matching client's real identity:
+
+| Preset | User-Agent | Extra headers |
+|--------|------------|---------------|
+| Claude Code | `claude-cli/2.1.161 (external, cli)` | `anthropic-version`, `anthropic-beta` |
+| Codex | `codex_cli_rs/0.1.0` | — |
+| Gemini | `gemini-cli/0.1.5` | `x-goog-api-client` |
+
+- **Global**: `Settings → User-Agent`, cycle with `←/→`.
+- **Per-profile**: in a profile's detail view press `u` to cycle; a per-profile value overrides the global one. Useful when only some upstreams enforce a UA whitelist.
+
+Note: this only passes checks that look at the client name. It does not fabricate deeper per-request tokens (turn state, session ids), which strict first-party endpoints validate.
 
 </details>
 

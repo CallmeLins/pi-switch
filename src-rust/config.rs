@@ -73,9 +73,9 @@ pub struct ProviderProfile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[serde(rename = "exposedModels")]
     pub exposed_models: Vec<String>,
-    /// Per-profile disguise override (claude-code/codex/gemini). Falls back to the
-    /// global settings.proxy.user_agent when unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Per-profile User-Agent disguise override (claude-code/codex/gemini). Falls back
+    /// to the global settings.proxy.userAgent when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "userAgent")]
     pub spoof: Option<String>,
 }
 

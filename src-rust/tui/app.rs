@@ -626,14 +626,14 @@ impl App {
         }
     }
 
-    /// Cycle a profile's disguise override: none → claude-code → codex → gemini → none.
+    /// Cycle a profile's User-Agent override: none → claude-code → codex → gemini → none.
     fn cycle_profile_spoof(&mut self, name: &str) {
         let current = self
             .data
             .config
             .profiles
             .get(name)
-            .and_then(|p| p.get("spoof"))
+            .and_then(|p| p.get("userAgent"))
             .and_then(|v| v.as_str());
         let next = match current {
             None => Some("claude-code"),
@@ -645,7 +645,7 @@ impl App {
             Ok(_) => {
                 self.refresh();
                 let label = next.unwrap_or(if i18n::is_zh() { "关闭" } else { "off" });
-                self.push_toast(ToastKind::Success, format!("Spoof: {}", label));
+                self.push_toast(ToastKind::Success, format!("User-Agent: {}", label));
             }
             Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
         }
@@ -786,7 +786,7 @@ impl App {
                         if let Ok(()) = crate::config::save_config(&config) {
                             self.refresh();
                             let preset_name = presets[new_idx];
-                            self.push_toast(ToastKind::Success, format!("Spoof: {}", preset_name));
+                            self.push_toast(ToastKind::Success, format!("User-Agent: {}", preset_name));
                         }
                     }
                 }
