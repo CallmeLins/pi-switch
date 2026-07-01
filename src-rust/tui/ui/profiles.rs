@@ -270,6 +270,7 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
             ("Space", i18n::key_switch()),
             ("d", i18n::key_delete()),
             ("x", i18n::key_expose()),
+            ("u", if i18n::is_zh() { "伪装" } else { "spoof" }),
             ("↑↓", i18n::key_scroll()),
             ("Esc", i18n::key_back()),
         ],
@@ -317,6 +318,11 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
     if let Some(preset) = value.get("preset").and_then(|v| v.as_str()) {
         lines.push(label(i18n::detail_preset(), preset.to_string()));
     }
+    let spoof_val = value.get("spoof").and_then(|v| v.as_str());
+    lines.push(label(
+        if i18n::is_zh() { "伪装" } else { "Spoof" },
+        spoof_val.unwrap_or(if i18n::is_zh() { "（用全局）" } else { "(global)" }).to_string(),
+    ));
     if let Some(updated) = value.get("updatedAt").and_then(|v| v.as_str()) {
         lines.push(label(i18n::detail_updated(), updated.to_string()));
     }

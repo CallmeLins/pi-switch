@@ -155,6 +155,7 @@ pub fn add_provider(opts: AddProviderOptions) -> napi::Result<AddResult> {
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
             model_map: None,
             exposed_models: vec![],
+            spoof: None,
         }
     };
 

@@ -621,7 +621,33 @@ impl App {
                 self.route = Route::ExposeModels(name.to_string());
                 self.load_expose_models_selection(name);
             }
+            KeyCode::Char('u') => self.cycle_profile_spoof(name),
             _ => {}
+        }
+    }
+
+    /// Cycle a profile's disguise override: none → claude-code → codex → gemini → none.
+    fn cycle_profile_spoof(&mut self, name: &str) {
+        let current = self
+            .data
+            .config
+            .profiles
+            .get(name)
+            .and_then(|p| p.get("spoof"))
+            .and_then(|v| v.as_str());
+        let next = match current {
+            None => Some("claude-code"),
+            Some("claude-code") => Some("codex"),
+            Some("codex") => Some("gemini"),
+            _ => None,
+        };
+        match ops::set_profile_spoof(name, next.map(|s| s.to_string())) {
+            Ok(_) => {
+                self.refresh();
+                let label = next.unwrap_or(if i18n::is_zh() { "关闭" } else { "off" });
+                self.push_toast(ToastKind::Success, format!("Spoof: {}", label));
+            }
+            Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
         }
     }
 

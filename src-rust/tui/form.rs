@@ -104,6 +104,7 @@ fn empty_profile() -> ProviderProfile {
         updated_at: None,
         model_map: None,
         exposed_models: vec![],
+        spoof: None,
     }
 }
 

@@ -65,6 +65,29 @@ pub fn update_exposed_models(name: &str, model_ids: Vec<String>) -> Result<Optio
     Ok(backup)
 }
 
+/// Set (or clear, with None) the per-profile disguise preset.
+pub fn set_profile_spoof(name: &str, spoof: Option<String>) -> Result<Option<PathBuf>> {
+    let mut config = load_config()?;
+    let backup = backup_config("config")?;
+
+    let profile_value = config
+        .profiles
+        .get_mut(name)
+        .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", name)))?;
+
+    let mut profile: ProviderProfile = serde_json::from_value(profile_value.clone())
+        .map_err(|e| AppError::Message(format!("invalid profile: {}", e)))?;
+
+    profile.spoof = spoof;
+    profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
+
+    *profile_value = serde_json::to_value(&profile)
+        .map_err(|e| AppError::json(config::config_path(), e))?;
+
+    save_config(&config)?;
+    Ok(backup)
+}
+
 pub fn update_provider_models(name: &str, models: Vec<config::ModelEntry>) -> Result<Option<PathBuf>> {
     let mut config = load_config()?;
     let backup = backup_config("config")?;

@@ -154,5 +154,6 @@ pub fn preset_to_profile(preset: &Preset, api_key: Option<&str>, models: Option<
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
         model_map: None,
         exposed_models: vec![],
+        spoof: None,
     }
 }

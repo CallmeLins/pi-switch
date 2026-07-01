@@ -15,77 +15,50 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::LazyLock;
 
-// ─── Disguise: per-process session identifiers ─────────────
-
-/// Generate a random UUID v4 string.
-fn gen_uuid_v4() -> String {
-    use std::fmt::Write;
-    let bytes: [u8; 16] = rand::random();
-    let mut s = String::with_capacity(36);
-    for (i, b) in bytes.iter().enumerate() {
-        if i == 4 || i == 6 || i == 8 || i == 10 { s.push('-'); }
-        if i == 6 {
-            write!(&mut s, "{:02x}", (b & 0x0f) | 0x40).unwrap();
-        } else if i == 8 {
-            write!(&mut s, "{:02x}", (b & 0x3f) | 0x80).unwrap();
-        } else {
-            write!(&mut s, "{:02x}", b).unwrap();
-        }
-    }
-    s
-}
-
-/// Per-proxy-process session ID, used by Codex disguise preset.
-static SESSION_ID: LazyLock<String> = LazyLock::new(gen_uuid_v4);
-
-/// Per-proxy-process trace ID, regenerated per request as span-id.
-static TRACE_ID: LazyLock<String> = LazyLock::new(|| {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(32);
-    for _ in 0..32 {
-        write!(&mut s, "{:x}", rand::random::<u8>()).unwrap();
-    }
-    s
-});
-
-fn gen_span_id() -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(16);
-    for _ in 0..16 {
-        write!(&mut s, "{:x}", rand::random::<u8>()).unwrap();
-    }
-    s
-}
+// ─── Disguise: preset → real client identity ───────────────
+//
+// Values match real CLI clients. UA whitelists (e.g. Kimi coding) check only the
+// name prefix, not the version, so static values stay valid across client upgrades.
 
 /// Resolve the actual User-Agent string from a disguise preset key.
 fn resolve_user_agent(preset: &str) -> &str {
     match preset {
-        "claude-code" => "claude-code/1.0 (https://claude.ai)",
+        // Real Claude Code CLI sends `claude-cli/<ver> (external, cli)`, not `claude-code/...`.
+        "claude-code" => "claude-cli/2.1.161 (external, cli)",
         "codex" => "codex_cli_rs/0.1.0",
-        "gemini" => "gemini-cli/1.0 (https://gemini.google.com)",
-        _ => preset, // raw UA string (legacy)
+        "gemini" => "gemini-cli/0.1.5",
+        _ => preset, // raw UA string (legacy / manual)
     }
 }
 
-/// Generate extra headers for the selected disguise preset.
-fn disguise_headers(preset: Option<&str>) -> Vec<(&'static str, String)> {
-    let mut h = Vec::new();
+/// Static extra headers a real client of the given preset also sends.
+/// (No synthesized session/traceparent — random values never pass deep checks and
+/// aren't needed for prefix-only UA whitelists.)
+fn disguise_headers(preset: Option<&str>) -> Vec<(&'static str, &'static str)> {
     match preset {
-        Some("codex") => {
-            h.push(("x-session-id", SESSION_ID.clone()));
-            h.push(("traceparent", format!("00-{}-{}-01", *TRACE_ID, gen_span_id())));
-        }
-        Some("claude-code") => {
-            h.push(("anthropic-version", "2023-06-01".to_string()));
-        }
-        Some("gemini") => {
-            h.push(("x-goog-api-client", "gemini-cli/1.0".to_string()));
-        }
-        _ => {}
+        Some("claude-code") => vec![
+            ("anthropic-version", "2023-06-01"),
+            ("anthropic-beta", "claude-code-20250219"),
+        ],
+        Some("gemini") => vec![("x-goog-api-client", "gemini-cli/0.1.5")],
+        _ => vec![],
     }
-    h
+}
+
+/// Build a reqwest client + resolved UA + extra headers for an effective spoof preset.
+/// The UA is set on the client builder (reqwest overrides a per-request header with its
+/// own default otherwise); the per-request header is applied as a safety net at call sites.
+fn build_disguised_client(
+    spoof: Option<&str>,
+) -> (ReqwestClient, Option<String>, Vec<(&'static str, &'static str)>) {
+    let ua = spoof.map(|p| resolve_user_agent(p).to_string());
+    let mut b = ReqwestClient::builder();
+    if let Some(ref u) = ua {
+        b = b.user_agent(u);
+    }
+    let client = b.build().unwrap_or_else(|_| ReqwestClient::new());
+    (client, ua, disguise_headers(spoof))
 }
 
 // ─── Shared proxy state ───────────────────────────────────
@@ -579,16 +552,8 @@ async fn forward_with_failover(
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
-    let mut client_builder = ReqwestClient::builder();
-    let raw_ua = config.settings.proxy.user_agent.as_deref();
-    let resolved_ua: Option<String> = raw_ua.map(|p| resolve_user_agent(p).to_string());
-    if let Some(ref ua) = resolved_ua {
-        client_builder = client_builder.user_agent(ua);
-    }
-    let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
+    let global_spoof = config.settings.proxy.user_agent.as_deref();
     let mut half_open_used = false;
-    let user_agent = resolved_ua.clone();
-    let disguise = disguise_headers(raw_ua);
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -632,6 +597,10 @@ async fn forward_with_failover(
             continue;
         }
 
+        // Effective disguise: per-profile spoof overrides the global setting.
+        let effective_spoof = profile.spoof.as_deref().or(global_spoof);
+        let (client, user_agent, disguise) = build_disguised_client(effective_spoof);
+
         let api_key = crate::config::resolve_env(&profile.api_key);
 
         if is_anthropic {
@@ -646,7 +615,7 @@ async fn forward_with_failover(
         req = req.header(reqwest::header::USER_AGENT, ua);
     }
     for (k, v) in &disguise {
-        req = req.header(*k, v.as_str());
+        req = req.header(*k, *v);
     }
             let resp = req.json(&anthro_body).send().await;
 
@@ -691,7 +660,7 @@ async fn forward_with_failover(
         req = req.header(reqwest::header::USER_AGENT, ua);
     }
     for (k, v) in &disguise {
-        req = req.header(*k, v.as_str());
+        req = req.header(*k, *v);
     }
             let resp = req.json(body).send().await;
 
@@ -743,16 +712,8 @@ async fn forward_anthropic_with_failover(
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
-    let mut client_builder = ReqwestClient::builder();
-    let raw_ua = config.settings.proxy.user_agent.as_deref();
-    let resolved_ua: Option<String> = raw_ua.map(|p| resolve_user_agent(p).to_string());
-    if let Some(ref ua) = resolved_ua {
-        client_builder = client_builder.user_agent(ua);
-    }
-    let client = client_builder.build().unwrap_or_else(|_| ReqwestClient::new());
+    let global_spoof = config.settings.proxy.user_agent.as_deref();
     let mut half_open_used = false;
-    let user_agent = resolved_ua.clone();
-    let disguise = disguise_headers(raw_ua);
 
     // Rewrite the namespaced "profile/model" back to the real upstream model id.
     let out_body = {
@@ -786,6 +747,10 @@ async fn forward_anthropic_with_failover(
         };
         if profile.api != "anthropic-messages" { continue; }
 
+        // Effective disguise: per-profile spoof overrides the global setting.
+        let effective_spoof = profile.spoof.as_deref().or(global_spoof);
+        let (client, user_agent, disguise) = build_disguised_client(effective_spoof);
+
         let api_key = crate::config::resolve_env(&profile.api_key);
         let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
@@ -796,7 +761,7 @@ async fn forward_anthropic_with_failover(
         req = req.header(reqwest::header::USER_AGENT, ua);
     }
     for (k, v) in &disguise {
-        req = req.header(*k, v.as_str());
+        req = req.header(*k, *v);
     }
         let resp = req.json(body).send().await;
 
