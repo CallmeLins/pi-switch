@@ -20,7 +20,7 @@ import { fileURLToPath } from "url";
 const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function usage() {
-  console.log(`pi-switch v0.3.7 — lightweight profile switcher for pi agent
+  console.log(`pi-switch v0.3.8 — lightweight profile switcher for pi agent
 
 Usage:
   pi-switch provider list

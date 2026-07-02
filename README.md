@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-0.3.7-blue.svg)](https://github.com/user/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.8-blue.svg)](https://github.com/user/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)

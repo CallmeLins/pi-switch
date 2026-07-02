@@ -192,6 +192,9 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
     }
 
     let log_path = config_dir().join("proxy.log");
+    // Ensure config dir exists before opening log (fresh install has no ~/.pi-switch/)
+    std::fs::create_dir_all(config_dir())
+        .map_err(|e| format!("Failed to create config dir: {}", e))?;
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
