@@ -13,6 +13,11 @@ import {
   setProxyFailover,
 } from "../index.js";
 import * as readline from "readline";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
+// Project root: parent of bin/ — used to locate bin/pi-switch.js when spawning daemon
+const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function usage() {
   console.log(`pi-switch v0.3.7 — lightweight profile switcher for pi agent
@@ -497,7 +502,7 @@ async function main() {
 
         if (args.daemon) {
           // Daemon mode: fork background process
-          const result = JSON.parse(daemonStartNative(host, port));
+          const result = JSON.parse(daemonStartNative(host, port, PROJECT_DIR));
           console.log(result.message);
           if (result.pid) console.log(`PID: ${result.pid}`);
         } else {

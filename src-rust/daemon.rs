@@ -20,25 +20,26 @@ fn check_health(host: &str, port: u16, max_attempts: u32) -> bool {
     false
 }
 
-// Get pi-switch.js path relative to executable location
-fn get_bin_path() -> PathBuf {
-    // Try executable directory first (works when installed via npm)
+// Get pi-switch.js path. The project_dir (passed from JS via import.meta.url)
+// is the canonical source on macOS / Linux where current_exe() is `node`.
+fn get_bin_path(project_dir: Option<&str>) -> PathBuf {
+    // 1. Prefer the project dir passed from JS (always correct: index.js's parent)
+    if let Some(dir) = project_dir {
+        let p = PathBuf::from(dir).join("bin").join("pi-switch.js");
+        if p.exists() { return p; }
+    }
+    // 2. Try executable-relative (works on Windows, or when the binary is a real file)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let bin_path = exe_dir.join("bin").join("pi-switch.js");
-            if bin_path.exists() {
-                return bin_path;
-            }
-            // Also try parent/bin (for development)
+            if bin_path.exists() { return bin_path; }
             if let Some(parent) = exe_dir.parent() {
                 let bin_path = parent.join("bin").join("pi-switch.js");
-                if bin_path.exists() {
-                    return bin_path;
-                }
+                if bin_path.exists() { return bin_path; }
             }
         }
     }
-    // Fallback to current directory
+    // 3. Fallback: relative to CWD (dev convenience)
     PathBuf::from("bin").join("pi-switch.js")
 }
 
@@ -160,7 +161,7 @@ fn remove_pid_file() {
 
 // ─── Daemon start ─────────────────────────────────────────
 
-pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonResult, String> {
+pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> Result<DaemonResult, String> {
     if let Some(info) = read_pid_file() {
         if is_alive(info.pid) && check_health(&info.host, info.port, 2) {
             let msg = format!(
@@ -185,7 +186,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>) -> Result<DaemonRes
     let host = host.unwrap_or_else(|| config.settings.proxy.host.clone());
     let port = port.unwrap_or(config.settings.proxy.port);
 
-    let bin_path = get_bin_path();
+    let bin_path = get_bin_path(project_dir.as_deref());
     if !bin_path.exists() {
         return Err(format!("pi-switch.js not found at {:?}", bin_path));
     }

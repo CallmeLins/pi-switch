@@ -663,7 +663,7 @@ impl App {
                 self.proxy_idx = (self.proxy_idx + 1).min(proxy_actions().len() - 1);
             }
             KeyCode::Enter => match self.proxy_idx {
-                0 => match daemon_start(None, None) {
+                0 => match daemon_start(None, None, None) {
                     Ok(result) => {
                         // started_at is Some only when we actually spawned the daemon
                         // (not when it was already running). Only then do we own it.

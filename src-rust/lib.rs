@@ -384,8 +384,8 @@ pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
 // ─── Daemon ───────────────────────────────────────────────
 
 #[napi]
-pub fn daemon_start_native(host: Option<String>, port: Option<u16>) -> napi::Result<String> {
-    let result = daemon::daemon_start(host, port)
+pub fn daemon_start_native(host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> napi::Result<String> {
+    let result = daemon::daemon_start(host, port, project_dir)
         .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
