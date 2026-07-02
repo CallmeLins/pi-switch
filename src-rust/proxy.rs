@@ -340,6 +340,7 @@ pub fn make_router(state: Arc<ProxyState>) -> Router {
         .route("/v1/models", get(handle_models))
         .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/v1/messages", post(handle_messages))
+        .route("/v1/responses", post(handle_responses))
         .with_state(state)
 }
 
@@ -472,6 +473,190 @@ async fn handle_messages(
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": { "message": e.to_string() } })),
         ).into_response(),
+    }
+}
+
+// ─── OpenAI Responses API handler ────────────────────────
+//
+// Pi (via Codex CLI) sends Requests in the Responses API format
+// (POST /v1/responses). The proxy converts them to Chat Completions
+// for routing, then converts the upstream Chat Completions response
+// back to Responses format for Pi.
+
+/// Convert Responses-format body to Chat Completions body for upstream routing.
+fn responses_to_chat(body: &Value) -> Value {
+    // Map `input` (string or array of messages) → `messages` array
+    let messages = match body.get("input") {
+        Some(Value::Array(items)) => {
+            items.iter().map(|item| {
+                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                let content = item.get("content").cloned().unwrap_or(Value::Null);
+                json!({ "role": role, "content": content })
+            }).collect::<Vec<_>>()
+        }
+        Some(Value::String(s)) => {
+            vec![json!({ "role": "user", "content": s })]
+        }
+        _ => vec![],
+    };
+
+    let mut chat_body = json!({
+        "model": body.get("model").unwrap_or(&Value::Null),
+        "messages": messages,
+    });
+
+    // Map common params
+    if let Some(v) = body.get("max_output_tokens") { chat_body["max_tokens"] = v.clone(); }
+    else if let Some(v) = body.get("max_tokens") { chat_body["max_tokens"] = v.clone(); }
+    if let Some(v) = body.get("temperature") { chat_body["temperature"] = v.clone(); }
+    if let Some(v) = body.get("top_p") { chat_body["top_p"] = v.clone(); }
+    if let Some(v) = body.get("stream") { chat_body["stream"] = v.clone(); }
+    if let Some(v) = body.get("stop") { chat_body["stop"] = v.clone(); }
+    // Tools: map Responses tool format (name→function.name, description→function.description)
+    if let Some(tools) = body.get("tools").and_then(|v| v.as_array()) {
+        let chat_tools: Vec<Value> = tools.iter().map(|t| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": t.get("name").unwrap_or(&Value::Null),
+                    "description": t.get("description").unwrap_or(&Value::Null),
+                    "parameters": t.get("parameters").unwrap_or(&json!({})),
+                }
+            })
+        }).collect();
+        chat_body["tools"] = Value::Array(chat_tools);
+        if let Some(v) = body.get("tool_choice") { chat_body["tool_choice"] = v.clone(); }
+    }
+    // Instructions → system message prepended
+    if let Some(instructions) = body.get("instructions").and_then(|v| v.as_str()) {
+        if !instructions.is_empty() {
+            let mut msgs = chat_body["messages"].as_array().cloned().unwrap_or_default();
+            msgs.insert(0, json!({ "role": "system", "content": instructions }));
+            chat_body["messages"] = Value::Array(msgs);
+        }
+    }
+
+    chat_body
+}
+
+/// Convert a Chat Completions response body back to the Responses API format.
+fn chat_response_to_responses(chat: Value, model: &str, created: Option<u64>) -> Value {
+    let output: Vec<Value> = chat
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .map(|choices| {
+            choices.iter().map(|c| {
+                let msg = c.get("message").unwrap_or(&Value::Null);
+                let content = msg.get("content").cloned().unwrap_or(Value::String(String::new()));
+                json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": match &content { Value::String(s) => s.clone(), v => v.to_string() },
+                        "annotations": [],
+                    }],
+                    "status": "completed",
+                })
+            }).collect()
+        })
+        .unwrap_or_default();
+
+    let usage = chat.get("usage").cloned().map(|u| {
+        json!({
+            "input_tokens": u.get("prompt_tokens").unwrap_or(&Value::Null),
+            "output_tokens": u.get("completion_tokens").unwrap_or(&Value::Null),
+            "total_tokens": u.get("total_tokens").unwrap_or(&Value::Null),
+        })
+    });
+
+    let mut resp = json!({
+        "object": "response",
+        "model": model,
+        "output": output,
+    });
+    if let Some(id) = chat.get("id").and_then(|v| v.as_str()) {
+        resp["id"] = json!(id);
+    }
+    if let Some(ts) = created.or_else(|| chat.get("created").and_then(|v| v.as_u64())) {
+        resp["created_at"] = json!(ts as f64);
+    }
+    if let Some(u) = usage {
+        resp["usage"] = u;
+    }
+    resp["status"] = json!("completed");
+
+    resp
+}
+
+async fn handle_responses(
+    State(_state): State<Arc<ProxyState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let config = crate::config::load_config().unwrap_or_default();
+    let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    let body_value = filter_private_params(body_value);
+    let is_stream = body_value.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // Non-streaming: convert to Chat Completions, route, convert response back.
+    if !is_stream {
+        let chat_body = responses_to_chat(&body_value);
+        let requested_model = chat_body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        let (candidates, real_model) = resolve_route(&config, requested_model);
+
+        if candidates.is_empty() {
+            return (StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": { "message": format!("No upstream exposes model '{}'", requested_model), "type": "no_route" } }))).into_response();
+        }
+
+        let result = forward_with_failover(&config, &candidates, &chat_body, &real_model, "chat/completions", &headers).await;
+        match result {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let (_, body) = resp.into_parts();
+                let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024).await.unwrap_or_default();
+                if (200..300).contains(&status) {
+                    if let Ok(chat) = serde_json::from_slice::<Value>(&body_bytes) {
+                        let responses_body = chat_response_to_responses(
+                            chat, &real_model,
+                            Some(chrono::Utc::now().timestamp() as u64),
+                        );
+                        let s = serde_json::to_string(&responses_body).unwrap_or_default();
+                        return Response::builder().status(200)
+                            .header("content-type", "application/json")
+                            .body(Body::from(s)).unwrap();
+                    }
+                }
+                let mut builder = Response::builder().status(status);
+                builder = builder.header("content-type", "application/json");
+                builder.body(Body::from(body_bytes)).unwrap()
+            }
+            Err(e) => (StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }))).into_response(),
+        }
+    } else {
+        // Streaming: route to the first openai-responses upstream and stream through.
+        // For openai-completions upstreams, Chat→Responses SSE conversion is possible
+        // but complex (different event names); skip for now.
+        let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        let (candidates, real_model) = resolve_route(&config, requested_model);
+        let candidates: Vec<String> = candidates.into_iter()
+            .filter(|name| config.profiles.get(name)
+                .and_then(|p| p.get("api").and_then(|v| v.as_str())) == Some("openai-responses"))
+            .collect();
+
+        if candidates.is_empty() {
+            return (StatusCode::NOT_IMPLEMENTED,
+                Json(json!({ "error": { "message": "Responses stream requires an openai-responses upstream (no Chat→Responses SSE conversion yet)", "type": "not_supported" } }))).into_response();
+        }
+
+        let result = forward_with_failover(&config, &candidates, &body_value, &real_model, "responses", &headers).await;
+        match result {
+            Ok(resp) => resp,
+            Err(e) => (StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }))).into_response(),
+        }
     }
 }
 
@@ -669,7 +854,8 @@ async fn forward_with_failover(
         };
 
         let is_anthropic = profile.api == "anthropic-messages";
-        if profile.api != "openai-completions" && !is_anthropic {
+        let is_responses = profile.api == "openai-responses";
+        if profile.api != "openai-completions" && !is_anthropic && !is_responses {
             continue;
         }
 
@@ -1000,5 +1186,58 @@ mod tests {
         let props = &out["tools"][0]["function"]["parameters"]["properties"];
         assert!(props.get("_foo").is_some(), "schema property names must be preserved");
         assert!(props.get("bar").is_some());
+    }
+
+    #[test]
+    fn responses_to_chat_converts_input_to_messages() {
+        let responses = serde_json::json!({
+            "model": "gpt-5.4",
+            "input": [
+                { "role": "user", "content": "hello" }
+            ],
+            "max_output_tokens": 100,
+            "temperature": 0.7,
+            "stream": false
+        });
+        let chat = super::responses_to_chat(&responses);
+        assert_eq!(chat["model"], "gpt-5.4");
+        assert_eq!(chat["messages"][0]["role"], "user");
+        assert_eq!(chat["messages"][0]["content"], "hello");
+        assert_eq!(chat["max_tokens"], 100);
+        assert_eq!(chat["temperature"], 0.7);
+        assert!(chat.get("max_output_tokens").is_none());
+    }
+
+    #[test]
+    fn responses_to_chat_maps_instructions_to_system_message() {
+        let responses = serde_json::json!({
+            "model": "gpt-5",
+            "input": [{ "role": "user", "content": "hi" }],
+            "instructions": "You are helpful."
+        });
+        let chat = super::responses_to_chat(&responses);
+        let msgs = chat["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are helpful.");
+        assert_eq!(msgs[1]["role"], "user");
+    }
+
+    #[test]
+    fn chat_response_to_responses_maps_choices_to_output() {
+        let chat = serde_json::json!({
+            "id": "chatcmpl-123",
+            "choices": [{
+                "message": { "role": "assistant", "content": "Hello!" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
+        });
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        assert_eq!(resp["object"], "response");
+        assert_eq!(resp["model"], "gpt-5.4");
+        let output = &resp["output"][0];
+        assert_eq!(output["type"], "message");
+        assert_eq!(output["content"][0]["type"], "output_text");
+        assert_eq!(output["content"][0]["text"], "Hello!");
     }
 }
