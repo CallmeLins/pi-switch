@@ -6,3 +6,7 @@ Cargo.lock
 .git/
 node_modules/
 *.tar.gz
+
+# webui source is compiled into the .node; no need to ship it
+webui/
+build.rs

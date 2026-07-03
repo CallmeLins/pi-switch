@@ -31,6 +31,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tower = "0.5"
 tower-http = { version = "0.5", features = ["cors"] }
 
+# web ui: embed the built React frontend into the .node so one artifact ships everything
+rust-embed = { version = "8", features = ["mime-guess"] }
+
 # TUI (matching cc-switch's ratatui)
 ratatui = "0.30"
 crossterm = "0.29"

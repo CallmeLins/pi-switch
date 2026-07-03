@@ -4,6 +4,65 @@ use crate::config::{
 use crate::error::{AppError, Result};
 use std::path::PathBuf;
 
+/// Create ~/.pi-switch/ + ~/.pi/agent/ and seed config.json / models.json if absent.
+/// Shared by the CLI `init` (napi) and the web `POST /api/init`.
+pub fn init() -> Result<Vec<String>> {
+    let dir = config::config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::io(&dir, e))?;
+    let pi_dir = config::pi_dir();
+    std::fs::create_dir_all(&pi_dir).map_err(|e| AppError::io(&pi_dir, e))?;
+
+    let mut messages = Vec::new();
+    let config_path = config::config_path();
+    if !config_path.exists() {
+        save_config(&config::PiSwitchConfig::default())?;
+        messages.push(format!("Created {}", config_path.display()));
+    } else {
+        messages.push(format!("Already exists: {}", config_path.display()));
+    }
+
+    let models_path = config::models_path();
+    if !models_path.exists() {
+        let default_models = serde_json::json!({ "providers": {} });
+        let tmp = config::config_dir().join("models.json.tmp");
+        std::fs::write(&tmp, serde_json::to_string_pretty(&default_models).unwrap() + "\n")
+            .map_err(|e| AppError::io(&tmp, e))?;
+        std::fs::rename(&tmp, &models_path).map_err(|e| AppError::io(&models_path, e))?;
+        messages.push(format!("Created {}", models_path.display()));
+    } else {
+        messages.push(format!("Already exists: {}", models_path.display()));
+    }
+
+    Ok(messages)
+}
+
+/// Set the same-model failover chain. Validates every profile exists and is not a proxy
+/// profile. Shared by the CLI (napi) and the web `PUT /api/proxy/failover`.
+pub fn set_failover(failover_profiles: Vec<String>) -> Result<Option<PathBuf>> {
+    let mut config = load_config()?;
+
+    for name in &failover_profiles {
+        if !config.profiles.contains_key(name) {
+            return Err(AppError::Message(format!("Profile '{}' does not exist", name)));
+        }
+        if let Some(profile_value) = config.profiles.get(name) {
+            if let Ok(profile) = serde_json::from_value::<ProviderProfile>(profile_value.clone()) {
+                if profile.proxy {
+                    return Err(AppError::Message(format!(
+                        "Cannot use proxy profile '{}' in failover chain",
+                        name
+                    )));
+                }
+            }
+        }
+    }
+
+    let backup = backup_config("config")?;
+    config.settings.proxy.failover = failover_profiles;
+    save_config(&config)?;
+    Ok(backup)
+}
+
 pub struct UseOutcome {
     pub name: String,
     pub provider_id: String,
@@ -604,5 +663,20 @@ pub fn set_proxy_target(target: Option<&str>) -> Result<()> {
     save_config(&config)?;
     sync_gateway_to_pi()?;
     Ok(())
+}
+
+/// Replace the whole `settings` object (providerPrefix / writeMode / language / proxy / web).
+/// Front-ends read the current settings via `service::get_state`, edit, and send the full
+/// object back. Re-syncs the gateway since prefix/host/port feed pi's models.json.
+pub fn update_settings(new_settings: &serde_json::Value) -> Result<Option<PathBuf>> {
+    let mut config = load_config()?;
+    let settings: config::Settings = serde_json::from_value(new_settings.clone())
+        .map_err(|e| AppError::Message(format!("invalid settings: {}", e)))?;
+
+    let backup = backup_config("config")?;
+    config.settings = settings;
+    save_config(&config)?;
+    sync_gateway_to_pi()?;
+    Ok(backup)
 }
 

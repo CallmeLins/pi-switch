@@ -29,8 +29,11 @@
   ],
   "scripts": {
     "artifacts": "napi artifacts",
+    "build": "npm run build:webui && npm run build:native",
+    "build:webui": "npm --prefix webui install && npm --prefix webui run build",
     "build:native": "napi build --platform --release",
     "build:native:debug": "napi build --platform",
+    "dev:webui": "npm --prefix webui run dev",
     "doctor": "node ./bin/pi-switch.js doctor",
     "test": "node --test"
   },

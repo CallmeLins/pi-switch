@@ -1,5 +1,5 @@
 use crate::config::{load_config, PiSwitchConfig};
-use crate::daemon::{daemon_status, DaemonResult};
+use crate::daemon::{daemon_status, DaemonResult, PROXY};
 use crate::presets::{all_presets, Preset};
 use crate::stats::{get_stats, UsageStats};
 
@@ -146,7 +146,7 @@ impl UiData {
             config,
             profiles,
             presets: all_presets(),
-            daemon: daemon_status().unwrap_or_else(offline_daemon),
+            daemon: daemon_status(&PROXY).unwrap_or_else(offline_daemon),
             stats,
             backups: list_backup_files(),
             pi_default_model: read_pi_default_model(),

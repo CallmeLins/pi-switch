@@ -51,8 +51,13 @@ node bin/pi-switch.js tui
 
 ```bash
 pi-switch tui          # Interactive TUI (recommended)
+pi-switch webui start  # Browser UI at http://127.0.0.1:43110
 pi-switch doctor       # Run environment diagnostics
 ```
+
+> **Three ways, one core.** CLI, TUI, and WebUI are thin adapters over the same
+> Rust core. See [WEBUI_GUIDE.md](./WEBUI_GUIDE.md) for the WebUI and how to keep
+> the three interfaces in sync.
 
 ### Essential CLI Commands
 
@@ -69,6 +74,11 @@ pi-switch provider fetch-models <name>             # Fetch models from API
 pi-switch proxy failover <p1,p2,...>               # Same-model fallback chain
 pi-switch proxy start --daemon                     # Start proxy daemon
 pi-switch proxy status
+
+# WebUI (browser config)
+pi-switch webui start [--host <ip>] [--port <port>] [--daemon]
+pi-switch webui status
+pi-switch webui stop
 
 # Other
 pi-switch presets list                             # List built-in presets

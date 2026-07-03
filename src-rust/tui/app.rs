@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::sync::mpsc;
 
-use crate::daemon::{daemon_start, daemon_stop};
+use crate::daemon::{daemon_start, daemon_stop, PROXY};
 use crate::ops;
 
 use super::data::{ProfileRow, UiData};
@@ -663,7 +663,7 @@ impl App {
                 self.proxy_idx = (self.proxy_idx + 1).min(proxy_actions().len() - 1);
             }
             KeyCode::Enter => match self.proxy_idx {
-                0 => match daemon_start(None, None, None) {
+                0 => match daemon_start(&PROXY, None, None, None) {
                     Ok(result) => {
                         // started_at is Some only when we actually spawned the daemon
                         // (not when it was already running). Only then do we own it.
@@ -675,7 +675,7 @@ impl App {
                     }
                     Err(e) => self.push_toast(ToastKind::Error, e),
                 },
-                1 => match daemon_stop() {
+                1 => match daemon_stop(&PROXY) {
                     Ok(result) => {
                         self.proxy_started_by_tui = false;
                         self.push_toast(ToastKind::Info, result.message);

@@ -4,51 +4,22 @@ mod error;
 mod ops;
 mod presets;
 mod proxy;
+mod service;
 mod stats;
 mod sync;
 mod tui;
+mod web;
 
 use napi_derive::napi;
 
-use config::{load_config, provider_id_for, save_config, ProviderProfile};
-use presets::{all_presets, get_preset, preset_to_profile};
+use config::ProviderProfile;
+use presets::{get_preset, preset_to_profile};
 
 // ─── Init ─────────────────────────────────────────────────
 
 #[napi]
 pub fn init_config() -> napi::Result<Vec<String>> {
-    let dir = config::config_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| napi::Error::from_reason(format!("Failed to create config dir: {}", e)))?;
-
-    let pi_dir = config::pi_dir();
-    std::fs::create_dir_all(&pi_dir)
-        .map_err(|e| napi::Error::from_reason(format!("Failed to create pi dir: {}", e)))?;
-
-    let mut messages = Vec::new();
-    let config_path = config::config_path();
-    if !config_path.exists() {
-        save_config(&config::PiSwitchConfig::default())
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        messages.push(format!("Created {}", config_path.display()));
-    } else {
-        messages.push(format!("Already exists: {}", config_path.display()));
-    }
-
-    let models_path = config::models_path();
-    if !models_path.exists() {
-        let default_models = serde_json::json!({ "providers": {} });
-        let tmp = config::config_dir().join("models.json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(&default_models).unwrap() + "\n")
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        std::fs::rename(&tmp, &models_path)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        messages.push(format!("Created {}", models_path.display()));
-    } else {
-        messages.push(format!("Already exists: {}", models_path.display()));
-    }
-
-    Ok(messages)
+    ops::init().map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 // ─── Presets ──────────────────────────────────────────────
@@ -66,7 +37,7 @@ pub struct PresetInfo {
 
 #[napi]
 pub fn list_presets() -> Vec<PresetInfo> {
-    all_presets()
+    service::presets_info()
         .into_iter()
         .map(|p| PresetInfo {
             id: p.id,
@@ -75,7 +46,7 @@ pub fn list_presets() -> Vec<PresetInfo> {
             website_url: p.website_url,
             api: p.api,
             base_url: p.base_url,
-            models: p.models.into_iter().map(|m| m.id).collect(),
+            models: p.models,
         })
         .collect()
 }
@@ -193,27 +164,14 @@ pub fn upsert_profile_raw(name: String, profile_json: String, rename_from: Optio
 
 #[napi]
 pub fn list_profiles() -> napi::Result<String> {
-    let config = load_config().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    serde_json::to_string_pretty(&serde_json::json!({
-        "current": config.current,
-        "profiles": config.profiles,
-        "settings": config.settings,
-    }))
-    .map_err(|e| napi::Error::from_reason(e.to_string()))
+    let state = service::get_state().map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    serde_json::to_string_pretty(&state).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi]
 pub fn show_profile(name: String) -> napi::Result<String> {
-    let config = load_config().map_err(|e| napi::Error::from_reason(e.to_string()))?;
-    let profile = config.profiles.get(&name)
-        .ok_or_else(|| napi::Error::from_reason(format!("unknown profile '{}'", name)))?;
-
-    serde_json::to_string_pretty(&serde_json::json!({
-        "name": name,
-        "profile": profile,
-        "providerId": provider_id_for(&config, &name),
-    }))
-    .map_err(|e| napi::Error::from_reason(e.to_string()))
+    let profile = service::get_profile(&name).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    serde_json::to_string_pretty(&profile).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi(object)]
@@ -262,80 +220,17 @@ pub struct DoctorCheck {
 
 #[napi]
 pub fn doctor() -> napi::Result<Vec<DoctorCheck>> {
-    let mut checks = Vec::new();
-    let config_path = config::config_path();
-    let models_path = config::models_path();
-
-    checks.push(DoctorCheck {
-        ok: config_path.exists(),
-        msg: format!("config file: {}", config_path.display()),
-    });
-    checks.push(DoctorCheck {
-        ok: models_path.exists(),
-        msg: format!("pi models file: {}", models_path.display()),
-    });
-
-    match load_config() {
-        Ok(_) => checks.push(DoctorCheck { ok: true, msg: "config JSON is valid".into() }),
-        Err(e) => checks.push(DoctorCheck { ok: false, msg: e.to_string() }),
-    }
-
-    if models_path.exists() {
-        match std::fs::read_to_string(&models_path) {
-            Ok(text) => {
-                let ok = serde_json::from_str::<serde_json::Value>(&text).is_ok();
-                checks.push(DoctorCheck { ok, msg: "models.json JSON is valid".into() });
-            }
-            Err(e) => checks.push(DoctorCheck { ok: false, msg: e.to_string() }),
-        }
-    }
-
-    if let Ok(config) = load_config() {
-        let count = config.profiles.len();
-        checks.push(DoctorCheck {
-            ok: count > 0,
-            msg: format!("{} profile(s) configured", count),
-        });
-
-        for (name, profile) in &config.profiles {
-            let base_url = profile.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("");
-            let api_key = profile.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
-            let api = profile.get("api").and_then(|v| v.as_str()).unwrap_or("");
-
-            checks.push(DoctorCheck {
-                ok: !base_url.is_empty(),
-                msg: format!("{}: baseUrl set", name),
-            });
-            checks.push(DoctorCheck {
-                ok: !api_key.is_empty(),
-                msg: format!("{}: apiKey set", name),
-            });
-            let valid_api = matches!(api, "openai-completions" | "anthropic-messages" | "google-generative-ai");
-            checks.push(DoctorCheck {
-                ok: valid_api,
-                msg: format!("{}: api supported ({})", name, api),
-            });
-        }
-    }
-
-    Ok(checks)
+    Ok(service::run_doctor()
+        .into_iter()
+        .map(|c| DoctorCheck { ok: c.ok, msg: c.msg })
+        .collect())
 }
 
 // ─── Backup list ──────────────────────────────────────────
 
 #[napi]
 pub fn list_backups() -> napi::Result<Vec<String>> {
-    let dir = config::backup_dir();
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut entries = std::fs::read_dir(&dir)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path().display().to_string())
-        .collect::<Vec<_>>();
-    entries.sort();
-    Ok(entries)
+    service::list_backups().map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 // ─── TUI ──────────────────────────────────────────────────
@@ -381,27 +276,60 @@ pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
     }
 }
 
-// ─── Daemon ───────────────────────────────────────────────
+// ─── Web UI Server ────────────────────────────────────────
 
 #[napi]
-pub fn daemon_start_native(host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> napi::Result<String> {
-    let result = daemon::daemon_start(host, port, project_dir)
+pub async fn run_web_server(host: String, port: u16, project_dir: Option<String>) -> napi::Result<()> {
+    use std::sync::Arc;
+
+    let password = web::resolve_password(&host);
+    let state = Arc::new(web::WebState { project_dir, password: password.clone() });
+
+    let app = web::make_web_router(state);
+    let addr = format!("{}:{}", host, port);
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| napi::Error::from_reason(format!("Failed to bind to {}: {}", addr, e)))?;
+
+    eprintln!("WebUI server listening on http://{}", addr);
+    if let Some(pw) = password {
+        eprintln!("Basic auth enabled (non-loopback bind). Username: admin  Password: {}", pw);
+        eprintln!("(password also stored in ~/.pi-switch/webui_password)");
+    }
+
+    match axum::serve(listener, app).await {
+        Ok(_) => Ok(()),
+        Err(e) => Err(napi::Error::from_reason(format!("Server error: {}", e))),
+    }
+}
+
+fn resolve_service(name: &str) -> napi::Result<daemon::Service> {
+    daemon::service_by_name(name)
+        .ok_or_else(|| napi::Error::from_reason(format!("unknown service '{}'", name)))
+}
+
+#[napi]
+pub fn daemon_start_native(service: String, host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> napi::Result<String> {
+    let svc = resolve_service(&service)?;
+    let result = daemon::daemon_start(&svc, host, port, project_dir)
         .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi]
-pub fn daemon_stop_native() -> napi::Result<String> {
-    let result = daemon::daemon_stop()
+pub fn daemon_stop_native(service: String) -> napi::Result<String> {
+    let svc = resolve_service(&service)?;
+    let result = daemon::daemon_stop(&svc)
         .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 #[napi]
-pub fn daemon_status_native() -> napi::Result<String> {
-    let result = daemon::daemon_status()
+pub fn daemon_status_native(service: String) -> napi::Result<String> {
+    let svc = resolve_service(&service)?;
+    let result = daemon::daemon_status(&svc)
         .map_err(napi::Error::from_reason)?;
     serde_json::to_string_pretty(&result)
         .map_err(|e| napi::Error::from_reason(e.to_string()))
@@ -577,35 +505,16 @@ pub fn set_proxy_target(target: String) -> napi::Result<String> {
 
 #[napi]
 pub fn set_proxy_failover(failover_profiles: Vec<String>) -> napi::Result<String> {
-    let mut config = config::load_config()
+    let joined = failover_profiles.join(" → ");
+    let empty = failover_profiles.is_empty();
+
+    let backup = ops::set_failover(failover_profiles)
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    // Validate all profiles exist and are not proxy profiles
-    for name in &failover_profiles {
-        if !config.profiles.contains_key(name) {
-            return Err(napi::Error::from_reason(format!("Profile '{}' does not exist", name)));
-        }
-
-        if let Some(profile_value) = config.profiles.get(name) {
-            if let Ok(profile) = serde_json::from_value::<config::ProviderProfile>(profile_value.clone()) {
-                if profile.proxy {
-                    return Err(napi::Error::from_reason(format!("Cannot use proxy profile '{}' in failover chain", name)));
-                }
-            }
-        }
-    }
-
-    let backup = config::backup_config("config")
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    config.settings.proxy.failover = failover_profiles.clone();
-    config::save_config(&config)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-
-    let mut msg = if failover_profiles.is_empty() {
+    let mut msg = if empty {
         "Failover chain cleared".to_string()
     } else {
-        format!("Failover chain set: {}", failover_profiles.join(" → "))
+        format!("Failover chain set: {}", joined)
     };
 
     if let Some(path) = backup {

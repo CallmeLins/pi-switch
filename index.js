@@ -31,6 +31,7 @@ export const {
   exportLogsCsv,
   fetchModels,
   runProxyServer,
+  runWebServer,
   upsertProfileRaw,
   updateExposedModels,
   updateProviderModels,

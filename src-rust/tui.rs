@@ -47,7 +47,7 @@ pub fn run_tui() -> Result<(), String> {
     // started independently (e.g. `pi-switch proxy start --daemon` from the command line)
     // is left running.
     if app.proxy_started_by_tui {
-        let _ = crate::daemon::daemon_stop();
+        let _ = crate::daemon::daemon_stop(&crate::daemon::PROXY);
     }
 
     restore_result?;

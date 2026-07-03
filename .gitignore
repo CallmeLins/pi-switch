@@ -9,3 +9,8 @@ target/
 pi-session-*.html
 *claude*cli*.txt
 package-lock.json
+
+# webui build artifacts (dist is embedded into the .node at build time)
+webui/node_modules/
+webui/dist/*
+!webui/dist/.gitkeep

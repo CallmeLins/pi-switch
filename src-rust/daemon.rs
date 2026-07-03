@@ -5,7 +5,61 @@ use std::process::Command;
 use std::net::TcpStream;
 use std::time::Duration;
 
-fn pid_path() -> PathBuf { config_dir().join("proxy.pid") }
+// ─── Service descriptor ───────────────────────────────────
+//
+// A daemon-managed service. Both the proxy and the web UI run as background
+// `node bin/pi-switch.js <subcommand> start` processes with their own pid/log
+// files, so the same start/stop/status machinery drives both.
+
+#[derive(Debug, Clone, Copy)]
+pub struct Service {
+    /// pid file name under ~/.pi-switch/
+    pub pid_file: &'static str,
+    /// log file name under ~/.pi-switch/
+    pub log_file: &'static str,
+    /// the `pi-switch <subcommand> start` CLI subcommand to spawn
+    pub subcommand: &'static str,
+    /// human label used in status/result messages
+    pub label: &'static str,
+}
+
+pub const PROXY: Service = Service {
+    pid_file: "proxy.pid",
+    log_file: "proxy.log",
+    subcommand: "proxy",
+    label: "Proxy",
+};
+
+pub const WEBUI: Service = Service {
+    pid_file: "webui.pid",
+    log_file: "webui.log",
+    subcommand: "webui",
+    label: "WebUI",
+};
+
+/// Resolve a service by its subcommand name (used by the napi boundary).
+pub fn service_by_name(name: &str) -> Option<Service> {
+    match name {
+        "proxy" => Some(PROXY),
+        "webui" => Some(WEBUI),
+        _ => None,
+    }
+}
+
+/// Fallback host/port for a service, read from the matching config section.
+fn service_defaults(service: &Service) -> (String, u16) {
+    let cfg = load_config().ok();
+    match service.subcommand {
+        "webui" => cfg
+            .map(|c| (c.settings.web.host, c.settings.web.port))
+            .unwrap_or_else(|| ("127.0.0.1".into(), 43110)),
+        _ => cfg
+            .map(|c| (c.settings.proxy.host, c.settings.proxy.port))
+            .unwrap_or_else(|| ("127.0.0.1".into(), 43112)),
+    }
+}
+
+fn pid_path(service: &Service) -> PathBuf { config_dir().join(service.pid_file) }
 
 // Check if proxy server is actually listening on the port
 fn check_health(host: &str, port: u16, max_attempts: u32) -> bool {
@@ -138,35 +192,36 @@ fn force_kill(pid: u32) -> bool {
 
 // ─── PID file I/O ─────────────────────────────────────────
 
-fn read_pid_file() -> Option<DaemonInfo> {
-    let path = pid_path();
+fn read_pid_file(service: &Service) -> Option<DaemonInfo> {
+    let path = pid_path(service);
     if !path.exists() { return None; }
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
 }
 
-fn write_pid_file(info: &DaemonInfo) {
-    if let Some(parent) = pid_path().parent() {
+fn write_pid_file(service: &Service, info: &DaemonInfo) {
+    let path = pid_path(service);
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
     if let Ok(json) = serde_json::to_string(info) {
-        std::fs::write(pid_path(), json).ok();
+        std::fs::write(&path, json).ok();
     }
 }
 
-fn remove_pid_file() {
-    std::fs::remove_file(pid_path()).ok();
+fn remove_pid_file(service: &Service) {
+    std::fs::remove_file(pid_path(service)).ok();
 }
 
 // ─── Daemon start ─────────────────────────────────────────
 
-pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> Result<DaemonResult, String> {
-    if let Some(info) = read_pid_file() {
+pub fn daemon_start(service: &Service, host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> Result<DaemonResult, String> {
+    if let Some(info) = read_pid_file(service) {
         if is_alive(info.pid) && check_health(&info.host, info.port, 2) {
             let msg = format!(
-                "Proxy daemon already running (PID {}) on http://{}:{}",
-                info.pid, info.host, info.port
+                "{} daemon already running (PID {}) on http://{}:{}",
+                service.label, info.pid, info.host, info.port
             );
             return Ok(DaemonResult {
                 running: true,
@@ -179,19 +234,19 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
                 message: msg,
             });
         }
-        remove_pid_file();
+        remove_pid_file(service);
     }
 
-    let config = load_config().map_err(|e| e.to_string())?;
-    let host = host.unwrap_or_else(|| config.settings.proxy.host.clone());
-    let port = port.unwrap_or(config.settings.proxy.port);
+    let (default_host, default_port) = service_defaults(service);
+    let host = host.unwrap_or(default_host);
+    let port = port.unwrap_or(default_port);
 
     let bin_path = get_bin_path(project_dir.as_deref());
     if !bin_path.exists() {
         return Err(format!("pi-switch.js not found at {:?}", bin_path));
     }
 
-    let log_path = config_dir().join("proxy.log");
+    let log_path = config_dir().join(service.log_file);
     // Ensure config dir exists before opening log (fresh install has no ~/.pi-switch/)
     std::fs::create_dir_all(config_dir())
         .map_err(|e| format!("Failed to create config dir: {}", e))?;
@@ -207,7 +262,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         Command::new("node")
             .arg(&bin_path)
-            .arg("proxy")
+            .arg(service.subcommand)
             .arg("start")
             .arg("--host")
             .arg(&host)
@@ -225,7 +280,7 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
     let child = {
         Command::new("node")
             .arg(&bin_path)
-            .arg("proxy")
+            .arg(service.subcommand)
             .arg("start")
             .arg("--host")
             .arg(&host)
@@ -251,20 +306,20 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
         started_at: now_ms,
     };
 
-    write_pid_file(&info);
+    write_pid_file(service, &info);
 
     // Wait for server to be ready (max 5 seconds)
     if !check_health(&host, port, 25) {
         // Cleanup on failure
-        remove_pid_file();
+        remove_pid_file(service);
         #[cfg(windows)]
         { force_kill(pid); }
         #[cfg(not(windows))]
         unsafe { libc::kill(pid as i32, libc::SIGKILL); }
 
         return Err(format!(
-            "Proxy daemon started but failed health check on http://{}:{}. Check ~/.pi-switch/proxy.log for errors.",
-            host, port
+            "{} daemon started but failed health check on http://{}:{}. Check ~/.pi-switch/{} for errors.",
+            service.label, host, port, service.log_file
         ));
     }
 
@@ -276,14 +331,14 @@ pub fn daemon_start(host: Option<String>, port: Option<u16>, project_dir: Option
         targets: None,
         failover: None,
         started_at: Some(now_ms),
-        message: format!("Proxy daemon started (PID {}) on http://{}:{}", pid, host, port),
+        message: format!("{} daemon started (PID {}) on http://{}:{}", service.label, pid, host, port),
     })
 }
 
 // ─── Daemon stop ──────────────────────────────────────────
 
-pub fn daemon_stop() -> Result<DaemonResult, String> {
-    let info = match read_pid_file() {
+pub fn daemon_stop(service: &Service) -> Result<DaemonResult, String> {
+    let info = match read_pid_file(service) {
         Some(i) => i,
         None => {
             return Ok(DaemonResult {
@@ -294,13 +349,13 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
                 targets: None,
                 failover: None,
                 started_at: None,
-                message: "No proxy daemon PID file found".into(),
+                message: format!("No {} daemon PID file found", service.label),
             });
         }
     };
 
     if !is_alive(info.pid) {
-        remove_pid_file();
+        remove_pid_file(service);
         return Ok(DaemonResult {
             running: false,
             pid: Some(info.pid),
@@ -318,7 +373,7 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
     for _ in 0..20 {  // Reduced from 50 to 20 (2 seconds max)
         std::thread::sleep(std::time::Duration::from_millis(100));
         if !is_alive(info.pid) {
-            remove_pid_file();
+            remove_pid_file(service);
             return Ok(DaemonResult {
                 running: false,
                 pid: Some(info.pid),
@@ -327,14 +382,14 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
                 targets: None,
                 failover: None,
                 started_at: None,
-                message: format!("Proxy daemon (PID {}) stopped", info.pid),
+                message: format!("{} daemon (PID {}) stopped", service.label, info.pid),
             });
         }
     }
 
     // Force kill
     force_kill(info.pid);
-    remove_pid_file();
+    remove_pid_file(service);
     Ok(DaemonResult {
         running: false,
         pid: Some(info.pid),
@@ -343,14 +398,14 @@ pub fn daemon_stop() -> Result<DaemonResult, String> {
         targets: None,
         failover: None,
         started_at: None,
-        message: format!("Proxy daemon (PID {}) force killed", info.pid),
+        message: format!("{} daemon (PID {}) force killed", service.label, info.pid),
     })
 }
 
 // ─── Daemon status ────────────────────────────────────────
 
-pub fn daemon_status() -> Result<DaemonResult, String> {
-    let info = match read_pid_file() {
+pub fn daemon_status(service: &Service) -> Result<DaemonResult, String> {
+    let info = match read_pid_file(service) {
         Some(i) => i,
         None => {
             return Ok(DaemonResult {
@@ -361,7 +416,7 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
                 targets: None,
                 failover: None,
                 started_at: None,
-                message: "Proxy daemon is not running (no PID file)".into(),
+                message: format!("{} daemon is not running (no PID file)", service.label),
             });
         }
     };
@@ -369,7 +424,7 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
     if is_alive(info.pid) {
         // Verify port is actually listening
         if !check_health(&info.host, info.port, 2) {
-            remove_pid_file();
+            remove_pid_file(service);
             return Ok(DaemonResult {
                 running: false,
                 pid: Some(info.pid),
@@ -379,49 +434,52 @@ pub fn daemon_status() -> Result<DaemonResult, String> {
                 failover: None,
                 started_at: None,
                 message: format!(
-                    "Proxy daemon process exists (PID {}) but port {}:{} is not responding. Cleaned up stale PID.",
-                    info.pid, info.host, info.port
+                    "{} daemon process exists (PID {}) but port {}:{} is not responding. Cleaned up stale PID.",
+                    service.label, info.pid, info.host, info.port
                 ),
             });
         }
 
-        let config = load_config().map(|c| c.settings.proxy).unwrap_or_default();
-        let config_full = load_config().ok();
-        let targets: Vec<String> = config_full
-            .as_ref()
-            .map(|cfg| {
-                cfg.profiles
-                    .iter()
-                    .filter_map(|(name, profile)| {
-                        profile
-                            .get("exposedModels")
-                            .and_then(|v| v.as_array())
-                            .filter(|arr| !arr.is_empty())
-                            .map(|_| name.clone())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        // targets/failover only apply to the proxy; the web UI has neither.
+        let (targets, failover) = if service.subcommand == "proxy" {
+            let proxy = load_config().map(|c| c.settings.proxy).unwrap_or_default();
+            let targets: Vec<String> = load_config()
+                .ok()
+                .as_ref()
+                .map(|cfg| {
+                    cfg.profiles
+                        .iter()
+                        .filter_map(|(name, profile)| {
+                            profile
+                                .get("exposedModels")
+                                .and_then(|v| v.as_array())
+                                .filter(|arr| !arr.is_empty())
+                                .map(|_| name.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let failover = if proxy.failover.is_empty() { None } else { Some(proxy.failover.clone()) };
+            (if targets.is_empty() { None } else { Some(targets) }, failover)
+        } else {
+            (None, None)
+        };
 
         Ok(DaemonResult {
             running: true,
             pid: Some(info.pid),
             host: Some(info.host.clone()),
             port: Some(info.port),
-            targets: if targets.is_empty() { None } else { Some(targets) },
-            failover: if config.failover.is_empty() {
-                None
-            } else {
-                Some(config.failover.clone())
-            },
+            targets,
+            failover,
             started_at: Some(info.started_at),
             message: format!(
-                "Proxy daemon is running (PID {}) on http://{}:{}",
-                info.pid, info.host, info.port
+                "{} daemon is running (PID {}) on http://{}:{}",
+                service.label, info.pid, info.host, info.port
             ),
         })
     } else {
-        remove_pid_file();
+        remove_pid_file(service);
         Ok(DaemonResult {
             running: false,
             pid: Some(info.pid),

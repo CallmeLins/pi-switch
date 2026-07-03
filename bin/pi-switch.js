@@ -7,6 +7,7 @@ import {
   validateConfig, testProvider, restoreBackup, duplicateProvider,
   exportLogsJson, exportLogsCsv, fetchModels,
   runProxyServer,
+  runWebServer,
   runNativeTui,
   updateExposedModels,
   updateProviderModels,
@@ -46,6 +47,9 @@ Usage:
   pi-switch proxy stop
   pi-switch proxy status
   pi-switch proxy failover <profile1,profile2,...>     # Same-model fallback order
+  pi-switch webui start  [--host <ip>] [--port <port>] [--daemon]   # Browser config UI
+  pi-switch webui stop
+  pi-switch webui status
   pi-switch stats
   pi-switch logs export [--format json|csv] [--output <file>]
   pi-switch doctor
@@ -502,7 +506,7 @@ async function main() {
 
         if (args.daemon) {
           // Daemon mode: fork background process
-          const result = JSON.parse(daemonStartNative(host, port, PROJECT_DIR));
+          const result = JSON.parse(daemonStartNative("proxy", host, port, PROJECT_DIR));
           console.log(result.message);
           if (result.pid) console.log(`PID: ${result.pid}`);
         } else {
@@ -515,13 +519,13 @@ async function main() {
       }
 
       if (sub === "stop") {
-        const result = JSON.parse(daemonStopNative());
+        const result = JSON.parse(daemonStopNative("proxy"));
         console.log(result.message);
         return;
       }
 
       if (sub === "status") {
-        const result = JSON.parse(daemonStatusNative());
+        const result = JSON.parse(daemonStatusNative("proxy"));
         if (result.running) {
           console.log(`Proxy daemon is running (PID ${result.pid})`);
           console.log(`Listen: http://${result.host}:${result.port}`);
@@ -543,6 +547,58 @@ async function main() {
       }
 
       fail("usage: pi-switch proxy [start|stop|status|failover]");
+    }
+
+    // ─── WebUI subcommands ───────────────────────────
+    // Mirror the proxy subcommands: the web server is a second daemon-managed
+    // service (own pid/log/port) that hosts the management UI + REST API.
+
+    if (effectiveCmd === "webui") {
+      const sub = rest[0] || "status";
+
+      if (sub === "start") {
+        const args = {};
+        for (let i = 1; i < rest.length; i++) {
+          if (rest[i] === "--host") args.host = rest[++i];
+          else if (rest[i] === "--port") args.port = parseInt(rest[++i], 10);
+          else if (rest[i] === "--daemon") args.daemon = true;
+        }
+
+        const config = JSON.parse(listProfiles());
+        const host = args.host || config.settings?.web?.host || "127.0.0.1";
+        const port = args.port || config.settings?.web?.port || 43110;
+
+        if (args.daemon) {
+          const result = JSON.parse(daemonStartNative("webui", host, port, PROJECT_DIR));
+          console.log(result.message);
+          if (result.pid) console.log(`PID: ${result.pid}`);
+          console.log(`Open http://${host}:${port} in your browser.`);
+        } else {
+          console.log(`Starting WebUI server on http://${host}:${port} (foreground mode)`);
+          console.log(`Open the URL in your browser. Press Ctrl+C to stop.`);
+          await runWebServer(host, port, PROJECT_DIR);
+        }
+        return;
+      }
+
+      if (sub === "stop") {
+        const result = JSON.parse(daemonStopNative("webui"));
+        console.log(result.message);
+        return;
+      }
+
+      if (sub === "status") {
+        const result = JSON.parse(daemonStatusNative("webui"));
+        if (result.running) {
+          console.log(`WebUI daemon is running (PID ${result.pid})`);
+          console.log(`Open: http://${result.host}:${result.port}`);
+        } else {
+          console.log(result.message);
+        }
+        return;
+      }
+
+      fail("usage: pi-switch webui [start|stop|status]");
     }
 
     // ─── Stats ───────────────────────────────────────

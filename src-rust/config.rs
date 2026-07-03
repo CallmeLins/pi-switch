@@ -107,6 +107,20 @@ pub struct ProxySettings {
     pub circuit_breaker: CircuitBreakerSettings,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSettings {
+    #[serde(default = "default_web_host")]
+    pub host: String,
+    #[serde(default = "default_web_port")]
+    pub port: u16,
+}
+
+impl Default for WebSettings {
+    fn default() -> Self {
+        Self { host: default_web_host(), port: default_web_port() }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_prefix")]
@@ -119,6 +133,8 @@ pub struct Settings {
     pub language: Option<String>,
     #[serde(default)]
     pub proxy: ProxySettings,
+    #[serde(default)]
+    pub web: WebSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +155,8 @@ fn default_failure_threshold() -> u32 { 3 }
 fn default_cooldown() -> u32 { 60 }
 fn default_host() -> String { "127.0.0.1".into() }
 fn default_port() -> u16 { 43112 }
+fn default_web_host() -> String { "127.0.0.1".into() }
+fn default_web_port() -> u16 { 43110 }
 fn default_prefix() -> String { "pi-switch".into() }
 fn default_write_mode() -> String { "merge".into() }
 fn default_input() -> Vec<String> { vec!["text".into()] }
@@ -166,6 +184,10 @@ impl Default for PiSwitchConfig {
                         failure_threshold: 3,
                         cooldown_seconds: 60,
                     },
+                },
+                web: WebSettings {
+                    host: default_web_host(),
+                    port: default_web_port(),
                 },
             },
         }
