@@ -73,17 +73,17 @@ jobs:
       - name: Build WebUI
         run: npm run build:webui
 
-      - name: Build native
+      - name: Build native (with zig for glibc 2.31)
+        if: matrix.use_zig == true
         run: |
-          if [ "${{ matrix.use_zig }}" = "true" ]; then
-            # Use zig to target GLIBC 2.31 for broad compatibility
-            cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
-            # Rename to match napi-rs naming convention
-            cp target/x86_64-unknown-linux-gnu/release/libpi_switch_native.so pi-switch-native.linux-x64-gnu.node
-          else
-            npm install -g @napi-rs/cli
-            npm run build:native -- --target ${{ matrix.target }}
-          fi
+          cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+          cp target/x86_64-unknown-linux-gnu/release/libpi_switch_native.so pi-switch-native.linux-x64-gnu.node
+
+      - name: Build native (standard)
+        if: matrix.use_zig != true
+        run: |
+          npm install -g @napi-rs/cli
+          npm run build:native -- --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
