@@ -56,6 +56,12 @@ jobs:
             target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build WebUI
+        run: npm run build:webui
+
       - name: Build native
         run: |
           npm install -g @napi-rs/cli
