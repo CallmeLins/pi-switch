@@ -22,9 +22,10 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-latest
+            use_zig: true
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-20.04
+            os: ubuntu-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
 
@@ -47,6 +48,16 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Install zig (for glibc 2.31 targeting)
+        if: matrix.use_zig == true
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.11.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zig == true
+        run: pip3 install cargo-zigbuild
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -64,8 +75,15 @@ jobs:
 
       - name: Build native
         run: |
-          npm install -g @napi-rs/cli
-          npm run build:native -- --target ${{ matrix.target }}
+          if [ "${{ matrix.use_zig }}" = "true" ]; then
+            # Use zig to target GLIBC 2.31 for broad compatibility
+            cargo zigbuild --release --target x86_64-unknown-linux-gnu.2.31
+            # Rename to match napi-rs naming convention
+            cp target/x86_64-unknown-linux-gnu/release/libpi_switch_native.so pi-switch-native.linux-x64-gnu.node
+          else
+            npm install -g @napi-rs/cli
+            npm run build:native -- --target ${{ matrix.target }}
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
