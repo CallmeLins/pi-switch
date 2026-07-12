@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-0.3.8-blue.svg)](https://github.com/user/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-0.3.9-blue.svg)](https://github.com/user/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -43,6 +43,21 @@ cd pi-switch
 npm install
 npm run build:native
 node bin/pi-switch.js tui
+```
+
+### System Compatibility
+
+**Supported platforms:**
+- ✅ Windows (x64)
+- ✅ macOS (Intel & Apple Silicon)
+- ✅ Linux (x64) - glibc & musl
+
+**Linux users:** This package includes prebuilt binaries for both glibc and musl systems. If you encounter a GLIBC version error, the package will automatically fallback to the musl binary which has broader compatibility.
+
+**Troubleshooting GLIBC errors:**
+```bash
+# If you see "GLIBC_X.XX not found", build from source:
+npm install -g @cokefenta/pi-switch --build-from-source
 ```
 
 ---

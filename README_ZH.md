@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![版本](https://img.shields.io/badge/version-0.3.8-blue.svg)](https://github.com/user/pi-switch/releases)
+[![版本](https://img.shields.io/badge/version-0.3.9-blue.svg)](https://github.com/user/pi-switch/releases)
 [![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -43,6 +43,21 @@ cd pi-switch
 npm install
 npm run build:native
 node bin/pi-switch.js tui
+```
+
+### 系统兼容性
+
+**支持的平台：**
+- ✅ Windows (x64)
+- ✅ macOS (Intel 与 Apple Silicon)
+- ✅ Linux (x64) - glibc 和 musl
+
+**Linux 用户：** 本包包含了 glibc 和 musl 两种预编译二进制文件。如果遇到 GLIBC 版本错误，包会自动回退到兼容性更广的 musl 版本。
+
+**GLIBC 错误排查：**
+```bash
+# 如果看到 "GLIBC_X.XX not found" 错误，可从源码构建：
+npm install -g @cokefenta/pi-switch --build-from-source
 ```
 
 ---

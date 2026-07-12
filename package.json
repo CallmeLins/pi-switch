@@ -1,6 +1,6 @@
 {
   "name": "@cokefenta/pi-switch",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Lightweight profile switcher for pi models.json",
   "type": "module",
   "bin": {
@@ -13,6 +13,7 @@
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
       "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
       "x86_64-pc-windows-msvc"
     ]
   },
@@ -24,6 +25,7 @@
     "pi-switch-native.darwin-arm64.node",
     "pi-switch-native.darwin-x64.node",
     "pi-switch-native.linux-x64-gnu.node",
+    "pi-switch-native.linux-x64-musl.node",
     "pi-switch-native.win32-x64-msvc.node",
     "extensions"
   ],
