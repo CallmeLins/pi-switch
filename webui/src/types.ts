@@ -7,31 +7,44 @@ export interface ModelCost {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  tiers?: Array<ModelCost & { inputTokensAbove: number }>;
+  [key: string]: unknown;
 }
 
 export interface ModelEntry {
   id: string;
   name?: string;
+  api?: string;
+  baseUrl?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
   input: string[];
   contextWindow: number;
   maxTokens: number;
   cost?: ModelCost;
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface ProviderProfile {
+  name?: string;
   api: string;
   baseUrl: string;
   apiKey: string;
   models: ModelEntry[];
+  oauth?: "radius";
   preset?: string;
-  headers?: Record<string, unknown>;
-  authHeader?: string;
-  compat?: string;
+  headers?: Record<string, string>;
+  authHeader?: boolean;
+  compat?: Record<string, unknown>;
+  modelOverrides?: Record<string, Record<string, unknown>>;
   proxy: boolean;
   updatedAt?: string;
   modelMap?: Record<string, unknown>;
   exposedModels?: string[];
   userAgent?: string;
+  [key: string]: unknown;
 }
 
 export interface CircuitBreakerSettings {

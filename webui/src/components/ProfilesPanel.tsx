@@ -15,7 +15,12 @@ import {
   cx,
 } from "./ui";
 
-const API_TYPES = ["openai-completions", "anthropic-messages", "google-generative-ai"];
+const API_TYPES = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+];
 const SPOOFS = [
   { value: "", label: "none" },
   { value: "claude-code", label: "claude-code" },

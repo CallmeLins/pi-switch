@@ -5,8 +5,8 @@ use crate::daemon::{daemon_start, daemon_stop, PROXY};
 use crate::ops;
 
 use super::data::{ProfileRow, UiData};
-use super::i18n;
 use super::form::{FieldKind, FormFocus, FormMode, ProviderFormState};
+use super::i18n;
 use super::route::{NavItem, Route};
 use super::text_edit::TextInput;
 use super::theme::{theme, Theme};
@@ -100,7 +100,7 @@ pub struct App {
     pub stats_scroll: u16,
     pub settings_lang_idx: usize,
     pub settings_proxy_idx: usize,
-    pub settings_user_agent_idx: usize,  // 0=claude-code, 1=codex, 2=gemini
+    pub settings_user_agent_idx: usize, // 0=claude-code, 1=codex, 2=gemini
     pub settings_editing_field: Option<usize>,
     pub settings_edit_input: TextInput,
     pub detail_scroll: u16,
@@ -117,12 +117,16 @@ pub struct App {
     pub model_selection_loading: bool,
     pub fetch_rx: Option<mpsc::Receiver<FetchModelsMessage>>,
     // Failover editor state
-    pub failover_list: Vec<(String, bool)>,  // (provider_name, selected)
+    pub failover_list: Vec<(String, bool)>, // (provider_name, selected)
     pub failover_idx: usize,
 }
 
 pub fn proxy_actions() -> [&'static str; 3] {
-    [i18n::proxy_action_start(), i18n::proxy_action_stop(), i18n::proxy_action_status()]
+    [
+        i18n::proxy_action_start(),
+        i18n::proxy_action_stop(),
+        i18n::proxy_action_status(),
+    ]
 }
 
 pub fn user_agent_presets() -> [&'static str; 3] {
@@ -214,7 +218,9 @@ impl App {
         let visible = self.visible_profiles().len();
         self.profiles_idx = self.profiles_idx.min(visible.saturating_sub(1));
         self.proxy_idx = self.proxy_idx.min(proxy_actions().len() - 1);
-        self.backups_idx = self.backups_idx.min(self.data.backups.len().saturating_sub(1));
+        self.backups_idx = self
+            .backups_idx
+            .min(self.data.backups.len().saturating_sub(1));
     }
 
     pub fn push_toast(&mut self, kind: ToastKind, message: impl Into<String>) {
@@ -254,13 +260,23 @@ impl App {
                 match msg {
                     FetchModelsMessage::Success(fetched_models) => {
                         // Check if we're in form mode (Route::FetchModels with "_temp_form")
-                        let is_form_mode = matches!(&self.route, Route::FetchModels(name) if name == "_temp_form");
+                        let is_form_mode =
+                            matches!(&self.route, Route::FetchModels(name) if name == "_temp_form");
 
                         if is_form_mode {
                             // Form mode: update selection list with manual models pre-selected
-                            let manual_models: std::collections::HashSet<_> = self.model_selection_list
+                            let manual_models: std::collections::HashSet<_> = self
+                                .model_selection_list
                                 .iter()
-                                .filter_map(|(id, selected)| if *selected { Some(id.clone()) } else { None })
+                                .filter_map(
+                                    |(id, selected)| {
+                                        if *selected {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        }
+                                    },
+                                )
                                 .collect();
 
                             self.model_selection_list = fetched_models
@@ -271,12 +287,24 @@ impl App {
                                 })
                                 .collect();
 
-                            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(self.model_selection_list.len()));
+                            self.push_toast(
+                                ToastKind::Success,
+                                i18n::toast_models_fetched(self.model_selection_list.len()),
+                            );
                         } else {
                             // Model selection mode: merge preserving selection state
-                            let existing: std::collections::HashSet<_> = self.model_selection_list
+                            let existing: std::collections::HashSet<_> = self
+                                .model_selection_list
                                 .iter()
-                                .filter_map(|(id, selected)| if *selected { Some(id.clone()) } else { None })
+                                .filter_map(
+                                    |(id, selected)| {
+                                        if *selected {
+                                            Some(id.clone())
+                                        } else {
+                                            None
+                                        }
+                                    },
+                                )
                                 .collect();
 
                             self.model_selection_list = fetched_models
@@ -287,7 +315,10 @@ impl App {
                                 })
                                 .collect();
 
-                            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(self.model_selection_list.len()));
+                            self.push_toast(
+                                ToastKind::Success,
+                                i18n::toast_models_fetched(self.model_selection_list.len()),
+                            );
                         }
                     }
                     FetchModelsMessage::Error(err) => {
@@ -314,7 +345,10 @@ impl App {
 
     /// Normalize vim-style hjkl into arrow keys for non-editing contexts.
     fn normalize_key(key: KeyEvent) -> KeyEvent {
-        if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             return key;
         }
         let code = match key.code {
@@ -764,29 +798,45 @@ impl App {
                 if self.settings_proxy_idx == 0 {
                     // Toggle language
                     let new_idx = 1 - self.settings_lang_idx;
-                    let new_lang = if new_idx == 1 { i18n::Lang::Zh } else { i18n::Lang::En };
+                    let new_lang = if new_idx == 1 {
+                        i18n::Lang::Zh
+                    } else {
+                        i18n::Lang::En
+                    };
                     match i18n::set_lang(new_lang) {
                         Ok(()) => {
                             self.settings_lang_idx = new_idx;
-                            self.push_toast(ToastKind::Success, i18n::toast_lang_set(new_lang.code()));
+                            self.push_toast(
+                                ToastKind::Success,
+                                i18n::toast_lang_set(new_lang.code()),
+                            );
                         }
                         Err(e) => self.push_toast(ToastKind::Error, e),
                     }
                 } else if self.settings_proxy_idx == 3 {
                     // Cycle User-Agent presets
                     let presets = user_agent_presets();
-                    let direction = if matches!(key.code, KeyCode::Left) { -1i32 } else { 1i32 };
+                    let direction = if matches!(key.code, KeyCode::Left) {
+                        -1i32
+                    } else {
+                        1i32
+                    };
                     let new_idx = ((self.settings_user_agent_idx as i32 + direction)
-                        .rem_euclid(presets.len() as i32)) as usize;
+                        .rem_euclid(presets.len() as i32))
+                        as usize;
                     self.settings_user_agent_idx = new_idx;
 
                     // Apply preset value to config
                     if let Ok(mut config) = crate::config::load_config() {
-                        config.settings.proxy.user_agent = user_agent_preset_value(new_idx).map(|s| s.to_string());
+                        config.settings.proxy.user_agent =
+                            user_agent_preset_value(new_idx).map(|s| s.to_string());
                         if let Ok(()) = crate::config::save_config(&config) {
                             self.refresh();
                             let preset_name = presets[new_idx];
-                            self.push_toast(ToastKind::Success, format!("User-Agent: {}", preset_name));
+                            self.push_toast(
+                                ToastKind::Success,
+                                format!("User-Agent: {}", preset_name),
+                            );
                         }
                     }
                 }
@@ -818,11 +868,13 @@ impl App {
             1 => proxy.host.clone(),
             2 => proxy.port.to_string(),
             3 => proxy.user_agent.as_deref().unwrap_or("").to_string(),
-            4 => if proxy.failover.is_empty() {
-                String::new()
-            } else {
-                proxy.failover.join(", ")
-            },
+            4 => {
+                if proxy.failover.is_empty() {
+                    String::new()
+                } else {
+                    proxy.failover.join(", ")
+                }
+            }
             _ => String::new(),
         }
     }
@@ -880,9 +932,10 @@ impl App {
         // Then add unselected ones (non-proxy profiles not in failover)
         for (name, profile) in &self.data.config.profiles {
             if current_failover.contains(name) {
-                continue;  // Already added
+                continue; // Already added
             }
-            let is_proxy = profile.get("proxy")
+            let is_proxy = profile
+                .get("proxy")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if !is_proxy {
@@ -910,7 +963,9 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.failover_idx = self.failover_idx.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Down | KeyCode::Char('j')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 self.failover_idx = (self.failover_idx + 1).min(len - 1);
             }
             KeyCode::Char(' ') => {
@@ -920,14 +975,16 @@ impl App {
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Move item up
                 if self.failover_idx > 0 {
-                    self.failover_list.swap(self.failover_idx, self.failover_idx - 1);
+                    self.failover_list
+                        .swap(self.failover_idx, self.failover_idx - 1);
                     self.failover_idx -= 1;
                 }
             }
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Move item down
                 if self.failover_idx < len - 1 {
-                    self.failover_list.swap(self.failover_idx, self.failover_idx + 1);
+                    self.failover_list
+                        .swap(self.failover_idx, self.failover_idx + 1);
                     self.failover_idx += 1;
                 }
             }
@@ -949,7 +1006,9 @@ impl App {
         };
 
         // Collect selected items in order
-        let failover: Vec<String> = self.failover_list.iter()
+        let failover: Vec<String> = self
+            .failover_list
+            .iter()
             .filter(|(_, selected)| *selected)
             .map(|(name, _)| name.clone())
             .collect();
@@ -1054,7 +1113,11 @@ impl App {
         if is_new_name && self.data.config.profiles.contains_key(&name) {
             self.push_toast(
                 ToastKind::Error,
-                    if i18n::is_zh() { format!("供应商 '{name}' 已存在") } else { format!("Profile '{name}' already exists") },
+                if i18n::is_zh() {
+                    format!("供应商 '{name}' 已存在")
+                } else {
+                    format!("Profile '{name}' already exists")
+                },
             );
             return false;
         }
@@ -1101,10 +1164,7 @@ impl App {
                     form.json_editing = false;
                 }
                 KeyCode::Enter => {
-                    match form.apply_json_edit() {
-                        Ok(()) => {}
-                        Err(e) => self.push_toast(ToastKind::Error, e),
-                    }
+                    form.json_edit.insert_newline();
                 }
                 KeyCode::Tab => {
                     if let Err(e) = form.apply_json_edit() {
@@ -1160,12 +1220,29 @@ impl App {
                             if target_line < form.json_scroll as usize {
                                 form.json_scroll = target_line as u16;
                             } else if target_line >= (form.json_scroll as usize + visible_lines) {
-                                form.json_scroll = target_line.saturating_sub(visible_lines - 1) as u16;
+                                form.json_scroll =
+                                    target_line.saturating_sub(visible_lines - 1) as u16;
                             }
                         }
                     }
                 }
                 _ => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('f' | 'F'))
+                    {
+                        match form.format_json_edit() {
+                            Ok(()) => self.push_toast(
+                                ToastKind::Success,
+                                if i18n::is_zh() {
+                                    "JSON 已格式化"
+                                } else {
+                                    "JSON formatted"
+                                },
+                            ),
+                            Err(e) => self.push_toast(ToastKind::Error, e),
+                        }
+                        return;
+                    }
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(key.code, KeyCode::Char('s' | 'S'))
                     {
@@ -1322,7 +1399,9 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 form.json_scroll = form.json_scroll.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Down | KeyCode::Char('j')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 form.json_scroll = form.json_scroll.saturating_add(1);
             }
             KeyCode::PageUp => {
@@ -1348,7 +1427,9 @@ impl App {
         let Some(form) = &self.form else { return };
 
         // Get manually entered models
-        let manual_models: Vec<String> = form.models.value
+        let manual_models: Vec<String> = form
+            .models
+            .value
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -1366,18 +1447,19 @@ impl App {
         };
 
         if temp_profile.base_url.is_empty() || temp_profile.api_key.is_empty() {
-            self.push_toast(ToastKind::Error, if i18n::is_zh() {
-                "请先填写 API 地址和密钥"
-            } else {
-                "Please fill in Base URL and API Key first"
-            });
+            self.push_toast(
+                ToastKind::Error,
+                if i18n::is_zh() {
+                    "请先填写 API 地址和密钥"
+                } else {
+                    "Please fill in Base URL and API Key first"
+                },
+            );
             return;
         }
 
         // Show manual models immediately with all selected
-        self.model_selection_list = manual_models.iter()
-            .map(|id| (id.clone(), true))
-            .collect();
+        self.model_selection_list = manual_models.iter().map(|id| (id.clone(), true)).collect();
         self.model_selection_idx = 0;
         self.model_selection_loading = true;
 
@@ -1407,14 +1489,18 @@ impl App {
             };
 
             let api_key = crate::config::resolve_env(&temp_profile.api_key);
-            let candidate_urls = ops::build_model_fetch_urls(&temp_profile.base_url, &temp_profile.api);
+            let candidate_urls =
+                ops::build_model_fetch_urls(&temp_profile.base_url, &temp_profile.api);
 
             let result = rt.block_on(async {
                 for url in candidate_urls {
                     let mut req = client.get(&url);
                     req = match temp_profile.api.as_str() {
-                        "openai-completions" => req.header("Authorization", format!("Bearer {}", api_key)),
-                        "anthropic-messages" => req.header("x-api-key", &api_key)
+                        "openai-completions" => {
+                            req.header("Authorization", format!("Bearer {}", api_key))
+                        }
+                        "anthropic-messages" => req
+                            .header("x-api-key", &api_key)
                             .header("anthropic-version", "2023-06-01"),
                         _ => req.header("Authorization", format!("Bearer {}", api_key)),
                     };
@@ -1461,15 +1547,17 @@ impl App {
             None => return,
         };
 
-        let profile: crate::config::ProviderProfile = match serde_json::from_value(profile_value.clone()) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
+        let profile: crate::config::ProviderProfile =
+            match serde_json::from_value(profile_value.clone()) {
+                Ok(p) => p,
+                Err(_) => return,
+            };
 
         // Load all models with exposed state
         for model in &profile.models {
             let is_exposed = profile.exposed_models.contains(&model.id);
-            self.model_selection_list.push((model.id.clone(), is_exposed));
+            self.model_selection_list
+                .push((model.id.clone(), is_exposed));
         }
     }
 
@@ -1489,12 +1577,14 @@ impl App {
             }
             KeyCode::Down => {
                 if !self.model_selection_list.is_empty() {
-                    self.model_selection_idx = (self.model_selection_idx + 1)
-                        .min(self.model_selection_list.len() - 1);
+                    self.model_selection_idx =
+                        (self.model_selection_idx + 1).min(self.model_selection_list.len() - 1);
                 }
             }
             KeyCode::Char(' ') => {
-                if let Some((_, selected)) = self.model_selection_list.get_mut(self.model_selection_idx) {
+                if let Some((_, selected)) =
+                    self.model_selection_list.get_mut(self.model_selection_idx)
+                {
                     *selected = !*selected;
                 }
             }
@@ -1515,12 +1605,14 @@ impl App {
             }
             KeyCode::Down => {
                 if !self.model_selection_list.is_empty() {
-                    self.model_selection_idx = (self.model_selection_idx + 1)
-                        .min(self.model_selection_list.len() - 1);
+                    self.model_selection_idx =
+                        (self.model_selection_idx + 1).min(self.model_selection_list.len() - 1);
                 }
             }
             KeyCode::Char(' ') => {
-                if let Some((_, selected)) = self.model_selection_list.get_mut(self.model_selection_idx) {
+                if let Some((_, selected)) =
+                    self.model_selection_list.get_mut(self.model_selection_idx)
+                {
                     *selected = !*selected;
                 }
             }
@@ -1536,7 +1628,8 @@ impl App {
 
         if is_form_mode {
             // Form mode: update form's models field
-            let selected_ids: Vec<String> = self.model_selection_list
+            let selected_ids: Vec<String> = self
+                .model_selection_list
                 .iter()
                 .filter(|(_, selected)| *selected)
                 .map(|(id, _)| id.clone())
@@ -1546,11 +1639,15 @@ impl App {
                 form.models.set(selected_ids.join(", "));
             }
 
-            self.push_toast(ToastKind::Success, i18n::toast_models_fetched(selected_ids.len()));
+            self.push_toast(
+                ToastKind::Success,
+                i18n::toast_models_fetched(selected_ids.len()),
+            );
             self.route = Route::Form;
         } else {
             // Profile mode: save to config
-            let selected_models: Vec<crate::config::ModelEntry> = self.model_selection_list
+            let selected_models: Vec<crate::config::ModelEntry> = self
+                .model_selection_list
                 .iter()
                 .filter(|(_, selected)| *selected)
                 .map(|(id, _)| crate::config::ModelEntry {
@@ -1573,7 +1670,8 @@ impl App {
     }
 
     fn save_expose_models_selection(&mut self, name: &str) {
-        let exposed_model_ids: Vec<String> = self.model_selection_list
+        let exposed_model_ids: Vec<String> = self
+            .model_selection_list
             .iter()
             .filter(|(_, selected)| *selected)
             .map(|(id, _)| id.clone())
