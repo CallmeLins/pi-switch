@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -34,8 +36,33 @@ jobs:
       - name: Build WebUI
         run: npm run build:webui
 
-      - name: Check Rust formatting
-        run: cargo fmt --check
+      - name: Find changed Rust files
+        id: rust-files
+        shell: bash
+        run: |
+          files=$(git diff --name-only origin/main...HEAD -- '*.rs')
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Format changed Rust files for manual runs
+        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        shell: bash
+        run: |
+          rustfmt ${{ steps.rust-files.outputs.files }}
+          git diff --binary > rustfmt.patch
+
+      - name: Upload Rust formatting patch
+        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-patch
+          path: rustfmt.patch
+
+      - name: Check changed Rust formatting
+        if: github.event_name != 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        shell: bash
+        run: rustfmt --check ${{ steps.rust-files.outputs.files }}
 
       - name: Lint Rust
         run: cargo clippy --all-targets -- -D warnings
