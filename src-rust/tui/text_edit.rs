@@ -145,6 +145,10 @@ impl TextInput {
         }
     }
 
+    pub fn insert_newline(&mut self) -> bool {
+        self.insert_char('\n')
+    }
+
     fn clamp_cursor(&mut self) {
         self.cursor = self.cursor.min(self.len_chars());
     }

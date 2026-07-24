@@ -647,6 +647,21 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
         form.json_preview()
     };
 
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+    let hints: &[(&str, &str)] = if editing {
+        &[
+            ("Enter", if i18n::is_zh() { "换行" } else { "newline" }),
+            ("Ctrl+F", if i18n::is_zh() { "格式化" } else { "format" }),
+            ("Tab", if i18n::is_zh() { "应用" } else { "apply" }),
+        ]
+    } else {
+        &[("Enter", i18n::key_edit()), ("↑↓", i18n::key_scroll())]
+    };
+    render_key_bar_center(frame, theme, chunks[0], hints);
+
     frame.render_widget(
         Paragraph::new(text)
             .style(if editing {
@@ -656,7 +671,7 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
             })
             .scroll((form.json_scroll, 0))
             .wrap(Wrap { trim: false }),
-        inner,
+        chunks[1],
     );
 
     if editing {
@@ -678,11 +693,11 @@ fn render_json_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
         // Adjust cursor position relative to scroll
         let visible_line = cursor_line.saturating_sub(form.json_scroll as usize);
-        let cursor_y = inner.y + visible_line as u16;
-        let cursor_x = inner.x + 1 + cursor_col as u16;
+        let cursor_y = chunks[1].y + visible_line as u16;
+        let cursor_x = chunks[1].x + 1 + cursor_col as u16;
 
         // Only set cursor if within visible area
-        if cursor_y >= inner.y && cursor_y < inner.y + inner.height {
+        if cursor_y >= chunks[1].y && cursor_y < chunks[1].y + chunks[1].height {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
     }

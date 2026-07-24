@@ -118,15 +118,8 @@ pub fn add_provider(opts: AddProviderOptions) -> napi::Result<AddResult> {
             base_url,
             api_key,
             models,
-            preset: None,
-            headers: None,
-            auth_header: None,
-            compat: None,
-            proxy: false,
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
-            model_map: None,
-            exposed_models: vec![],
-            spoof: None,
+            ..Default::default()
         }
     };
 
@@ -473,7 +466,7 @@ pub fn update_provider_models(name: String, models: Vec<ModelEntryInput>) -> nap
             input: m.input.unwrap_or_else(|| vec!["text".to_string()]),
             context_window: m.context_window.unwrap_or(128000),
             max_tokens: m.max_tokens.unwrap_or(16384),
-            cost: config::ModelCost::default(),
+            ..Default::default()
         })
         .collect();
 

@@ -4,8 +4,9 @@ use crate::presets::Preset;
 use super::i18n;
 use super::text_edit::TextInput;
 
-pub const API_CHOICES: [&str; 3] = [
+pub const API_CHOICES: [&str; 4] = [
     "openai-completions",
+    "openai-responses",
     "anthropic-messages",
     "google-generative-ai",
 ];
@@ -93,18 +94,7 @@ fn models_text(models: &[ModelEntry]) -> String {
 fn empty_profile() -> ProviderProfile {
     ProviderProfile {
         api: API_CHOICES[0].to_string(),
-        base_url: String::new(),
-        api_key: String::new(),
-        models: vec![],
-        preset: None,
-        headers: None,
-        auth_header: None,
-        compat: None,
-        proxy: false,
-        updated_at: None,
-        model_map: None,
-        exposed_models: vec![],
-        spoof: None,
+        ..Default::default()
     }
 }
 
@@ -257,37 +247,33 @@ impl ProviderFormState {
             return Err(if i18n::is_zh() { "名称为必填项".into() } else { "Name is required".into() });
         }
         let profile = self.build_profile();
-        if profile.base_url.is_empty() {
-            return Err(if i18n::is_zh() { "API 地址为必填项".into() } else { "Base URL is required".into() });
-        }
-        if profile.api_key.is_empty() {
-            return Err(if i18n::is_zh() { "API 密钥为必填项".into() } else { "API Key is required".into() });
-        }
-        if profile.models.is_empty() {
-            return Err(if i18n::is_zh() { "至少需要一个模型".into() } else { "At least one model is required".into() });
-        }
+        crate::config::validate_provider_profile(&self.profile_name(), &profile)?;
         Ok(profile)
     }
 
-    /// Try to apply edited JSON back to form fields. Returns error message on failure.
+    pub fn format_json_edit(&mut self) -> Result<(), String> {
+        let formatted = crate::config::format_provider_wrapper(&self.json_edit.value)?;
+        self.json_edit.set(formatted);
+        self.json_scroll = 0;
+        Ok(())
+    }
+
+    /// Apply a single-profile JSON wrapper back to the form without losing advanced fields.
     pub fn apply_json_edit(&mut self) -> Result<(), String> {
         let json_str = self.json_edit.value.trim();
         if json_str.is_empty() {
             return Err(if i18n::is_zh() { "JSON 不能为空".to_string() } else { "JSON cannot be empty".to_string() });
         }
-        let parsed: serde_json::Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("{}", e))?;
-        let obj = parsed.as_object()
-            .ok_or_else(|| if i18n::is_zh() { "JSON 必须是对象格式".to_string() } else { "JSON must be an object".to_string() })?;
-        let profile: ProviderProfile = serde_json::from_value(serde_json::Value::Object(obj.clone()))
-            .map_err(|e| format!("{}", e))?;
+        let (name, profile) = crate::config::parse_provider_wrapper(json_str)?;
 
-        self.name.set(if let Some(key) = obj.keys().next() { key.clone() } else { self.name.value.clone() });
+        self.name.set(name);
         self.api_idx = api_index(&profile.api);
         self.base_url.set(profile.base_url.clone());
         self.api_key.set(profile.api_key.clone());
         self.models.set(models_text(&profile.models));
-        self.base.models = profile.models.clone();
+        self.preset_id = profile.preset.clone();
+        self.base = profile;
+        self.json_edit.set(self.json_preview());
         self.json_editing = false;
         Ok(())
     }

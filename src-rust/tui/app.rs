@@ -1101,10 +1101,7 @@ impl App {
                     form.json_editing = false;
                 }
                 KeyCode::Enter => {
-                    match form.apply_json_edit() {
-                        Ok(()) => {}
-                        Err(e) => self.push_toast(ToastKind::Error, e),
-                    }
+                    form.json_edit.insert_newline();
                 }
                 KeyCode::Tab => {
                     if let Err(e) = form.apply_json_edit() {
@@ -1166,6 +1163,18 @@ impl App {
                     }
                 }
                 _ => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('f' | 'F'))
+                    {
+                        match form.format_json_edit() {
+                            Ok(()) => self.push_toast(
+                                ToastKind::Success,
+                                if i18n::is_zh() { "JSON 已格式化" } else { "JSON formatted" },
+                            ),
+                            Err(e) => self.push_toast(ToastKind::Error, e),
+                        }
+                        return;
+                    }
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && matches!(key.code, KeyCode::Char('s' | 'S'))
                     {

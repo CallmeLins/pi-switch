@@ -232,9 +232,7 @@ pub fn upsert_profile(
     profile: &ProviderProfile,
     rename_from: Option<&str>,
 ) -> Result<Option<PathBuf>> {
-    if name.is_empty() {
-        return Err(AppError::InvalidInput("profile name required".into()));
-    }
+    config::validate_provider_profile(name, profile).map_err(AppError::InvalidInput)?;
 
     let mut config = load_config()?;
     let backup = backup_config("config")?;

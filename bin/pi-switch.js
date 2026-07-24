@@ -136,7 +136,7 @@ async function editProviderInteractive(name) {
     // Prompt for each field
     const newName = await prompt("Provider name", name);
 
-    let newApi = await prompt("API type (openai-completions | anthropic-messages | google-generative-ai)", profile.api);
+    let newApi = await prompt("API type (openai-completions | openai-responses | anthropic-messages | google-generative-ai)", profile.api);
     // Normalize aliases
     if (newApi === "openai") newApi = "openai-completions";
     if (newApi === "anthropic") newApi = "anthropic-messages";

@@ -147,13 +147,7 @@ pub fn preset_to_profile(preset: &Preset, api_key: Option<&str>, models: Option<
         api_key: api_key.unwrap_or(&preset.api_key).to_string(),
         models: models.unwrap_or_else(|| preset.models.clone()),
         preset: Some(preset.id.clone()),
-        headers: None,
-        auth_header: None,
-        compat: None,
-        proxy: false,
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
-        model_map: None,
-        exposed_models: vec![],
-        spoof: None,
+        ..Default::default()
     }
 }
