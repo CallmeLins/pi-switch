@@ -25,8 +25,11 @@ pub fn init() -> Result<Vec<String>> {
     if !models_path.exists() {
         let default_models = serde_json::json!({ "providers": {} });
         let tmp = config::config_dir().join("models.json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(&default_models).unwrap() + "\n")
-            .map_err(|e| AppError::io(&tmp, e))?;
+        std::fs::write(
+            &tmp,
+            serde_json::to_string_pretty(&default_models).unwrap() + "\n",
+        )
+        .map_err(|e| AppError::io(&tmp, e))?;
         std::fs::rename(&tmp, &models_path).map_err(|e| AppError::io(&models_path, e))?;
         messages.push(format!("Created {}", models_path.display()));
     } else {
@@ -43,7 +46,10 @@ pub fn set_failover(failover_profiles: Vec<String>) -> Result<Option<PathBuf>> {
 
     for name in &failover_profiles {
         if !config.profiles.contains_key(name) {
-            return Err(AppError::Message(format!("Profile '{}' does not exist", name)));
+            return Err(AppError::Message(format!(
+                "Profile '{}' does not exist",
+                name
+            )));
         }
         if let Some(profile_value) = config.profiles.get(name) {
             if let Ok(profile) = serde_json::from_value::<ProviderProfile>(profile_value.clone()) {
@@ -75,13 +81,30 @@ fn normalize_models(profile: &mut serde_json::Value) {
     if let Some(models) = profile.get_mut("models").and_then(|v| v.as_array_mut()) {
         for m in models {
             if let Some(obj) = m.as_object_mut() {
-                if obj.get("contextWindow").or(obj.get("context_window")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+                if obj
+                    .get("contextWindow")
+                    .or(obj.get("context_window"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                    == 0
+                {
                     obj.insert("contextWindow".into(), serde_json::json!(1000000));
                 }
-                if obj.get("maxTokens").or(obj.get("max_tokens")).and_then(|v| v.as_u64()).unwrap_or(0) == 0 {
+                if obj
+                    .get("maxTokens")
+                    .or(obj.get("max_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+                    == 0
+                {
                     obj.insert("maxTokens".into(), serde_json::json!(128000));
                 }
-                if obj.get("input").and_then(|v| v.as_array()).map(|a| a.is_empty()).unwrap_or(true) {
+                if obj
+                    .get("input")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true)
+                {
                     obj.insert("input".into(), serde_json::json!(["text"]));
                 }
             }
@@ -113,8 +136,8 @@ pub fn update_exposed_models(name: &str, model_ids: Vec<String>) -> Result<Optio
     profile.exposed_models = model_ids;
     profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
 
-    *profile_value = serde_json::to_value(&profile)
-        .map_err(|e| AppError::json(config::config_path(), e))?;
+    *profile_value =
+        serde_json::to_value(&profile).map_err(|e| AppError::json(config::config_path(), e))?;
 
     save_config(&config)?;
 
@@ -140,14 +163,17 @@ pub fn set_profile_spoof(name: &str, spoof: Option<String>) -> Result<Option<Pat
     profile.spoof = spoof;
     profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
 
-    *profile_value = serde_json::to_value(&profile)
-        .map_err(|e| AppError::json(config::config_path(), e))?;
+    *profile_value =
+        serde_json::to_value(&profile).map_err(|e| AppError::json(config::config_path(), e))?;
 
     save_config(&config)?;
     Ok(backup)
 }
 
-pub fn update_provider_models(name: &str, models: Vec<config::ModelEntry>) -> Result<Option<PathBuf>> {
+pub fn update_provider_models(
+    name: &str,
+    models: Vec<config::ModelEntry>,
+) -> Result<Option<PathBuf>> {
     let mut config = load_config()?;
     let backup = backup_config("config")?;
 
@@ -162,8 +188,8 @@ pub fn update_provider_models(name: &str, models: Vec<config::ModelEntry>) -> Re
     profile.models = models;
     profile.updated_at = Some(chrono::Utc::now().to_rfc3339());
 
-    *profile_value = serde_json::to_value(&profile)
-        .map_err(|e| AppError::json(config::config_path(), e))?;
+    *profile_value =
+        serde_json::to_value(&profile).map_err(|e| AppError::json(config::config_path(), e))?;
 
     save_config(&config)?;
 
@@ -232,9 +258,7 @@ pub fn upsert_profile(
     profile: &ProviderProfile,
     rename_from: Option<&str>,
 ) -> Result<Option<PathBuf>> {
-    if name.is_empty() {
-        return Err(AppError::InvalidInput("profile name required".into()));
-    }
+    config::validate_provider_profile(name, profile).map_err(AppError::InvalidInput)?;
 
     let mut config = load_config()?;
     let backup = backup_config("config")?;
@@ -291,7 +315,10 @@ pub fn duplicate_profile(src: &str, dst: &str) -> Result<Option<PathBuf>> {
         .ok_or_else(|| AppError::Message(format!("unknown profile '{}'", src)))?
         .clone();
     if config.profiles.contains_key(dst) {
-        return Err(AppError::Message(format!("profile '{}' already exists", dst)));
+        return Err(AppError::Message(format!(
+            "profile '{}' already exists",
+            dst
+        )));
     }
 
     let backup = backup_config("config")?;
@@ -348,12 +375,16 @@ pub async fn test_provider(name: &str) -> Result<TestResult> {
         }
     };
 
-    let url = format!("{}/chat/completions", profile.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/chat/completions",
+        profile.base_url.trim_end_matches('/')
+    );
     let mut req = client.post(&url).json(&test_body);
 
     // Add authorization header
     if profile.api == "anthropic-messages" {
-        req = req.header("x-api-key", &profile.api_key)
+        req = req
+            .header("x-api-key", &profile.api_key)
             .header("anthropic-version", "2023-06-01");
     } else {
         req = req.header("Authorization", format!("Bearer {}", profile.api_key));
@@ -374,7 +405,11 @@ pub async fn test_provider(name: &str) -> Result<TestResult> {
                 let error_text = resp.text().await.unwrap_or_else(|_| "Unknown error".into());
                 Ok(TestResult {
                     success: false,
-                    message: format!("✗ HTTP {} - {}", status.as_u16(), error_text.chars().take(100).collect::<String>()),
+                    message: format!(
+                        "✗ HTTP {} - {}",
+                        status.as_u16(),
+                        error_text.chars().take(100).collect::<String>()
+                    ),
                     response_time_ms: Some(elapsed),
                 })
             }
@@ -462,7 +497,6 @@ pub async fn fetch_models(name: &str) -> Result<Vec<String>> {
     Err(AppError::Message(last_error))
 }
 
-
 // ─── Sync Gateway Provider to Pi Config ──────────────────
 
 /// Write a single "gateway" provider into pi's models.json. It advertises every non-proxy
@@ -476,8 +510,8 @@ pub fn sync_gateway_to_pi() -> Result<()> {
     let models_path = config::models_path();
 
     let mut models: serde_json::Value = if models_path.exists() {
-        let text = std::fs::read_to_string(&models_path)
-            .map_err(|e| AppError::io(&models_path, e))?;
+        let text =
+            std::fs::read_to_string(&models_path).map_err(|e| AppError::io(&models_path, e))?;
         serde_json::from_str(&text).unwrap_or(serde_json::json!({ "providers": {} }))
     } else {
         serde_json::json!({ "providers": {} })
@@ -505,10 +539,15 @@ pub fn sync_gateway_to_pi() -> Result<()> {
         }
         for real_id in &profile.exposed_models {
             // Reuse the profile's model metadata (contextWindow/maxTokens/...) when available.
-            let mut entry = profile.models.iter()
+            let mut entry = profile
+                .models
+                .iter()
                 .find(|m| &m.id == real_id)
                 .cloned()
-                .unwrap_or_else(|| config::ModelEntry { id: real_id.clone(), ..Default::default() });
+                .unwrap_or_else(|| config::ModelEntry {
+                    id: real_id.clone(),
+                    ..Default::default()
+                });
             entry.id = format!("{}/{}", name, real_id);
             if let Ok(v) = serde_json::to_value(&entry) {
                 gateway_models.push(v);
@@ -679,4 +718,3 @@ pub fn update_settings(new_settings: &serde_json::Value) -> Result<Option<PathBu
     sync_gateway_to_pi()?;
     Ok(backup)
 }
-

@@ -146,7 +146,10 @@ pub fn run_doctor() -> Vec<DoctorCheck> {
         });
 
         for (name, profile) in &config.profiles {
-            let base_url = profile.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("");
+            let base_url = profile
+                .get("baseUrl")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let api_key = profile.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
             let api = profile.get("api").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -160,7 +163,10 @@ pub fn run_doctor() -> Vec<DoctorCheck> {
             });
             let valid_api = matches!(
                 api,
-                "openai-completions" | "anthropic-messages" | "google-generative-ai"
+                "openai-completions"
+                    | "openai-responses"
+                    | "anthropic-messages"
+                    | "google-generative-ai"
             );
             checks.push(DoctorCheck {
                 ok: valid_api,

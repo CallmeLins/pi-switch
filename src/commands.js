@@ -238,7 +238,7 @@ export async function doctor() {
         const key = envName(p.apiKey);
         push(Boolean(process.env[key]), `${name}: env ${key} ${process.env[key] ? "is set" : "is not set"}`);
       }
-      push(Boolean(API_ALIASES.has(p.api) || ["openai-completions", "anthropic-messages", "google-generative-ai"].includes(p.api)), `${name}: api supported (${p.api})`);
+      push(Boolean(API_ALIASES.has(p.api) || ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"].includes(p.api)), `${name}: api supported (${p.api})`);
       push(Array.isArray(p.models) && p.models.length > 0, `${name}: model list present`);
     }
   }
