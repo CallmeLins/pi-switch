@@ -40,29 +40,31 @@ jobs:
         id: rust-files
         shell: bash
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- '*.rs')
-          echo "files<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$files" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          git diff --name-only origin/main...HEAD -- '*.rs' > changed-rust-files.txt
+          if [[ -s changed-rust-files.txt ]]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Format changed Rust files for manual runs
-        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.has_files == 'true'
         shell: bash
         run: |
-          rustfmt ${{ steps.rust-files.outputs.files }}
+          xargs -r rustfmt < changed-rust-files.txt
           git diff --binary > rustfmt.patch
 
       - name: Upload Rust formatting patch
-        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rustfmt-patch
           path: rustfmt.patch
 
       - name: Check changed Rust formatting
-        if: github.event_name != 'workflow_dispatch' && steps.rust-files.outputs.files != ''
+        if: github.event_name != 'workflow_dispatch' && steps.rust-files.outputs.has_files == 'true'
         shell: bash
-        run: rustfmt --check ${{ steps.rust-files.outputs.files }}
+        run: xargs -r rustfmt --check < changed-rust-files.txt
 
       - name: Lint Rust
         run: cargo clippy --all-targets -- -D warnings
