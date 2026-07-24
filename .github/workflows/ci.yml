@@ -51,7 +51,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && steps.rust-files.outputs.has_files == 'true'
         shell: bash
         run: |
-          xargs -r rustfmt < changed-rust-files.txt
+          xargs -r rustfmt --edition 2021 < changed-rust-files.txt
           git diff --binary > rustfmt.patch
 
       - name: Upload Rust formatting patch
@@ -64,7 +64,7 @@ jobs:
       - name: Check changed Rust formatting
         if: github.event_name != 'workflow_dispatch' && steps.rust-files.outputs.has_files == 'true'
         shell: bash
-        run: xargs -r rustfmt --check < changed-rust-files.txt
+        run: xargs -r rustfmt --edition 2021 --check < changed-rust-files.txt
 
       - name: Lint Rust
         run: cargo clippy --all-targets -- -D warnings
