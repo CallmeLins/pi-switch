@@ -12,6 +12,37 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    name: verify / rust and webui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build WebUI
+        run: npm run build:webui
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Lint Rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --release --lib
+
   build:
     strategy:
       fail-fast: false
