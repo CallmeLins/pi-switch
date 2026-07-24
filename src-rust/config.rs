@@ -16,13 +16,25 @@ pub struct ModelEntry {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "thinkingLevelMap")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "thinkingLevelMap"
+    )]
     pub thinking_level_map: Option<Value>,
     #[serde(default = "default_input")]
     pub input: Vec<String>,
-    #[serde(default = "default_context_window", rename = "contextWindow", alias = "context_window")]
+    #[serde(
+        default = "default_context_window",
+        rename = "contextWindow",
+        alias = "context_window"
+    )]
     pub context_window: u32,
-    #[serde(default = "default_max_tokens", rename = "maxTokens", alias = "max_tokens")]
+    #[serde(
+        default = "default_max_tokens",
+        rename = "maxTokens",
+        alias = "max_tokens"
+    )]
     pub max_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<ModelCost>,
@@ -104,7 +116,11 @@ pub struct ProviderProfile {
     pub auth_header: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compat: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "modelOverrides")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "modelOverrides"
+    )]
     pub model_overrides: Option<Map<String, Value>>,
     #[serde(default)]
     pub proxy: bool,
@@ -163,7 +179,10 @@ pub struct WebSettings {
 
 impl Default for WebSettings {
     fn default() -> Self {
-        Self { host: default_web_host(), port: default_web_port() }
+        Self {
+            host: default_web_host(),
+            port: default_web_port(),
+        }
     }
 }
 
@@ -196,18 +215,42 @@ pub struct PiSwitchConfig {
 
 // ─── Defaults ─────────────────────────────────────────────
 
-fn default_true() -> bool { true }
-fn default_failure_threshold() -> u32 { 3 }
-fn default_cooldown() -> u32 { 60 }
-fn default_host() -> String { "127.0.0.1".into() }
-fn default_port() -> u16 { 43112 }
-fn default_web_host() -> String { "127.0.0.1".into() }
-fn default_web_port() -> u16 { 43110 }
-fn default_prefix() -> String { "pi-switch".into() }
-fn default_write_mode() -> String { "merge".into() }
-fn default_input() -> Vec<String> { vec!["text".into()] }
-fn default_context_window() -> u32 { 128000 }
-fn default_max_tokens() -> u32 { 16384 }
+fn default_true() -> bool {
+    true
+}
+fn default_failure_threshold() -> u32 {
+    3
+}
+fn default_cooldown() -> u32 {
+    60
+}
+fn default_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_port() -> u16 {
+    43112
+}
+fn default_web_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_web_port() -> u16 {
+    43110
+}
+fn default_prefix() -> String {
+    "pi-switch".into()
+}
+fn default_write_mode() -> String {
+    "merge".into()
+}
+fn default_input() -> Vec<String> {
+    vec!["text".into()]
+}
+fn default_context_window() -> u32 {
+    128000
+}
+fn default_max_tokens() -> u32 {
+    16384
+}
 
 impl Default for PiSwitchConfig {
     fn default() -> Self {
@@ -243,7 +286,9 @@ impl Default for PiSwitchConfig {
 // ─── Paths ────────────────────────────────────────────────
 
 pub fn config_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".pi-switch")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pi-switch")
 }
 
 pub fn config_path() -> PathBuf {
@@ -255,7 +300,10 @@ pub fn backup_dir() -> PathBuf {
 }
 
 pub fn pi_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".pi").join("agent")
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pi")
+        .join("agent")
 }
 
 pub fn models_path() -> PathBuf {
@@ -269,24 +317,18 @@ pub fn load_config() -> Result<PiSwitchConfig> {
     if !path.exists() {
         return Ok(PiSwitchConfig::default());
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| AppError::io(&path, e))?;
-    serde_json::from_str(&text)
-        .map_err(|e| AppError::json(&path, e))
+    let text = std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?;
+    serde_json::from_str(&text).map_err(|e| AppError::json(&path, e))
 }
 
 pub fn save_config(config: &PiSwitchConfig) -> Result<()> {
     let dir = config_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| AppError::io(&dir, e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::io(&dir, e))?;
     let path = config_path();
     let tmp = dir.join(format!("config.json.tmp-{}", std::process::id()));
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| AppError::json(&path, e))?;
-    std::fs::write(&tmp, json + "\n")
-        .map_err(|e| AppError::io(&tmp, e))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| AppError::io(&path, e))?;
+    let json = serde_json::to_string_pretty(config).map_err(|e| AppError::json(&path, e))?;
+    std::fs::write(&tmp, json + "\n").map_err(|e| AppError::io(&tmp, e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| AppError::io(&path, e))?;
     Ok(())
 }
 
@@ -306,12 +348,14 @@ pub fn backup_config(label: &str) -> Result<Option<PathBuf>> {
 pub fn restore_config(backup_path: &str) -> Result<PathBuf> {
     let backup = PathBuf::from(backup_path);
     if !backup.exists() {
-        return Err(AppError::Message(format!("Backup file not found: {}", backup_path)));
+        return Err(AppError::Message(format!(
+            "Backup file not found: {}",
+            backup_path
+        )));
     }
 
     // Validate backup is valid JSON
-    let content = std::fs::read_to_string(&backup)
-        .map_err(|e| AppError::io(&backup, e))?;
+    let content = std::fs::read_to_string(&backup).map_err(|e| AppError::io(&backup, e))?;
     let _: PiSwitchConfig = serde_json::from_str(&content)
         .map_err(|e| AppError::Message(format!("Invalid backup file: {}", e)))?;
 
@@ -320,8 +364,7 @@ pub fn restore_config(backup_path: &str) -> Result<PathBuf> {
 
     // Restore from backup
     let config_path = config_path();
-    std::fs::copy(&backup, &config_path)
-        .map_err(|e| AppError::io(&config_path, e))?;
+    std::fs::copy(&backup, &config_path).map_err(|e| AppError::io(&config_path, e))?;
 
     Ok(current_backup.unwrap_or(config_path))
 }
@@ -413,11 +456,16 @@ fn validate_compat(value: &Value, path: &str) -> std::result::Result<(), String>
         match key.as_str() {
             "maxTokensField" => {
                 if !matches!(value.as_str(), Some("max_completion_tokens" | "max_tokens")) {
-                    return Err(format!("{path}.{key} must be max_completion_tokens or max_tokens"));
+                    return Err(format!(
+                        "{path}.{key} must be max_completion_tokens or max_tokens"
+                    ));
                 }
             }
             "thinkingFormat" => {
-                if !value.as_str().is_some_and(|item| THINKING_FORMATS.contains(&item)) {
+                if !value
+                    .as_str()
+                    .is_some_and(|item| THINKING_FORMATS.contains(&item))
+                {
                     return Err(format!("{path}.{key} is not supported"));
                 }
             }
@@ -427,7 +475,10 @@ fn validate_compat(value: &Value, path: &str) -> std::result::Result<(), String>
                 }
             }
             "sessionAffinityFormat" => {
-                if !value.as_str().is_some_and(|item| SESSION_FORMATS.contains(&item)) {
+                if !value
+                    .as_str()
+                    .is_some_and(|item| SESSION_FORMATS.contains(&item))
+                {
                     return Err(format!("{path}.{key} is not supported"));
                 }
             }
@@ -436,10 +487,10 @@ fn validate_compat(value: &Value, path: &str) -> std::result::Result<(), String>
                     return Err(format!("{path}.{key} must be kimi"));
                 }
             }
-            "chatTemplateKwargs" | "openRouterRouting" | "vercelGatewayRouting" => {
-                if !value.is_object() {
-                    return Err(format!("{path}.{key} must be an object"));
-                }
+            "chatTemplateKwargs" | "openRouterRouting" | "vercelGatewayRouting"
+                if !value.is_object() =>
+            {
+                return Err(format!("{path}.{key} must be an object"));
             }
             _ => {}
         }
@@ -458,7 +509,9 @@ fn validate_model(model: &ModelEntry, path: &str) -> std::result::Result<(), Str
     }
     if let Some(base_url) = model.base_url.as_deref() {
         if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-            return Err(format!("{path}.baseUrl must start with http:// or https://"));
+            return Err(format!(
+                "{path}.baseUrl must start with http:// or https://"
+            ));
         }
     }
     if model.input.is_empty()
@@ -499,9 +552,13 @@ fn validate_cost(cost: &ModelCost, path: &str) -> std::result::Result<(), String
         let tier_rates = [tier.input, tier.output, tier.cache_read, tier.cache_write];
         if !tier.input_tokens_above.is_finite()
             || tier.input_tokens_above < 0.0
-            || tier_rates.iter().any(|rate| !rate.is_finite() || *rate < 0.0)
+            || tier_rates
+                .iter()
+                .any(|rate| !rate.is_finite() || *rate < 0.0)
         {
-            return Err(format!("{path}.tiers[{index}] must contain finite non-negative numbers"));
+            return Err(format!(
+                "{path}.tiers[{index}] must contain finite non-negative numbers"
+            ));
         }
     }
     Ok(())
@@ -513,16 +570,21 @@ fn validate_model_override(value: &Value, path: &str) -> std::result::Result<(),
         .ok_or_else(|| format!("{path} must be an object"))?;
     if object
         .get("name")
-        .is_some_and(|value| value.as_str().map_or(true, str::is_empty))
+        .is_some_and(|value| value.as_str().is_none_or(str::is_empty))
     {
         return Err(format!("{path}.name must be a non-empty string"));
     }
-    if object.get("reasoning").is_some_and(|value| !value.is_boolean()) {
+    if object
+        .get("reasoning")
+        .is_some_and(|value| !value.is_boolean())
+    {
         return Err(format!("{path}.reasoning must be a boolean"));
     }
     if let Some(input) = object.get("input") {
         let valid = input.as_array().is_some_and(|items| {
-            items.iter().all(|item| matches!(item.as_str(), Some("text" | "image")))
+            items
+                .iter()
+                .all(|item| matches!(item.as_str(), Some("text" | "image")))
         });
         if !valid {
             return Err(format!("{path}.input must contain only text or image"));
@@ -550,7 +612,13 @@ fn validate_model_override(value: &Value, path: &str) -> std::result::Result<(),
                     let tier = tier
                         .as_object()
                         .ok_or_else(|| format!("{path}.cost.tiers[{index}] must be an object"))?;
-                    for field in ["inputTokensAbove", "input", "output", "cacheRead", "cacheWrite"] {
+                    for field in [
+                        "inputTokensAbove",
+                        "input",
+                        "output",
+                        "cacheRead",
+                        "cacheWrite",
+                    ] {
                         if !tier
                             .get(field)
                             .and_then(Value::as_f64)
@@ -562,25 +630,35 @@ fn validate_model_override(value: &Value, path: &str) -> std::result::Result<(),
                         }
                     }
                 }
-            } else if !matches!(key.as_str(), "input" | "output" | "cacheRead" | "cacheWrite")
-                || !value.as_f64().is_some_and(|rate| rate.is_finite() && rate >= 0.0)
+            } else if !matches!(
+                key.as_str(),
+                "input" | "output" | "cacheRead" | "cacheWrite"
+            ) || !value
+                .as_f64()
+                .is_some_and(|rate| rate.is_finite() && rate >= 0.0)
             {
-                return Err(format!("{path}.cost.{key} is not a valid non-negative rate"));
+                return Err(format!(
+                    "{path}.cost.{key} is not a valid non-negative rate"
+                ));
             }
         }
     }
     for key in ["contextWindow", "maxTokens"] {
-        if object
-            .get(key)
-            .is_some_and(|value| !value.as_f64().is_some_and(|number| number.is_finite() && number > 0.0))
-        {
+        if object.get(key).is_some_and(|value| {
+            !value
+                .as_f64()
+                .is_some_and(|number| number.is_finite() && number > 0.0)
+        }) {
             return Err(format!("{path}.{key} must be greater than 0"));
         }
     }
     Ok(())
 }
 
-pub fn validate_provider_profile(name: &str, profile: &ProviderProfile) -> std::result::Result<(), String> {
+pub fn validate_provider_profile(
+    name: &str,
+    profile: &ProviderProfile,
+) -> std::result::Result<(), String> {
     if name.trim().is_empty() {
         return Err("profile name must not be empty".into());
     }
@@ -637,7 +715,9 @@ pub fn validate_provider_profile(name: &str, profile: &ProviderProfile) -> std::
     Ok(())
 }
 
-pub fn parse_provider_wrapper(input: &str) -> std::result::Result<(String, ProviderProfile), String> {
+pub fn parse_provider_wrapper(
+    input: &str,
+) -> std::result::Result<(String, ProviderProfile), String> {
     let parsed: Value = serde_json::from_str(input).map_err(|error| {
         format!(
             "JSON syntax error at line {}, column {}: {}",
@@ -830,7 +910,8 @@ mod tests {
         assert!(profile.models[0].extra.contains_key("futureModelField"));
 
         let formatted = format_provider_wrapper(input).expect("format provider wrapper");
-        let (_, reparsed) = parse_provider_wrapper(&formatted).expect("formatted wrapper remains valid");
+        let (_, reparsed) =
+            parse_provider_wrapper(&formatted).expect("formatted wrapper remains valid");
         assert!(reparsed.extra.contains_key("futureProviderField"));
         assert!(reparsed.models[0].extra.contains_key("futureModelField"));
     }
@@ -857,7 +938,9 @@ mod tests {
             "models": [{ "id": "model-a" }]
           }
         }"#;
-        assert!(parse_provider_wrapper(unknown_api).unwrap_err().contains("api is not supported"));
+        assert!(parse_provider_wrapper(unknown_api)
+            .unwrap_err()
+            .contains("api is not supported"));
 
         let invalid_input = r#"{
           "custom": {
@@ -866,7 +949,9 @@ mod tests {
             "models": [{ "id": "model-a", "input": ["audio"] }]
           }
         }"#;
-        assert!(parse_provider_wrapper(invalid_input).unwrap_err().contains("text or image"));
+        assert!(parse_provider_wrapper(invalid_input)
+            .unwrap_err()
+            .contains("text or image"));
     }
 
     #[test]
@@ -878,6 +963,8 @@ mod tests {
             "models": [{ "id": "model-a", "cost": { "input": 1 } }]
           }
         }"#;
-        assert!(parse_provider_wrapper(input).unwrap_err().contains("invalid profile structure"));
+        assert!(parse_provider_wrapper(input)
+            .unwrap_err()
+            .contains("invalid profile structure"));
     }
 }

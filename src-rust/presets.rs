@@ -48,15 +48,13 @@ pub fn all_presets() -> Vec<Preset> {
             api: "anthropic-messages".into(),
             base_url: "https://api.anthropic.com".into(),
             api_key: "$ANTHROPIC_API_KEY".into(),
-            models: vec![
-                ModelEntry {
-                    id: "claude-sonnet-4-5".into(),
-                    name: Some("Claude Sonnet 4.5".into()),
-                    context_window: 200000,
-                    max_tokens: 32000,
-                    ..Default::default()
-                },
-            ],
+            models: vec![ModelEntry {
+                id: "claude-sonnet-4-5".into(),
+                name: Some("Claude Sonnet 4.5".into()),
+                context_window: 200000,
+                max_tokens: 32000,
+                ..Default::default()
+            }],
         },
         Preset {
             id: "deepseek".into(),
@@ -140,7 +138,11 @@ pub fn get_preset(id: &str) -> Option<Preset> {
     all_presets().into_iter().find(|p| p.id == id)
 }
 
-pub fn preset_to_profile(preset: &Preset, api_key: Option<&str>, models: Option<Vec<ModelEntry>>) -> ProviderProfile {
+pub fn preset_to_profile(
+    preset: &Preset,
+    api_key: Option<&str>,
+    models: Option<Vec<ModelEntry>>,
+) -> ProviderProfile {
     ProviderProfile {
         api: preset.api.clone(),
         base_url: preset.base_url.clone(),

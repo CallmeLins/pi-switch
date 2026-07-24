@@ -1,7 +1,9 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
+};
 use ratatui::Frame;
 
 use crate::tui::app::App;
@@ -43,10 +45,14 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .constraints(constraints)
         .split(inner);
 
-    let add = i18n::key_add(); let fltr = i18n::key_filter();
+    let add = i18n::key_add();
+    let fltr = i18n::key_filter();
     let empty_keys: &[(&str, &str)] = &[("a", add), ("/", fltr)];
-    let detail = i18n::key_detail(); let switch = i18n::key_switch();
-    let copy = i18n::key_copy(); let edit = i18n::key_edit(); let del = i18n::key_delete();
+    let detail = i18n::key_detail();
+    let switch = i18n::key_switch();
+    let copy = i18n::key_copy();
+    let edit = i18n::key_edit();
+    let del = i18n::key_delete();
     let full_keys: &[(&str, &str)] = &[
         ("Enter", detail),
         ("Space", switch),
@@ -95,11 +101,7 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let rows = visible.iter().map(|row| {
         // Marker: * for in failover chain, space otherwise
-        let marker = if row.in_failover_chain {
-            " * "
-        } else {
-            "   "
-        };
+        let marker = if row.in_failover_chain { " * " } else { "   " };
 
         // Row color: red if circuit breaker is open (any profile),
         // green if in failover chain and healthy, default otherwise.
@@ -134,7 +136,9 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 if theme.no_color {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD)
                 },
             ));
         }
@@ -142,7 +146,8 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
         // Circuit breaker indicator — show status code (e.g. "502") instead of icon
         if row.circuit_breaker_open {
             name_spans.push(Span::raw(" "));
-            let code = row.circuit_breaker_error
+            let code = row
+                .circuit_breaker_error
                 .as_deref()
                 .and_then(|e| {
                     // Extract status code from "HTTP 502" or "status 503" etc.
@@ -286,10 +291,7 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
 
     let label = |label: &str, value: String| -> Line<'static> {
         Line::from(vec![
-            Span::styled(
-                format!("  {label}"),
-                Style::default().fg(theme.accent),
-            ),
+            Span::styled(format!("  {label}"), Style::default().fg(theme.accent)),
             Span::styled(": ", Style::default().fg(theme.dim)),
             Span::raw(value),
         ])
@@ -304,7 +306,11 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
         label(i18n::detail_name(), name.to_string()),
         label(
             i18n::detail_current(),
-            if is_current { i18n::detail_current_yes().into() } else { i18n::detail_current_no().into() },
+            if is_current {
+                i18n::detail_current_yes().into()
+            } else {
+                i18n::detail_current_no().into()
+            },
         ),
         label(
             i18n::detail_provider_id(),
@@ -320,8 +326,18 @@ pub(super) fn render_profile_detail(frame: &mut Frame<'_>, app: &App, area: Rect
     }
     let spoof_val = value.get("userAgent").and_then(|v| v.as_str());
     lines.push(label(
-        if i18n::is_zh() { "用户代理" } else { "User-Agent" },
-        spoof_val.unwrap_or(if i18n::is_zh() { "（用全局）" } else { "(global)" }).to_string(),
+        if i18n::is_zh() {
+            "用户代理"
+        } else {
+            "User-Agent"
+        },
+        spoof_val
+            .unwrap_or(if i18n::is_zh() {
+                "（用全局）"
+            } else {
+                "(global)"
+            })
+            .to_string(),
     ));
     if let Some(updated) = value.get("updatedAt").and_then(|v| v.as_str()) {
         lines.push(label(i18n::detail_updated(), updated.to_string()));
@@ -499,7 +515,11 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(3)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
         .split(inner);
 
     // Key bar at top
@@ -537,17 +557,14 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
     });
 
-    let table = Table::new(
-        rows,
-        [Constraint::Length(label_width), Constraint::Min(0)],
-    )
-    .column_spacing(1)
-    .row_highlight_style(if fields_focused {
-        selection_style(theme)
-    } else {
-        Style::default().add_modifier(Modifier::DIM)
-    })
-    .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(rows, [Constraint::Length(label_width), Constraint::Min(0)])
+        .column_spacing(1)
+        .row_highlight_style(if fields_focused {
+            selection_style(theme)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        })
+        .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
     state.select(Some(form.field_idx));
@@ -581,21 +598,16 @@ fn render_form_fields(frame: &mut Frame<'_>, app: &App, area: Rect) {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw(format!(" {}", API_CHOICES[form.api_idx])),
-                    Span::styled(
-                        i18n::form_api_cycle_hint(),
-                        Style::default().fg(theme.dim),
-                    ),
+                    Span::styled(i18n::form_api_cycle_hint(), Style::default().fg(theme.dim)),
                 ])),
                 edit_inner,
             );
         }
         FieldKind::Models => {
             let input_width = edit_inner.width.saturating_sub(1).max(1);
-            let (visible, cursor_x) = visible_text_window(&form.models.value, form.models.cursor, input_width);
-            frame.render_widget(
-                Paragraph::new(format!(" {visible}")),
-                edit_inner,
-            );
+            let (visible, cursor_x) =
+                visible_text_window(&form.models.value, form.models.cursor, input_width);
+            frame.render_widget(Paragraph::new(format!(" {visible}")), edit_inner);
             if editing {
                 frame.set_cursor_position((edit_inner.x + 1 + cursor_x, edit_inner.y));
             }
@@ -734,7 +746,11 @@ pub fn render_model_selection(
         let spinner = spinner_chars[(app.tick % 10) as usize];
         let loading_text = format!("{} {}", spinner, i18n::model_selection_loading());
         let loading = Paragraph::new(loading_text)
-            .style(Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(app.theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(ratatui::layout::Alignment::Center);
 
         // Center vertically
@@ -755,8 +771,7 @@ pub fn render_model_selection(
         } else {
             i18n::model_selection_empty_fetch()
         };
-        let empty = Paragraph::new(empty_msg)
-            .style(Style::default().fg(app.theme.dim));
+        let empty = Paragraph::new(empty_msg).style(Style::default().fg(app.theme.dim));
         frame.render_widget(empty, inner);
         return;
     }
@@ -768,7 +783,8 @@ pub fn render_model_selection(
         .split(inner);
 
     // Render checklist
-    let items: Vec<ListItem> = app.model_selection_list
+    let items: Vec<ListItem> = app
+        .model_selection_list
         .iter()
         .enumerate()
         .map(|(idx, (model_id, selected))| {

@@ -244,7 +244,11 @@ impl ProviderFormState {
 
     pub fn validate(&self) -> Result<ProviderProfile, String> {
         if self.profile_name().is_empty() {
-            return Err(if i18n::is_zh() { "名称为必填项".into() } else { "Name is required".into() });
+            return Err(if i18n::is_zh() {
+                "名称为必填项".into()
+            } else {
+                "Name is required".into()
+            });
         }
         let profile = self.build_profile();
         crate::config::validate_provider_profile(&self.profile_name(), &profile)?;
@@ -262,7 +266,11 @@ impl ProviderFormState {
     pub fn apply_json_edit(&mut self) -> Result<(), String> {
         let json_str = self.json_edit.value.trim();
         if json_str.is_empty() {
-            return Err(if i18n::is_zh() { "JSON 不能为空".to_string() } else { "JSON cannot be empty".to_string() });
+            return Err(if i18n::is_zh() {
+                "JSON 不能为空".to_string()
+            } else {
+                "JSON cannot be empty".to_string()
+            });
         }
         let (name, profile) = crate::config::parse_provider_wrapper(json_str)?;
 

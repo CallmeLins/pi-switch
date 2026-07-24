@@ -84,7 +84,11 @@ pub struct TextInput {
 
 impl Default for TextInput {
     fn default() -> Self {
-        Self { value: String::new(), cursor: 0, policy: TextInputPolicy::Any }
+        Self {
+            value: String::new(),
+            cursor: 0,
+            policy: TextInputPolicy::Any,
+        }
     }
 }
 
@@ -92,7 +96,11 @@ impl TextInput {
     pub fn new(value: impl Into<String>) -> Self {
         let value = value.into();
         let cursor = value.chars().count();
-        Self { value, cursor, policy: TextInputPolicy::Any }
+        Self {
+            value,
+            cursor,
+            policy: TextInputPolicy::Any,
+        }
     }
 
     pub fn with_policy(mut self, policy: TextInputPolicy) -> Self {

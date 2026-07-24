@@ -146,7 +146,10 @@ pub fn run_doctor() -> Vec<DoctorCheck> {
         });
 
         for (name, profile) in &config.profiles {
-            let base_url = profile.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("");
+            let base_url = profile
+                .get("baseUrl")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let api_key = profile.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
             let api = profile.get("api").and_then(|v| v.as_str()).unwrap_or("");
 
