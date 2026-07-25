@@ -82,7 +82,13 @@ fn get_bin_path(project_dir: Option<&str>) -> PathBuf {
         let p = PathBuf::from(dir).join("bin").join("pi-switch.js");
         if p.exists() { return p; }
     }
-    // 2. Try executable-relative (works on Windows, or when the binary is a real file)
+    // 2. Native TUI calls cannot pass arguments through napi, so use the root
+    // exported by the JS entrypoint instead of depending on the launch CWD.
+    if let Some(dir) = std::env::var_os("PI_SWITCH_PROJECT_DIR") {
+        let p = PathBuf::from(dir).join("bin").join("pi-switch.js");
+        if p.exists() { return p; }
+    }
+    // 3. Try executable-relative (works on Windows, or when the binary is a real file)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let bin_path = exe_dir.join("bin").join("pi-switch.js");
@@ -93,7 +99,7 @@ fn get_bin_path(project_dir: Option<&str>) -> PathBuf {
             }
         }
     }
-    // 3. Fallback: relative to CWD (dev convenience)
+    // 4. Fallback: relative to CWD (dev convenience)
     PathBuf::from("bin").join("pi-switch.js")
 }
 
