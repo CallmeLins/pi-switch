@@ -19,6 +19,7 @@ import { fileURLToPath } from "url";
 
 // Project root: parent of bin/ — used to locate bin/pi-switch.js when spawning daemon
 const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+process.env.PI_SWITCH_PROJECT_DIR = PROJECT_DIR;
 
 function usage() {
   console.log(`pi-switch v0.3.9 — lightweight profile switcher for pi agent

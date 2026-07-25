@@ -1,8 +1,8 @@
 use crate::config::{config_dir, load_config};
 use serde::{Deserialize, Serialize};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
-use std::net::TcpStream;
 use std::time::Duration;
 
 // ─── Service descriptor ───────────────────────────────────
@@ -59,7 +59,9 @@ fn service_defaults(service: &Service) -> (String, u16) {
     }
 }
 
-fn pid_path(service: &Service) -> PathBuf { config_dir().join(service.pid_file) }
+fn pid_path(service: &Service) -> PathBuf {
+    config_dir().join(service.pid_file)
+}
 
 // Check if proxy server is actually listening on the port
 fn check_health(host: &str, port: u16, max_attempts: u32) -> bool {
@@ -80,20 +82,34 @@ fn get_bin_path(project_dir: Option<&str>) -> PathBuf {
     // 1. Prefer the project dir passed from JS (always correct: index.js's parent)
     if let Some(dir) = project_dir {
         let p = PathBuf::from(dir).join("bin").join("pi-switch.js");
-        if p.exists() { return p; }
+        if p.exists() {
+            return p;
+        }
     }
-    // 2. Try executable-relative (works on Windows, or when the binary is a real file)
+    // 2. Native TUI calls cannot pass arguments through napi, so use the root
+    // exported by the JS entrypoint instead of depending on the launch CWD.
+    if let Some(dir) = std::env::var_os("PI_SWITCH_PROJECT_DIR") {
+        let p = PathBuf::from(dir).join("bin").join("pi-switch.js");
+        if p.exists() {
+            return p;
+        }
+    }
+    // 3. Try executable-relative (works on Windows, or when the binary is a real file)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let bin_path = exe_dir.join("bin").join("pi-switch.js");
-            if bin_path.exists() { return bin_path; }
+            if bin_path.exists() {
+                return bin_path;
+            }
             if let Some(parent) = exe_dir.parent() {
                 let bin_path = parent.join("bin").join("pi-switch.js");
-                if bin_path.exists() { return bin_path; }
+                if bin_path.exists() {
+                    return bin_path;
+                }
             }
         }
     }
-    // 3. Fallback: relative to CWD (dev convenience)
+    // 4. Fallback: relative to CWD (dev convenience)
     PathBuf::from("bin").join("pi-switch.js")
 }
 
@@ -145,7 +161,9 @@ fn is_alive(pid: u32) -> bool {
             for line in stdout.lines() {
                 let parts: Vec<&str> = line.split(',').collect();
                 if parts.len() >= 2 {
-                    if let Some(pid_str) = parts[1].strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                    if let Some(pid_str) =
+                        parts[1].strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+                    {
                         if pid_str.trim() == pid.to_string() {
                             return true;
                         }
@@ -194,7 +212,9 @@ fn force_kill(pid: u32) -> bool {
 
 fn read_pid_file(service: &Service) -> Option<DaemonInfo> {
     let path = pid_path(service);
-    if !path.exists() { return None; }
+    if !path.exists() {
+        return None;
+    }
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -216,7 +236,12 @@ fn remove_pid_file(service: &Service) {
 
 // ─── Daemon start ─────────────────────────────────────────
 
-pub fn daemon_start(service: &Service, host: Option<String>, port: Option<u16>, project_dir: Option<String>) -> Result<DaemonResult, String> {
+pub fn daemon_start(
+    service: &Service,
+    host: Option<String>,
+    port: Option<u16>,
+    project_dir: Option<String>,
+) -> Result<DaemonResult, String> {
     if let Some(info) = read_pid_file(service) {
         if is_alive(info.pid) && check_health(&info.host, info.port, 2) {
             let msg = format!(
@@ -313,9 +338,13 @@ pub fn daemon_start(service: &Service, host: Option<String>, port: Option<u16>, 
         // Cleanup on failure
         remove_pid_file(service);
         #[cfg(windows)]
-        { force_kill(pid); }
+        {
+            force_kill(pid);
+        }
         #[cfg(not(windows))]
-        unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
 
         return Err(format!(
             "{} daemon started but failed health check on http://{}:{}. Check ~/.pi-switch/{} for errors.",
@@ -331,7 +360,10 @@ pub fn daemon_start(service: &Service, host: Option<String>, port: Option<u16>, 
         targets: None,
         failover: None,
         started_at: Some(now_ms),
-        message: format!("{} daemon started (PID {}) on http://{}:{}", service.label, pid, host, port),
+        message: format!(
+            "{} daemon started (PID {}) on http://{}:{}",
+            service.label, pid, host, port
+        ),
     })
 }
 
@@ -370,7 +402,8 @@ pub fn daemon_stop(service: &Service) -> Result<DaemonResult, String> {
 
     // Graceful stop first
     kill_process(info.pid);
-    for _ in 0..20 {  // Reduced from 50 to 20 (2 seconds max)
+    for _ in 0..20 {
+        // Reduced from 50 to 20 (2 seconds max)
         std::thread::sleep(std::time::Duration::from_millis(100));
         if !is_alive(info.pid) {
             remove_pid_file(service);
@@ -459,8 +492,19 @@ pub fn daemon_status(service: &Service) -> Result<DaemonResult, String> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let failover = if proxy.failover.is_empty() { None } else { Some(proxy.failover.clone()) };
-            (if targets.is_empty() { None } else { Some(targets) }, failover)
+            let failover = if proxy.failover.is_empty() {
+                None
+            } else {
+                Some(proxy.failover.clone())
+            };
+            (
+                if targets.is_empty() {
+                    None
+                } else {
+                    Some(targets)
+                },
+                failover,
+            )
         } else {
             (None, None)
         };
