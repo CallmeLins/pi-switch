@@ -89,6 +89,13 @@ pi-switch proxy failover <p1,p2,...>               # 同模型故障转移链
 pi-switch proxy start --daemon                     # 启动代理守护进程
 pi-switch proxy status
 
+# Package 管理
+pi-switch package list                             # 列出已安装的包
+pi-switch package add <id> <名称> <版本>            # 添加新包
+pi-switch package toggle <id>                      # 启用/禁用包
+pi-switch package remove <id>                      # 删除包
+pi-switch package show <id>                        # 显示包详情
+
 # WebUI（浏览器配置）
 pi-switch webui start [--host <ip>] [--port <端口>] [--daemon]
 pi-switch webui status
@@ -112,6 +119,7 @@ pi-switch stats                                     # 查看请求统计
 | 🔌 **Provider 管理** | 增删改查、复制、搜索/过滤、模型管理、暴露到 pi agent |
 | 💡 **内置预设** | OpenRouter、Anthropic、DeepSeek、SiliconFlow、OpenAI — 一键创建配置 |
 | 🌉 **模型名网关** | 无状态按 `profile/model` 路由、SSE 流式、User-Agent 伪装、请求体过滤、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
+| 📦 **Package 管理** | 在 CLI、TUI、WebUI 中安装、启用/禁用和管理包 |
 | 🖥️ **交互式 TUI** | ratatui 驱动、Dracula 主题、鼠标支持、vim 键位 (`hjkl`) |
 | 🌐 **双语支持** | English / 中文，持久化到配置，Settings 中切换 |
 | 📊 **使用统计** | 按 provider、按模型的请求指标与延迟 |

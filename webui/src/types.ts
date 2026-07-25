@@ -135,3 +135,11 @@ export interface UsageStats {
   byModel?: Record<string, { total: number; ok: number; failed: number }>;
   [key: string]: unknown;
 }
+
+export interface PackageEntry {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  installedAt?: string;
+}

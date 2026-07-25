@@ -5,17 +5,19 @@ import { Button, ToastProvider, cx } from "./components/ui";
 import { HomePanel } from "./components/HomePanel";
 import { ProfilesPanel } from "./components/ProfilesPanel";
 import { ProxyPanel } from "./components/ProxyPanel";
+import { PackagesPanel } from "./components/PackagesPanel";
 import { StatsPanel } from "./components/StatsPanel";
 import { BackupsPanel } from "./components/BackupsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { DoctorPanel } from "./components/DoctorPanel";
 
-type NavKey = "home" | "profiles" | "proxy" | "stats" | "backups" | "settings" | "doctor";
+type NavKey = "home" | "profiles" | "proxy" | "packages" | "stats" | "backups" | "settings" | "doctor";
 
 const NAV: { key: NavKey; label: string; icon: string }[] = [
   { key: "home", label: "Home", icon: "🏠" },
   { key: "profiles", label: "Profiles", icon: "👤" },
   { key: "proxy", label: "Proxy", icon: "🔄" },
+  { key: "packages", label: "Packages", icon: "📦" },
   { key: "stats", label: "Stats", icon: "📊" },
   { key: "backups", label: "Backups", icon: "💾" },
   { key: "settings", label: "Settings", icon: "⚙️" },
@@ -108,6 +110,7 @@ function Shell() {
               {nav === "home" && <HomePanel state={state} refresh={refresh} onNavigate={setNav} />}
               {nav === "profiles" && <ProfilesPanel state={state} refresh={refresh} />}
               {nav === "proxy" && <ProxyPanel state={state} refresh={refresh} />}
+              {nav === "packages" && <PackagesPanel refresh={refresh} />}
               {nav === "stats" && <StatsPanel state={state} refresh={refresh} />}
               {nav === "backups" && <BackupsPanel state={state} refresh={refresh} />}
               {nav === "settings" && <SettingsPanel state={state} refresh={refresh} />}

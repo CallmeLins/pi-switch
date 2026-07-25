@@ -249,6 +249,75 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(status_lines).wrap(Wrap { trim: false }), status_inner);
 }
 
+pub(super) fn render_packages(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let block = content_block(app, "Packages");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_key_bar_center(
+        frame,
+        theme,
+        chunks[0],
+        &[
+            ("↑↓/jk", "Move"),
+            ("Space", "Toggle"),
+            ("d", "Delete"),
+            ("r", "Refresh"),
+            ("Esc", i18n::key_back())
+        ],
+    );
+
+    if app.data.packages.is_empty() {
+        let empty_text = Paragraph::new("No packages installed.\n\nUse CLI to add packages:\n  pi-switch package add <id> <name> <version>")
+            .style(Style::default().fg(theme.dim))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(empty_text, chunks[1]);
+        return;
+    }
+
+    let items: Vec<ListItem<'_>> = app
+        .data
+        .packages
+        .iter()
+        .map(|pkg| {
+            let status_icon = if pkg.enabled { "✓" } else { " " };
+            let status_color = if pkg.enabled { theme.ok } else { theme.dim };
+            let installed_info = pkg.installed_at
+                .as_ref()
+                .map(|t| format!(" ({})", t))
+                .unwrap_or_default();
+
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {} ", status_icon), Style::default().fg(status_color)),
+                Span::styled(&pkg.name, Style::default().fg(theme.fg)),
+                Span::styled(format!(" v{}", pkg.version), Style::default().fg(theme.accent)),
+                Span::styled(installed_info, Style::default().fg(theme.dim)),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(super::highlight_symbol(theme))
+        .block(
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Plain)
+                .border_style(Style::default().fg(theme.dim))
+                .title(format!("Packages ({})", app.data.packages.len())),
+        );
+
+    let mut state = ListState::default();
+    state.select(Some(app.packages_idx));
+    frame.render_stateful_widget(list, chunks[1], &mut state);
+}
+
 pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let block = content_block(app, i18n::page_stats());
     let inner = block.inner(area);

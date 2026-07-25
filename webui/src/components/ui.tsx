@@ -71,6 +71,35 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={cx(CTRL, props.className)} />;
 }
 
+export function Switch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={onChange}
+      className={cx(
+        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+        "focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-zinc-950",
+        checked ? "bg-indigo-600" : "bg-zinc-700",
+      )}
+    >
+      <span
+        className={cx(
+          "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition",
+          checked ? "translate-x-5" : "translate-x-0",
+        )}
+      />
+    </button>
+  );
+}
+
 export function Field({
   label,
   children,

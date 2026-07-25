@@ -7,6 +7,7 @@ pub enum Route {
     ProfileDetail(String),
     FetchModels(String),      // Fetch & select models for provider
     ExposeModels(String),     // Select which models to expose to pi
+    Packages,                 // Package management
     Proxy,
     Stats,
     Backups,
@@ -19,6 +20,7 @@ pub enum Route {
 pub enum NavItem {
     Home,
     Profiles,
+    Packages,
     Proxy,
     Stats,
     Backups,
@@ -27,9 +29,10 @@ pub enum NavItem {
 }
 
 impl NavItem {
-    pub const ALL: [NavItem; 7] = [
+    pub const ALL: [NavItem; 8] = [
         NavItem::Home,
         NavItem::Profiles,
+        NavItem::Packages,
         NavItem::Proxy,
         NavItem::Stats,
         NavItem::Backups,
@@ -41,6 +44,7 @@ impl NavItem {
         match self {
             NavItem::Home => i18n::nav_home(),
             NavItem::Profiles => i18n::nav_profiles(),
+            NavItem::Packages => "Packages",
             NavItem::Proxy => i18n::nav_proxy(),
             NavItem::Stats => i18n::nav_stats(),
             NavItem::Backups => i18n::nav_backups(),
@@ -53,6 +57,7 @@ impl NavItem {
         match self {
             NavItem::Home => "🏠",
             NavItem::Profiles => "👤",
+            NavItem::Packages => "📦",
             NavItem::Proxy => "🔄",
             NavItem::Stats => "📊",
             NavItem::Backups => "💾",
@@ -65,6 +70,7 @@ impl NavItem {
         match self {
             NavItem::Home => Some(Route::Home),
             NavItem::Profiles => Some(Route::Profiles),
+            NavItem::Packages => Some(Route::Packages),
             NavItem::Proxy => Some(Route::Proxy),
             NavItem::Stats => Some(Route::Stats),
             NavItem::Backups => Some(Route::Backups),

@@ -37,6 +37,21 @@ export const {
   updateProviderModels,
   setProxyTarget,
   setProxyFailover,
+  // Package management
+  initPackages,
+  listPackages,
+  getPackage,
+  addPackage,
+  installPackage,
+  uninstallPackage,
+  enablePackage,
+  disablePackage,
+  deletePackage,
+  syncPackages,
+  importPackages,
+  listPackageSources,
+  addPackageSource,
+  deletePackageSource,
 } = native;
 
 export default native;

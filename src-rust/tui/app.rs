@@ -119,6 +119,8 @@ pub struct App {
     // Failover editor state
     pub failover_list: Vec<(String, bool)>, // (provider_name, selected)
     pub failover_idx: usize,
+    // Packages state
+    pub packages_idx: usize,
 }
 
 pub fn proxy_actions() -> [&'static str; 3] {
@@ -183,6 +185,7 @@ impl App {
             fetch_rx: None,
             failover_list: vec![],
             failover_idx: 0,
+            packages_idx: 0,
         }
     }
 
@@ -554,6 +557,7 @@ impl App {
             Route::ProfileDetail(name) => self.on_profile_detail_key(key, &name),
             Route::FetchModels(name) => self.on_fetch_models_key(key, &name),
             Route::ExposeModels(name) => self.on_expose_models_key(key, &name),
+            Route::Packages => self.on_packages_key(key),
             Route::Proxy => self.on_proxy_key(key),
             Route::Stats => self.on_stats_key(key),
             Route::Backups => self.on_backups_key(key),
@@ -682,6 +686,60 @@ impl App {
                 self.push_toast(ToastKind::Success, format!("User-Agent: {}", label));
             }
             Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+        }
+    }
+
+    fn on_packages_key(&mut self, key: KeyEvent) {
+        if self.back_to_nav_on_esc(&key) {
+            return;
+        }
+
+        let packages_len = self.data.packages.len();
+        if packages_len == 0 {
+            return;
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.packages_idx = self.packages_idx.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.packages_idx = (self.packages_idx + 1).min(packages_len.saturating_sub(1));
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                // Toggle package enabled state
+                if let Some(pkg) = self.data.packages.get(self.packages_idx) {
+                    let pkg_id = pkg.id.clone();
+                    match crate::package_ops::toggle_package(&pkg_id) {
+                        Ok(_) => {
+                            self.refresh();
+                            self.push_toast(ToastKind::Success, "Package toggled");
+                        }
+                        Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+                    }
+                }
+            }
+            KeyCode::Char('d') | KeyCode::Delete => {
+                // Delete package
+                if let Some(pkg) = self.data.packages.get(self.packages_idx) {
+                    let pkg_id = pkg.id.clone();
+                    match crate::package_ops::remove_package(&pkg_id) {
+                        Ok(_) => {
+                            self.refresh();
+                            if self.packages_idx >= self.data.packages.len() && self.packages_idx > 0 {
+                                self.packages_idx -= 1;
+                            }
+                            self.push_toast(ToastKind::Success, "Package removed");
+                        }
+                        Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                self.refresh();
+                self.push_toast(ToastKind::Info, "Refreshed");
+            }
+            _ => {}
         }
     }
 

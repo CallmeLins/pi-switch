@@ -12,6 +12,11 @@ import {
   updateExposedModels,
   updateProviderModels,
   setProxyFailover,
+  // Package management
+  initPackages, listPackages, getPackage, addPackage,
+  installPackage, uninstallPackage, enablePackage, disablePackage,
+  deletePackage, syncPackages, importPackages,
+  listPackageSources, addPackageSource, deletePackageSource,
 } from "../index.js";
 import * as readline from "readline";
 import { dirname, resolve } from "path";
@@ -34,6 +39,19 @@ Usage:
   pi-switch provider fetch-models <name>
   pi-switch provider models <name> <model-id>...       # Update provider's model list
   pi-switch provider expose <name> <model-id>...       # Expose models to pi agent
+  pi-switch package list                               # List all packages
+  pi-switch package show <id>                          # Show package details
+  pi-switch package add <spec>                         # Add package (npm:name@version | git:url)
+  pi-switch package install <id>                       # Install and sync to Pi Agent
+  pi-switch package uninstall <id>                     # Uninstall package
+  pi-switch package enable <id>                        # Enable package
+  pi-switch package disable <id>                       # Disable package
+  pi-switch package delete <id>                        # Delete package from database
+  pi-switch package sync                               # Sync to Pi Agent settings.json
+  pi-switch package import                             # Import from Pi Agent settings.json
+  pi-switch package sources list                       # List package sources
+  pi-switch package sources add <url> <type> [name]   # Add package source
+  pi-switch package sources delete <id>                # Delete package source
   pi-switch presets [list]
   pi-switch presets show <id>
   pi-switch config show
@@ -62,6 +80,11 @@ Gateway Workflow:
   4. Start proxy:           pi-switch proxy start --daemon
   5. Use in pi:             select the 'pi-switch' provider, then a 'profile/model'
      The proxy routes by the model name in each request — no target to set.
+
+Package Management:
+  1. Add package:           pi-switch package add npm:@foo/bar@1.0.0
+  2. Install package:       pi-switch package install npm:@foo/bar@1.0.0
+  3. Packages are synced to ~/.pi/agent/settings.json automatically
 
 Aliases: remove → provider delete, rm → provider delete, interactive/ui → tui
 `);
@@ -485,6 +508,144 @@ async function main() {
         return;
       }
       fail(`unknown config subcommand: '${sub}'`);
+    }
+
+    // ─── Package subcommands ─────────────────────────
+
+    if (effectiveCmd === "package") {
+      const sub = rest[0] || "list";
+
+      if (sub === "list") {
+        const packages = JSON.parse(listPackages());
+        if (packages.length === 0) {
+          console.log("No packages. Add one with: pi-switch package add <spec>");
+          return;
+        }
+
+        console.log("Packages:");
+        console.log("─".repeat(80));
+        for (const pkg of packages) {
+          const status = [];
+          if (pkg.installed) status.push("✓ installed");
+          if (pkg.enabled) status.push("● enabled");
+
+          const features = [];
+          if (pkg.has_extensions) features.push("extensions");
+          if (pkg.has_skills) features.push("skills");
+          if (pkg.has_prompts) features.push("prompts");
+          if (pkg.has_themes) features.push("themes");
+
+          console.log(`${pkg.name}${pkg.version ? `@${pkg.version}` : ""}`);
+          console.log(`  Type: ${pkg.pkg_type}  Status: ${status.join(", ") || "not installed"}`);
+          if (features.length > 0) console.log(`  Features: ${features.join(", ")}`);
+          if (pkg.description) console.log(`  ${pkg.description}`);
+          console.log();
+        }
+        return;
+      }
+
+      if (sub === "show" || sub === "info") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        const pkg = JSON.parse(getPackage(id));
+        console.log(JSON.stringify(pkg, null, 2));
+        return;
+      }
+
+      if (sub === "add") {
+        const spec = rest[1];
+        if (!spec) fail("package spec required (e.g., npm:lodash@4.17.21 or git:https://github.com/user/repo)");
+        console.log(addPackage(spec));
+        return;
+      }
+
+      if (sub === "install") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        console.log(installPackage(id));
+        return;
+      }
+
+      if (sub === "uninstall") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        console.log(uninstallPackage(id));
+        return;
+      }
+
+      if (sub === "enable") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        console.log(enablePackage(id));
+        return;
+      }
+
+      if (sub === "disable") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        console.log(disablePackage(id));
+        return;
+      }
+
+      if (sub === "delete" || sub === "remove") {
+        const id = rest[1];
+        if (!id) fail("package id required");
+        console.log(deletePackage(id));
+        return;
+      }
+
+      if (sub === "sync") {
+        console.log(syncPackages());
+        return;
+      }
+
+      if (sub === "import") {
+        console.log(importPackages());
+        return;
+      }
+
+      if (sub === "sources") {
+        const subSub = rest[1] || "list";
+
+        if (subSub === "list") {
+          const sources = JSON.parse(listPackageSources());
+          if (sources.length === 0) {
+            console.log("No package sources configured.");
+            return;
+          }
+
+          console.log("Package Sources:");
+          console.log("─".repeat(80));
+          for (const src of sources) {
+            const status = src.enabled ? "✓ enabled" : "○ disabled";
+            console.log(`#${src.id} ${src.name || src.url}`);
+            console.log(`  URL: ${src.url}`);
+            console.log(`  Type: ${src.source_type}  Status: ${status}`);
+            console.log();
+          }
+          return;
+        }
+
+        if (subSub === "add") {
+          const url = rest[2];
+          const type = rest[3] || "npm-registry";
+          const name = rest[4];
+          if (!url) fail("usage: pi-switch package sources add <url> [type] [name]");
+          console.log(addPackageSource(url, type, name));
+          return;
+        }
+
+        if (subSub === "delete" || subSub === "remove") {
+          const id = parseInt(rest[2], 10);
+          if (isNaN(id)) fail("source id must be a number");
+          console.log(deletePackageSource(id));
+          return;
+        }
+
+        fail(`unknown package sources subcommand: '${subSub}'`);
+      }
+
+      fail(`unknown package subcommand: '${sub}'`);
     }
 
     // ─── Proxy subcommands ───────────────────────────

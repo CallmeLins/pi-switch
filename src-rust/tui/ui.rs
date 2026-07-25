@@ -49,6 +49,7 @@ fn render_content(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Route::ExposeModels(name) => profiles::render_model_selection(frame, app, area, &name, true),
         Route::Form => profiles::render_form(frame, app, area),
         Route::Proxy => pages::render_proxy(frame, app, area),
+        Route::Packages => pages::render_packages(frame, app, area),
         Route::Stats => pages::render_stats(frame, app, area),
         Route::Backups => pages::render_backups(frame, app, area),
         Route::Settings => pages::render_settings(frame, app, area),
