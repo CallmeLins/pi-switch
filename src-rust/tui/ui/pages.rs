@@ -295,8 +295,8 @@ pub(super) fn render_packages(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {} ", status_icon), Style::default().fg(status_color)),
-                Span::styled(&pkg.name, Style::default().fg(theme.fg)),
-                Span::styled(format!(" v{}", pkg.version), Style::default().fg(theme.accent)),
+                Span::styled(&pkg.name, Style::default()),
+                Span::styled(format!(" v{}", pkg.version.as_deref().unwrap_or("unknown")), Style::default().fg(theme.accent)),
                 Span::styled(installed_info, Style::default().fg(theme.dim)),
             ]))
         })

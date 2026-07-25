@@ -165,6 +165,32 @@ pub fn delete_package(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Toggle package enabled/disabled state
+pub fn toggle_package(id: &str) -> Result<Package> {
+    let db = Database::open()?;
+
+    let mut pkg = db
+        .get_package(id)?
+        .ok_or_else(|| AppError::InvalidInput(format!("Package '{}' not found", id)))?;
+
+    pkg.enabled = !pkg.enabled;
+    pkg.updated_at = Some(chrono::Utc::now().timestamp());
+
+    db.update_package(&pkg)?;
+
+    // Sync to Pi Agent if installed
+    if pkg.installed {
+        sync_packages_to_pi()?;
+    }
+
+    Ok(pkg)
+}
+
+/// Alias for delete_package (for backward compatibility)
+pub fn remove_package(id: &str) -> Result<()> {
+    delete_package(id)
+}
+
 /// Sync enabled packages to Pi Agent's settings.json
 pub fn sync_packages_to_pi() -> Result<()> {
     let db = Database::open()?;

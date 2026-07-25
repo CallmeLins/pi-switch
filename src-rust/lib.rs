@@ -558,6 +558,7 @@ pub fn set_proxy_failover(failover_profiles: Vec<String>) -> napi::Result<String
 // ─── Package Management ───────────────────────────────────────────────────────
 
 #[napi(object)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PackageInfo {
     pub id: String,
     pub spec: String,
@@ -599,6 +600,7 @@ impl From<package::Package> for PackageInfo {
 }
 
 #[napi(object)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct PackageSourceInfo {
     pub id: Option<i64>,
     pub url: String,

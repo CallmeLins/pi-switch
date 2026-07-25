@@ -258,18 +258,20 @@ struct PackageBody {
 }
 
 async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {
-    let backup = crate::package_ops::add_package(&body.id, &body.name, &body.version)?;
-    Ok(Json(backup_msg(backup)))
+    // Create spec from the body (for now, just use id as spec)
+    let spec = format!("{}@{}", body.name, body.version);
+    let package = crate::package_ops::add_package(&spec)?;
+    Ok(Json(json!({ "ok": true, "package": package.name })))
 }
 
 async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
-    let backup = crate::package_ops::toggle_package(&id)?;
-    Ok(Json(backup_msg(backup)))
+    let package = crate::package_ops::toggle_package(&id)?;
+    Ok(Json(json!({ "ok": true, "enabled": package.enabled })))
 }
 
 async fn delete_package(Path(id): Path<String>) -> ApiJson {
-    let backup = crate::package_ops::remove_package(&id)?;
-    Ok(Json(backup_msg(backup)))
+    crate::package_ops::remove_package(&id)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ─── Mutation handlers ────────────────────────────────────

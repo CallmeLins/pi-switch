@@ -2,7 +2,7 @@ use crate::config::{load_config, PiSwitchConfig};
 use crate::daemon::{daemon_status, DaemonResult, PROXY};
 use crate::presets::{all_presets, Preset};
 use crate::stats::{get_stats, UsageStats};
-use crate::package::PackageEntry;
+use crate::package::Package;
 
 pub struct ProfileRow {
     pub name: String,
@@ -22,7 +22,7 @@ pub struct ProfileRow {
 pub struct UiData {
     pub config: PiSwitchConfig,
     pub profiles: Vec<ProfileRow>,
-    pub packages: Vec<PackageEntry>,
+    pub packages: Vec<Package>,
     pub presets: Vec<Preset>,
     pub daemon: DaemonResult,
     pub stats: UsageStats,
