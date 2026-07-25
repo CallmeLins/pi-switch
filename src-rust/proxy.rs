@@ -1,4 +1,4 @@
-use crate::config::{CircuitBreakerSettings, ProviderProfile, config_dir};
+use crate::config::{config_dir, CircuitBreakerSettings, ProviderProfile};
 use crate::error::{AppError, Result};
 use axum::{
     body::Body,
@@ -51,7 +51,11 @@ fn disguise_headers(preset: Option<&str>) -> Vec<(&'static str, &'static str)> {
 /// own default otherwise); the per-request header is applied as a safety net at call sites.
 fn build_disguised_client(
     spoof: Option<&str>,
-) -> (ReqwestClient, Option<String>, Vec<(&'static str, &'static str)>) {
+) -> (
+    ReqwestClient,
+    Option<String>,
+    Vec<(&'static str, &'static str)>,
+) {
     let ua = spoof.map(|p| resolve_user_agent(p).to_string());
     let mut b = ReqwestClient::builder();
     if let Some(ref u) = ua {
@@ -136,7 +140,11 @@ pub async fn write_circuit_state(state: &CircuitStateStore) {
     }
 }
 
-fn is_circuit_open(state: &CircuitStateStore, name: &str, settings: &CircuitBreakerSettings) -> (bool, bool) {
+fn is_circuit_open(
+    state: &CircuitStateStore,
+    name: &str,
+    settings: &CircuitBreakerSettings,
+) -> (bool, bool) {
     if !settings.enabled {
         return (false, false);
     }
@@ -166,13 +174,16 @@ fn is_circuit_open(state: &CircuitStateStore, name: &str, settings: &CircuitBrea
 
 async fn record_success(name: &str, half_open: bool) {
     let mut state = read_circuit_state().await;
-    let entry = state.providers.entry(name.to_string()).or_insert(CircuitEntry {
-        failures: 0,
-        opened_at: None,
-        last_failure_at: None,
-        last_error: None,
-        last_success_at: None,
-    });
+    let entry = state
+        .providers
+        .entry(name.to_string())
+        .or_insert(CircuitEntry {
+            failures: 0,
+            opened_at: None,
+            last_failure_at: None,
+            last_error: None,
+            last_success_at: None,
+        });
 
     entry.failures = 0;
     entry.last_success_at = Some(now_ms());
@@ -185,12 +196,26 @@ async fn record_success(name: &str, half_open: bool) {
     write_circuit_state(&state).await;
 }
 
-async fn record_failure(name: &str, settings: &CircuitBreakerSettings, reason: &str, half_open: bool) {
-    if !settings.enabled { return; }
+async fn record_failure(
+    name: &str,
+    settings: &CircuitBreakerSettings,
+    reason: &str,
+    half_open: bool,
+) {
+    if !settings.enabled {
+        return;
+    }
     let mut state = read_circuit_state().await;
-    let entry = state.providers.entry(name.to_string()).or_insert(CircuitEntry {
-        failures: 0, opened_at: None, last_failure_at: None, last_error: None, last_success_at: None,
-    });
+    let entry = state
+        .providers
+        .entry(name.to_string())
+        .or_insert(CircuitEntry {
+            failures: 0,
+            opened_at: None,
+            last_failure_at: None,
+            last_error: None,
+            last_success_at: None,
+        });
 
     entry.failures += 1;
     entry.last_failure_at = Some(now_ms());
@@ -221,9 +246,19 @@ fn should_retry(status: u16) -> bool {
 // ─── OpenAI <-> Anthropic conversion ──────────────────────
 
 fn openai_to_anthropic_body(body: &Value) -> Value {
-    let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("claude-sonnet-4-5");
-    let max_tokens = body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(16384);
-    let messages = body.get("messages").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("claude-sonnet-4-5");
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(16384);
+    let messages = body
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     // Extract system messages
     let mut system_parts = Vec::new();
@@ -236,7 +271,8 @@ fn openai_to_anthropic_body(body: &Value) -> Value {
                 if let Some(content) = msg.get("content") {
                     let text = match content {
                         Value::String(s) => s.clone(),
-                        Value::Array(arr) => arr.iter()
+                        Value::Array(arr) => arr
+                            .iter()
                             .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
                             .collect::<Vec<_>>()
                             .join("\n"),
@@ -248,21 +284,27 @@ fn openai_to_anthropic_body(body: &Value) -> Value {
                 }
             }
             _ => {
-                let new_role = if role == "assistant" { "assistant" } else { "user" };
-                let content = msg.get("content").cloned().unwrap_or(Value::String(String::new()));
+                let new_role = if role == "assistant" {
+                    "assistant"
+                } else {
+                    "user"
+                };
+                let content = msg
+                    .get("content")
+                    .cloned()
+                    .unwrap_or(Value::String(String::new()));
                 let parts = match content {
                     Value::String(s) => vec![json!({ "type": "text", "text": s })],
-                    Value::Array(arr) => {
-                        arr.iter().map(|c| {
-                            match c.get("type").and_then(|t| t.as_str()) {
-                                Some("text") => {
-                                    let text = c.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                                    json!({ "type": "text", "text": text })
-                                }
-                                _ => json!({ "type": "text", "text": c.to_string() }),
+                    Value::Array(arr) => arr
+                        .iter()
+                        .map(|c| match c.get("type").and_then(|t| t.as_str()) {
+                            Some("text") => {
+                                let text = c.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                                json!({ "type": "text", "text": text })
                             }
-                        }).collect()
-                    }
+                            _ => json!({ "type": "text", "text": c.to_string() }),
+                        })
+                        .collect(),
                     _ => vec![json!({ "type": "text", "text": content.to_string() })],
                 };
                 anthropic_msgs.push(json!({ "role": new_role, "content": parts }));
@@ -293,29 +335,42 @@ fn openai_to_anthropic_body(body: &Value) -> Value {
 }
 
 fn anthropic_to_openai_response(anthro: &Value) -> Value {
-    let model = anthro.get("model").and_then(|v| v.as_str()).unwrap_or("claude-sonnet-4-5");
-    let content_blocks = anthro.get("content").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let model = anthro
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("claude-sonnet-4-5");
+    let content_blocks = anthro
+        .get("content")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
-    let choices: Vec<Value> = content_blocks.iter().enumerate().map(|(i, block)| {
-        let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        json!({
-            "index": i,
-            "message": { "role": "assistant", "content": text },
-            "finish_reason": match anthro.get("stop_reason").and_then(|v| v.as_str()) {
-                Some("end_turn") => "stop",
-                Some("max_tokens") => "length",
-                Some(r) => r,
-                None => "stop",
-            }
+    let choices: Vec<Value> = content_blocks
+        .iter()
+        .enumerate()
+        .map(|(i, block)| {
+            let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            json!({
+                "index": i,
+                "message": { "role": "assistant", "content": text },
+                "finish_reason": match anthro.get("stop_reason").and_then(|v| v.as_str()) {
+                    Some("end_turn") => "stop",
+                    Some("max_tokens") => "length",
+                    Some(r) => r,
+                    None => "stop",
+                }
+            })
         })
-    }).collect();
+        .collect();
 
-    let usage = anthro.get("usage").map(|u| json!({
-        "prompt_tokens": u.get("input_tokens").unwrap_or(&json!(0)),
-        "completion_tokens": u.get("output_tokens").unwrap_or(&json!(0)),
-        "total_tokens": u.get("input_tokens").unwrap_or(&json!(0)).as_u64().unwrap_or(0)
-            + u.get("output_tokens").unwrap_or(&json!(0)).as_u64().unwrap_or(0),
-    }));
+    let usage = anthro.get("usage").map(|u| {
+        json!({
+            "prompt_tokens": u.get("input_tokens").unwrap_or(&json!(0)),
+            "completion_tokens": u.get("output_tokens").unwrap_or(&json!(0)),
+            "total_tokens": u.get("input_tokens").unwrap_or(&json!(0)).as_u64().unwrap_or(0)
+                + u.get("output_tokens").unwrap_or(&json!(0)).as_u64().unwrap_or(0),
+        })
+    });
 
     let mut resp = json!({
         "id": anthro.get("id").unwrap_or(&json!(format!("chatcmpl-{}", now_ms()))),
@@ -378,7 +433,11 @@ async fn handle_models(State(_state): State<Arc<ProxyState>>) -> impl IntoRespon
     // Advertise the union of every non-proxy profile's exposedModels, namespaced as
     // "profile/realModelId" so pi can pick a model that unambiguously selects an upstream.
     for (name, profile) in &config.profiles {
-        if profile.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if profile
+            .get("proxy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             continue;
         }
         if let Some(exposed) = profile.get("exposedModels").and_then(|v| v.as_array()) {
@@ -413,7 +472,10 @@ async fn handle_chat_completions(
 
     // Route purely by the model name in the body: "profile/realModel" → that profile
     // (+ same-model failover), and the real model id to send upstream.
-    let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let requested_model = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let (candidates, real_model) = resolve_route(&config, requested_model);
 
     if candidates.is_empty() {
@@ -423,17 +485,27 @@ async fn handle_chat_completions(
                 "message": format!("No upstream exposes model '{}'", requested_model),
                 "type": "no_route",
             } })),
-        ).into_response();
+        )
+            .into_response();
     }
 
-    let result = forward_with_failover(&config, &candidates, &body_value, &real_model, "chat/completions", &headers).await;
+    let result = forward_with_failover(
+        &config,
+        &candidates,
+        &body_value,
+        &real_model,
+        "chat/completions",
+        &headers,
+    )
+    .await;
 
     match result {
         Ok(resp) => resp,
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -446,15 +518,21 @@ async fn handle_messages(
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let body_value = filter_private_params(body_value);
 
-    let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+    let requested_model = body_value
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let (candidates, real_model) = resolve_route(&config, requested_model);
 
     // Native Anthropic endpoint: only route to anthropic-messages upstreams.
     let candidates: Vec<String> = candidates
         .into_iter()
         .filter(|name| {
-            config.profiles.get(name)
-                .and_then(|p| p.get("api").and_then(|v| v.as_str())) == Some("anthropic-messages")
+            config
+                .profiles
+                .get(name)
+                .and_then(|p| p.get("api").and_then(|v| v.as_str()))
+                == Some("anthropic-messages")
         })
         .collect();
 
@@ -465,14 +543,17 @@ async fn handle_messages(
         ).into_response();
     }
 
-    let result = forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers).await;
+    let result =
+        forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers)
+            .await;
 
     match result {
         Ok(resp) => resp,
         Err(e) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({ "error": { "message": e.to_string() } })),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -487,13 +568,14 @@ async fn handle_messages(
 fn responses_to_chat(body: &Value) -> Value {
     // Map `input` (string or array of messages) → `messages` array
     let messages = match body.get("input") {
-        Some(Value::Array(items)) => {
-            items.iter().map(|item| {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
                 let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
                 let content = item.get("content").cloned().unwrap_or(Value::Null);
                 json!({ "role": role, "content": content })
-            }).collect::<Vec<_>>()
-        }
+            })
+            .collect::<Vec<_>>(),
         Some(Value::String(s)) => {
             vec![json!({ "role": "user", "content": s })]
         }
@@ -506,31 +588,50 @@ fn responses_to_chat(body: &Value) -> Value {
     });
 
     // Map common params
-    if let Some(v) = body.get("max_output_tokens") { chat_body["max_tokens"] = v.clone(); }
-    else if let Some(v) = body.get("max_tokens") { chat_body["max_tokens"] = v.clone(); }
-    if let Some(v) = body.get("temperature") { chat_body["temperature"] = v.clone(); }
-    if let Some(v) = body.get("top_p") { chat_body["top_p"] = v.clone(); }
-    if let Some(v) = body.get("stream") { chat_body["stream"] = v.clone(); }
-    if let Some(v) = body.get("stop") { chat_body["stop"] = v.clone(); }
+    if let Some(v) = body.get("max_output_tokens") {
+        chat_body["max_tokens"] = v.clone();
+    } else if let Some(v) = body.get("max_tokens") {
+        chat_body["max_tokens"] = v.clone();
+    }
+    if let Some(v) = body.get("temperature") {
+        chat_body["temperature"] = v.clone();
+    }
+    if let Some(v) = body.get("top_p") {
+        chat_body["top_p"] = v.clone();
+    }
+    if let Some(v) = body.get("stream") {
+        chat_body["stream"] = v.clone();
+    }
+    if let Some(v) = body.get("stop") {
+        chat_body["stop"] = v.clone();
+    }
     // Tools: map Responses tool format (name→function.name, description→function.description)
     if let Some(tools) = body.get("tools").and_then(|v| v.as_array()) {
-        let chat_tools: Vec<Value> = tools.iter().map(|t| {
-            json!({
-                "type": "function",
-                "function": {
-                    "name": t.get("name").unwrap_or(&Value::Null),
-                    "description": t.get("description").unwrap_or(&Value::Null),
-                    "parameters": t.get("parameters").unwrap_or(&json!({})),
-                }
+        let chat_tools: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name").unwrap_or(&Value::Null),
+                        "description": t.get("description").unwrap_or(&Value::Null),
+                        "parameters": t.get("parameters").unwrap_or(&json!({})),
+                    }
+                })
             })
-        }).collect();
+            .collect();
         chat_body["tools"] = Value::Array(chat_tools);
-        if let Some(v) = body.get("tool_choice") { chat_body["tool_choice"] = v.clone(); }
+        if let Some(v) = body.get("tool_choice") {
+            chat_body["tool_choice"] = v.clone();
+        }
     }
     // Instructions → system message prepended
     if let Some(instructions) = body.get("instructions").and_then(|v| v.as_str()) {
         if !instructions.is_empty() {
-            let mut msgs = chat_body["messages"].as_array().cloned().unwrap_or_default();
+            let mut msgs = chat_body["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             msgs.insert(0, json!({ "role": "system", "content": instructions }));
             chat_body["messages"] = Value::Array(msgs);
         }
@@ -597,12 +698,18 @@ async fn handle_responses(
     let config = crate::config::load_config().unwrap_or_default();
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let body_value = filter_private_params(body_value);
-    let is_stream = body_value.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_stream = body_value
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Non-streaming: convert to Chat Completions, route, convert response back.
     if !is_stream {
         let chat_body = responses_to_chat(&body_value);
-        let requested_model = chat_body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        let requested_model = chat_body
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let (candidates, real_model) = resolve_route(&config, requested_model);
 
         if candidates.is_empty() {
@@ -610,40 +717,67 @@ async fn handle_responses(
                 Json(json!({ "error": { "message": format!("No upstream exposes model '{}'", requested_model), "type": "no_route" } }))).into_response();
         }
 
-        let result = forward_with_failover(&config, &candidates, &chat_body, &real_model, "chat/completions", &headers).await;
+        let result = forward_with_failover(
+            &config,
+            &candidates,
+            &chat_body,
+            &real_model,
+            "chat/completions",
+            &headers,
+        )
+        .await;
         match result {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let (_, body) = resp.into_parts();
-                let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024).await.unwrap_or_default();
+                let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
+                    .await
+                    .unwrap_or_default();
                 if (200..300).contains(&status) {
                     if let Ok(chat) = serde_json::from_slice::<Value>(&body_bytes) {
                         let responses_body = chat_response_to_responses(
-                            chat, &real_model,
+                            chat,
+                            &real_model,
                             Some(chrono::Utc::now().timestamp() as u64),
                         );
                         let s = serde_json::to_string(&responses_body).unwrap_or_default();
-                        return Response::builder().status(200)
+                        return Response::builder()
+                            .status(200)
                             .header("content-type", "application/json")
-                            .body(Body::from(s)).unwrap();
+                            .body(Body::from(s))
+                            .unwrap();
                     }
                 }
                 let mut builder = Response::builder().status(status);
                 builder = builder.header("content-type", "application/json");
                 builder.body(Body::from(body_bytes)).unwrap()
             }
-            Err(e) => (StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }))).into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }),
+                ),
+            )
+                .into_response(),
         }
     } else {
         // Streaming: route to the first openai-responses upstream and stream through.
         // For openai-completions upstreams, Chat→Responses SSE conversion is possible
         // but complex (different event names); skip for now.
-        let requested_model = body_value.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        let requested_model = body_value
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let (candidates, real_model) = resolve_route(&config, requested_model);
-        let candidates: Vec<String> = candidates.into_iter()
-            .filter(|name| config.profiles.get(name)
-                .and_then(|p| p.get("api").and_then(|v| v.as_str())) == Some("openai-responses"))
+        let candidates: Vec<String> = candidates
+            .into_iter()
+            .filter(|name| {
+                config
+                    .profiles
+                    .get(name)
+                    .and_then(|p| p.get("api").and_then(|v| v.as_str()))
+                    == Some("openai-responses")
+            })
             .collect();
 
         if candidates.is_empty() {
@@ -651,11 +785,24 @@ async fn handle_responses(
                 Json(json!({ "error": { "message": "Responses stream requires an openai-responses upstream (no Chat→Responses SSE conversion yet)", "type": "not_supported" } }))).into_response();
         }
 
-        let result = forward_with_failover(&config, &candidates, &body_value, &real_model, "responses", &headers).await;
+        let result = forward_with_failover(
+            &config,
+            &candidates,
+            &body_value,
+            &real_model,
+            "responses",
+            &headers,
+        )
+        .await;
         match result {
             Ok(resp) => resp,
-            Err(e) => (StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }))).into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }),
+                ),
+            )
+                .into_response(),
         }
     }
 }
@@ -664,14 +811,18 @@ async fn handle_responses(
 
 /// Whether `name` is a known, non-proxy profile.
 fn is_non_proxy(config: &crate::config::PiSwitchConfig, name: &str) -> bool {
-    config.profiles.get(name)
+    config
+        .profiles
+        .get(name)
         .map(|p| !p.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false))
         .unwrap_or(false)
 }
 
 /// Whether profile `name` exposes the (real) model id `model`.
 fn exposes(config: &crate::config::PiSwitchConfig, name: &str, model: &str) -> bool {
-    config.profiles.get(name)
+    config
+        .profiles
+        .get(name)
         .and_then(|p| p.get("exposedModels"))
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().any(|m| m.as_str() == Some(model)))
@@ -680,11 +831,15 @@ fn exposes(config: &crate::config::PiSwitchConfig, name: &str, model: &str) -> b
 
 /// All non-proxy profiles that expose at least one model.
 fn exposed_profiles(config: &crate::config::PiSwitchConfig) -> Vec<String> {
-    config.profiles.iter()
+    config
+        .profiles
+        .iter()
         .filter(|(_, p)| !p.get("proxy").and_then(|v| v.as_bool()).unwrap_or(false))
         .filter(|(_, p)| {
-            p.get("exposedModels").and_then(|v| v.as_array())
-                .map(|a| !a.is_empty()).unwrap_or(false)
+            p.get("exposedModels")
+                .and_then(|v| v.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
         })
         .map(|(name, _)| name.clone())
         .collect()
@@ -703,7 +858,9 @@ fn resolve_route(config: &crate::config::PiSwitchConfig, requested: &str) -> (Ve
         if is_non_proxy(config, prefix) && exposes(config, prefix, rest) {
             let mut profiles = vec![prefix.to_string()];
             for fo in &config.settings.proxy.failover {
-                if fo != prefix && is_non_proxy(config, fo) && exposes(config, fo, rest)
+                if fo != prefix
+                    && is_non_proxy(config, fo)
+                    && exposes(config, fo, rest)
                     && !profiles.contains(fo)
                 {
                     profiles.push(fo.clone());
@@ -722,7 +879,10 @@ fn resolve_route(config: &crate::config::PiSwitchConfig, requested: &str) -> (Ve
         }
     }
     for name in config.profiles.keys() {
-        if is_non_proxy(config, name) && exposes(config, name, requested) && !profiles.contains(name) {
+        if is_non_proxy(config, name)
+            && exposes(config, name, requested)
+            && !profiles.contains(name)
+        {
             profiles.push(name.clone());
         }
     }
@@ -842,7 +1002,16 @@ async fn forward_with_failover(
         // If half-open, only allow one probe request
         if is_half_open {
             if half_open_used {
-                log_request(name, false, Some("half_open_already_probing"), None, None, None, None).await;
+                log_request(
+                    name,
+                    false,
+                    Some("half_open_already_probing"),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await;
                 continue;
             }
             half_open_used = true;
@@ -870,15 +1039,16 @@ async fn forward_with_failover(
             let anthro_body = openai_to_anthropic_body(body);
             let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
-            let mut req = client.post(&url)
+            let mut req = client
+                .post(&url)
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01");
             if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua);
-    }
-    for (k, v) in &disguise {
-        req = req.header(*k, *v);
-    }
+                req = req.header(reqwest::header::USER_AGENT, ua);
+            }
+            for (k, v) in &disguise {
+                req = req.header(*k, *v);
+            }
             let resp = req.json(&anthro_body).send().await;
 
             match resp {
@@ -888,17 +1058,50 @@ async fn forward_with_failover(
                         let anthro_data: Value = r.json().await.unwrap_or(Value::Null);
                         let openai_data = anthropic_to_openai_response(&anthro_data);
                         record_success(name, is_half_open).await;
-                        log_request(name, true, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        log_request(
+                            name,
+                            true,
+                            None,
+                            Some(status.as_u16()),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         return Ok(Json(openai_data).into_response());
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
-                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code), is_half_open).await;
-                        log_request(name, false, Some(&format!("HTTP {}", status_code)), Some(status_code), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        record_failure(
+                            name,
+                            circuit_settings,
+                            &format!("HTTP {}", status_code),
+                            is_half_open,
+                        )
+                        .await;
+                        log_request(
+                            name,
+                            false,
+                            Some(&format!("HTTP {}", status_code)),
+                            Some(status_code),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         circuit_state = read_circuit_state().await;
                         continue;
                     } else {
                         let body_bytes = r.bytes().await.unwrap_or_default();
-                        log_request(name, false, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        log_request(
+                            name,
+                            false,
+                            None,
+                            Some(status.as_u16()),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         return Ok(Response::builder()
                             .status(status.as_u16())
                             .body(Body::from(body_bytes))
@@ -907,7 +1110,16 @@ async fn forward_with_failover(
                 }
                 Err(e) => {
                     record_failure(name, circuit_settings, &e.to_string(), is_half_open).await;
-                    log_request(name, false, Some(&e.to_string()), None, None, None, body.get("model").and_then(|v| v.as_str())).await;
+                    log_request(
+                        name,
+                        false,
+                        Some(&e.to_string()),
+                        None,
+                        None,
+                        None,
+                        body.get("model").and_then(|v| v.as_str()),
+                    )
+                    .await;
                     circuit_state = read_circuit_state().await;
                     continue;
                 }
@@ -916,14 +1128,15 @@ async fn forward_with_failover(
             // OpenAI-compatible
             let url = format!("{}/{}", profile.base_url.trim_end_matches('/'), target_path);
 
-            let mut req = client.post(&url)
+            let mut req = client
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key));
             if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua);
-    }
-    for (k, v) in &disguise {
-        req = req.header(*k, *v);
-    }
+                req = req.header(reqwest::header::USER_AGENT, ua);
+            }
+            for (k, v) in &disguise {
+                req = req.header(*k, *v);
+            }
             let resp = req.json(body).send().await;
 
             match resp {
@@ -931,24 +1144,66 @@ async fn forward_with_failover(
                     let status = r.status();
                     if status.is_success() {
                         record_success(name, is_half_open).await;
-                        log_request(name, true, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        log_request(
+                            name,
+                            true,
+                            None,
+                            Some(status.as_u16()),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         // Stream straight through (preserves Content-Type + enables SSE).
                         return Ok(stream_response(r));
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
-                        record_failure(name, circuit_settings, &format!("HTTP {}", status_code), is_half_open).await;
-                        log_request(name, false, Some(&format!("HTTP {}", status_code)), Some(status_code), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        record_failure(
+                            name,
+                            circuit_settings,
+                            &format!("HTTP {}", status_code),
+                            is_half_open,
+                        )
+                        .await;
+                        log_request(
+                            name,
+                            false,
+                            Some(&format!("HTTP {}", status_code)),
+                            Some(status_code),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         circuit_state = read_circuit_state().await;
                         continue;
                     } else {
                         // Non-retryable error: pass the upstream response through unchanged.
-                        log_request(name, false, None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                        log_request(
+                            name,
+                            false,
+                            None,
+                            Some(status.as_u16()),
+                            Some(&url),
+                            None,
+                            body.get("model").and_then(|v| v.as_str()),
+                        )
+                        .await;
                         return Ok(stream_response(r));
                     }
                 }
                 Err(e) => {
                     record_failure(name, circuit_settings, &e.to_string(), is_half_open).await;
-                    log_request(name, false, Some(&e.to_string()), None, None, None, body.get("model").and_then(|v| v.as_str())).await;
+                    log_request(
+                        name,
+                        false,
+                        Some(&e.to_string()),
+                        None,
+                        None,
+                        None,
+                        body.get("model").and_then(|v| v.as_str()),
+                    )
+                    .await;
                     circuit_state = read_circuit_state().await;
                     continue;
                 }
@@ -996,12 +1251,16 @@ async fn forward_anthropic_with_failover(
         }
 
         let profile_value = match config.profiles.get(name) {
-            Some(p) => p, None => continue,
+            Some(p) => p,
+            None => continue,
         };
         let profile: ProviderProfile = match serde_json::from_value(profile_value.clone()) {
-            Ok(p) => p, Err(_) => continue,
+            Ok(p) => p,
+            Err(_) => continue,
         };
-        if profile.api != "anthropic-messages" { continue; }
+        if profile.api != "anthropic-messages" {
+            continue;
+        }
 
         // Effective disguise: per-profile spoof overrides the global setting.
         let effective_spoof = profile.spoof.as_deref().or(global_spoof);
@@ -1010,15 +1269,16 @@ async fn forward_anthropic_with_failover(
         let api_key = crate::config::resolve_env(&profile.api_key);
         let url = format!("{}/messages", profile.base_url.trim_end_matches('/'));
 
-        let mut req = client.post(&url)
+        let mut req = client
+            .post(&url)
             .header("x-api-key", &api_key)
             .header("anthropic-version", "2023-06-01");
         if let Some(ref ua) = user_agent {
-        req = req.header(reqwest::header::USER_AGENT, ua);
-    }
-    for (k, v) in &disguise {
-        req = req.header(*k, *v);
-    }
+            req = req.header(reqwest::header::USER_AGENT, ua);
+        }
+        for (k, v) in &disguise {
+            req = req.header(*k, *v);
+        }
         let resp = req.json(body).send().await;
 
         match resp {
@@ -1027,13 +1287,28 @@ async fn forward_anthropic_with_failover(
                 if status.is_success() {
                     record_success(name, is_half_open).await;
                 }
-                log_request(name, status.is_success(), None, Some(status.as_u16()), Some(&url), None, body.get("model").and_then(|v| v.as_str())).await;
+                log_request(
+                    name,
+                    status.is_success(),
+                    None,
+                    Some(status.as_u16()),
+                    Some(&url),
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                )
+                .await;
                 // Anthropic → Anthropic passthrough: stream through, preserve headers.
                 return Ok(stream_response(r));
             }
             Ok(r) => {
                 let status = r.status().as_u16();
-                record_failure(name, circuit_settings, &format!("HTTP {}", status), is_half_open).await;
+                record_failure(
+                    name,
+                    circuit_settings,
+                    &format!("HTTP {}", status),
+                    is_half_open,
+                )
+                .await;
                 circuit_state = read_circuit_state().await;
                 continue;
             }
@@ -1045,7 +1320,9 @@ async fn forward_anthropic_with_failover(
         }
     }
 
-    Err(AppError::proxy("All Anthropic upstream attempts failed".to_string()))
+    Err(AppError::proxy(
+        "All Anthropic upstream attempts failed".to_string(),
+    ))
 }
 
 // ─── Request logging ──────────────────────────────────────
@@ -1102,9 +1379,12 @@ mod tests {
 
     #[test]
     fn namespaced_routes_to_profile() {
-        let c = cfg(serde_json::json!({
-            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
-        }), vec![]);
+        let c = cfg(
+            serde_json::json!({
+                "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
+            }),
+            vec![],
+        );
         let (profiles, real) = resolve_route(&c, "hyb/gpt-5.4");
         assert_eq!(profiles, vec!["hyb".to_string()]);
         assert_eq!(real, "gpt-5.4");
@@ -1112,10 +1392,13 @@ mod tests {
 
     #[test]
     fn namespaced_adds_failover_sharing_model() {
-        let c = cfg(serde_json::json!({
-            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
-            "fox": { "proxy": false, "exposedModels": ["gpt-5.4"] },
-        }), vec!["fox"]);
+        let c = cfg(
+            serde_json::json!({
+                "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+                "fox": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+            }),
+            vec!["fox"],
+        );
         let (profiles, real) = resolve_route(&c, "hyb/gpt-5.4");
         assert_eq!(profiles, vec!["hyb".to_string(), "fox".to_string()]);
         assert_eq!(real, "gpt-5.4");
@@ -1123,10 +1406,13 @@ mod tests {
 
     #[test]
     fn bare_id_failover_first() {
-        let c = cfg(serde_json::json!({
-            "aiapi": { "proxy": false, "exposedModels": ["gpt-5.4"] },
-            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
-        }), vec!["hyb"]);
+        let c = cfg(
+            serde_json::json!({
+                "aiapi": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+                "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] },
+            }),
+            vec!["hyb"],
+        );
         let (profiles, real) = resolve_route(&c, "gpt-5.4");
         assert_eq!(profiles.first(), Some(&"hyb".to_string())); // failover-first
         assert!(profiles.contains(&"aiapi".to_string()));
@@ -1135,9 +1421,12 @@ mod tests {
 
     #[test]
     fn splits_on_first_slash_only() {
-        let c = cfg(serde_json::json!({
-            "or": { "proxy": false, "exposedModels": ["anthropic/claude-sonnet-4.5"] }
-        }), vec![]);
+        let c = cfg(
+            serde_json::json!({
+                "or": { "proxy": false, "exposedModels": ["anthropic/claude-sonnet-4.5"] }
+            }),
+            vec![],
+        );
         let (profiles, real) = resolve_route(&c, "or/anthropic/claude-sonnet-4.5");
         assert_eq!(profiles, vec!["or".to_string()]);
         assert_eq!(real, "anthropic/claude-sonnet-4.5");
@@ -1145,9 +1434,12 @@ mod tests {
 
     #[test]
     fn unknown_model_yields_empty() {
-        let c = cfg(serde_json::json!({
-            "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
-        }), vec![]);
+        let c = cfg(
+            serde_json::json!({
+                "hyb": { "proxy": false, "exposedModels": ["gpt-5.4"] }
+            }),
+            vec![],
+        );
         let (profiles, _real) = resolve_route(&c, "hyb/does-not-exist");
         assert!(profiles.is_empty());
     }
@@ -1184,7 +1476,10 @@ mod tests {
         let out = filter_private_params(input);
         assert!(out.get("_private").is_none());
         let props = &out["tools"][0]["function"]["parameters"]["properties"];
-        assert!(props.get("_foo").is_some(), "schema property names must be preserved");
+        assert!(
+            props.get("_foo").is_some(),
+            "schema property names must be preserved"
+        );
         assert!(props.get("bar").is_some());
     }
 
