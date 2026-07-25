@@ -2,7 +2,7 @@ use crate::config::{config_dir, CircuitBreakerSettings, ProviderProfile};
 use crate::error::{AppError, Result};
 use axum::{
     body::Body,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -389,6 +389,20 @@ fn anthropic_to_openai_response(anthro: &Value) -> Value {
 
 // ─── Proxy router ─────────────────────────────────────────
 
+const DEFAULT_MAX_REQUEST_BODY_MIB: usize = 32;
+const MIN_MAX_REQUEST_BODY_MIB: usize = 4;
+const MAX_MAX_REQUEST_BODY_MIB: usize = 256;
+
+fn max_request_body_bytes() -> usize {
+    std::env::var("PI_SWITCH_MAX_REQUEST_BODY_MIB")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|mib| mib.clamp(MIN_MAX_REQUEST_BODY_MIB, MAX_MAX_REQUEST_BODY_MIB))
+        .unwrap_or(DEFAULT_MAX_REQUEST_BODY_MIB)
+        * 1024
+        * 1024
+}
+
 pub fn make_router(state: Arc<ProxyState>) -> Router {
     Router::new()
         .route("/health", get(handle_health))
@@ -396,6 +410,7 @@ pub fn make_router(state: Arc<ProxyState>) -> Router {
         .route("/v1/chat/completions", post(handle_chat_completions))
         .route("/v1/messages", post(handle_messages))
         .route("/v1/responses", post(handle_responses))
+        .layer(DefaultBodyLimit::max(max_request_body_bytes()))
         .with_state(state)
 }
 
@@ -1365,8 +1380,14 @@ async fn log_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_private_params, resolve_route};
+    use super::{filter_private_params, make_router, resolve_route, ProxyState};
     use crate::config::PiSwitchConfig;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
 
     fn cfg(profiles: serde_json::Value, failover: Vec<&str>) -> PiSwitchConfig {
         let mut c = PiSwitchConfig::default();
@@ -1375,6 +1396,35 @@ mod tests {
         }
         c.settings.proxy.failover = failover.into_iter().map(String::from).collect();
         c
+    }
+
+    #[tokio::test]
+    async fn accepts_model_requests_larger_than_axum_default_body_limit() {
+        let request_body = serde_json::json!({
+            "model": "missing/model",
+            "messages": [{ "role": "user", "content": "x".repeat(2 * 1024 * 1024) }],
+        })
+        .to_string();
+
+        let response = make_router(Arc::new(ProxyState {}))
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let body = String::from_utf8_lossy(&body);
+
+        assert_eq!(
+            status,
+            StatusCode::BAD_GATEWAY,
+            "unexpected response: {body}"
+        );
+        assert!(body.contains("No upstream exposes model 'missing/model'"));
     }
 
     #[test]
