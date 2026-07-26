@@ -1,7 +1,10 @@
 mod config;
 mod daemon;
+mod database;
 mod error;
 mod ops;
+mod package;
+mod package_ops;
 mod presets;
 mod proxy;
 mod service;
@@ -551,3 +554,207 @@ pub fn set_proxy_failover(failover_profiles: Vec<String>) -> napi::Result<String
     }
     Ok(msg)
 }
+
+// ─── Package Management ───────────────────────────────────────────────────────
+
+#[napi(object)]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PackageInfo {
+    pub id: String,
+    pub spec: String,
+    pub pkg_type: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub homepage: Option<String>,
+    pub has_extensions: bool,
+    pub has_skills: bool,
+    pub has_prompts: bool,
+    pub has_themes: bool,
+    pub installed: bool,
+    pub enabled: bool,
+    pub installed_at: Option<i64>,
+    pub updated_at: Option<i64>,
+}
+
+impl From<package::Package> for PackageInfo {
+    fn from(p: package::Package) -> Self {
+        Self {
+            id: p.id,
+            spec: p.spec,
+            pkg_type: p.pkg_type.to_string(),
+            name: p.name,
+            version: p.version,
+            description: p.description,
+            homepage: p.homepage,
+            has_extensions: p.has_extensions,
+            has_skills: p.has_skills,
+            has_prompts: p.has_prompts,
+            has_themes: p.has_themes,
+            installed: p.installed,
+            enabled: p.enabled,
+            installed_at: p.installed_at,
+            updated_at: p.updated_at,
+        }
+    }
+}
+
+#[napi(object)]
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PackageSourceInfo {
+    pub id: Option<i64>,
+    pub url: String,
+    pub source_type: String,
+    pub name: Option<String>,
+    pub enabled: bool,
+    pub added_at: Option<i64>,
+}
+
+impl From<package::PackageSource> for PackageSourceInfo {
+    fn from(s: package::PackageSource) -> Self {
+        Self {
+            id: s.id,
+            url: s.url,
+            source_type: s.source_type,
+            name: s.name,
+            enabled: s.enabled,
+            added_at: s.added_at,
+        }
+    }
+}
+
+/// Initialize package management
+#[napi]
+pub fn init_packages() -> napi::Result<String> {
+    package_ops::init_packages()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    Ok("Package management initialized".to_string())
+}
+
+/// List all packages
+#[napi]
+pub fn list_packages() -> napi::Result<String> {
+    let packages = package_ops::list_packages()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let infos: Vec<PackageInfo> = packages.into_iter().map(PackageInfo::from).collect();
+
+    serde_json::to_string_pretty(&infos)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Get a package by ID
+#[napi]
+pub fn get_package(id: String) -> napi::Result<String> {
+    let package = package_ops::get_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?
+        .ok_or_else(|| napi::Error::from_reason(format!("Package '{}' not found", id)))?;
+
+    let info = PackageInfo::from(package);
+
+    serde_json::to_string_pretty(&info)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Add a package
+#[napi]
+pub fn add_package(spec: String) -> napi::Result<String> {
+    let package = package_ops::add_package(&spec)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' added", package.name))
+}
+
+/// Install a package
+#[napi]
+pub fn install_package(id: String) -> napi::Result<String> {
+    let package = package_ops::install_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' installed and synced to Pi Agent", package.name))
+}
+
+/// Uninstall a package
+#[napi]
+pub fn uninstall_package(id: String) -> napi::Result<String> {
+    let package = package_ops::uninstall_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' uninstalled", package.name))
+}
+
+/// Enable a package
+#[napi]
+pub fn enable_package(id: String) -> napi::Result<String> {
+    let package = package_ops::enable_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' enabled", package.name))
+}
+
+/// Disable a package
+#[napi]
+pub fn disable_package(id: String) -> napi::Result<String> {
+    let package = package_ops::disable_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' disabled", package.name))
+}
+
+/// Delete a package
+#[napi]
+pub fn delete_package(id: String) -> napi::Result<String> {
+    package_ops::delete_package(&id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' deleted", id))
+}
+
+/// Sync packages to Pi Agent
+#[napi]
+pub fn sync_packages() -> napi::Result<String> {
+    package_ops::sync_packages_to_pi()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok("Packages synced to Pi Agent settings.json".to_string())
+}
+
+/// Import packages from Pi Agent
+#[napi]
+pub fn import_packages() -> napi::Result<String> {
+    let imported = package_ops::import_from_pi()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Imported {} packages from Pi Agent", imported.len()))
+}
+
+/// List package sources
+#[napi]
+pub fn list_package_sources() -> napi::Result<String> {
+    let sources = package_ops::list_sources()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let infos: Vec<PackageSourceInfo> = sources.into_iter().map(PackageSourceInfo::from).collect();
+
+    serde_json::to_string_pretty(&infos)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Add a package source
+#[napi]
+pub fn add_package_source(url: String, source_type: String, name: Option<String>) -> napi::Result<String> {
+    let source = package_ops::add_source(&url, &source_type, name.as_deref())
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package source '{}' added", source.url))
+}
+
+/// Delete a package source
+#[napi]
+pub fn delete_package_source(id: i64) -> napi::Result<String> {
+    package_ops::delete_source(id)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package source #{} deleted", id))
+}
+

@@ -85,6 +85,10 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/proxy/status", get(get_proxy_status))
         .route("/webui/info", get(get_webui_info))
         .route("/logs/export", get(get_logs_export))
+        // package management
+        .route("/packages", get(get_packages).post(post_package))
+        .route("/packages/:id", get(get_package).delete(delete_package))
+        .route("/packages/:id/toggle", post(post_package_toggle))
         // profile mutations
         .route("/init", post(post_init))
         .route("/profiles", post(post_profile))
@@ -230,6 +234,44 @@ async fn get_logs_export(Query(q): Query<HashMap<String, String>>) -> Response {
         body,
     )
         .into_response()
+}
+
+// ─── Package handlers ─────────────────────────────────────
+
+async fn get_packages() -> ApiJson {
+    let packages = crate::package_ops::list_packages()?;
+    Ok(Json(json!({ "packages": packages })))
+}
+
+async fn get_package(Path(id): Path<String>) -> ApiJson {
+    let package = crate::package_ops::get_package(&id)?;
+    Ok(Json(serde_json::to_value(package).unwrap_or_else(|_| json!({}))))
+}
+
+#[derive(Deserialize)]
+struct PackageBody {
+    id: String,
+    name: String,
+    version: String,
+    #[serde(default)]
+    enabled: bool,
+}
+
+async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {
+    // Create spec from the body (for now, just use id as spec)
+    let spec = format!("{}@{}", body.name, body.version);
+    let package = crate::package_ops::add_package(&spec)?;
+    Ok(Json(json!({ "ok": true, "package": package.name })))
+}
+
+async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
+    let package = crate::package_ops::toggle_package(&id)?;
+    Ok(Json(json!({ "ok": true, "enabled": package.enabled })))
+}
+
+async fn delete_package(Path(id): Path<String>) -> ApiJson {
+    crate::package_ops::remove_package(&id)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ─── Mutation handlers ────────────────────────────────────

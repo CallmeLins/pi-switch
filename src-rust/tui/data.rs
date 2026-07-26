@@ -2,6 +2,7 @@ use crate::config::{load_config, PiSwitchConfig};
 use crate::daemon::{daemon_status, DaemonResult, PROXY};
 use crate::presets::{all_presets, Preset};
 use crate::stats::{get_stats, UsageStats};
+use crate::package::Package;
 
 pub struct ProfileRow {
     pub name: String,
@@ -21,6 +22,7 @@ pub struct ProfileRow {
 pub struct UiData {
     pub config: PiSwitchConfig,
     pub profiles: Vec<ProfileRow>,
+    pub packages: Vec<Package>,
     pub presets: Vec<Preset>,
     pub daemon: DaemonResult,
     pub stats: UsageStats,
@@ -142,9 +144,11 @@ impl UiData {
         let config = load_config().unwrap_or_default();
         let stats = get_stats();
         let profiles = profile_rows(&config, &stats);
+        let packages = crate::package_ops::list_packages().unwrap_or_default();
         Self {
             config,
             profiles,
+            packages,
             presets: all_presets(),
             daemon: daemon_status(&PROXY).unwrap_or_else(offline_daemon),
             stats,

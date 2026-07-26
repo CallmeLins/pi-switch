@@ -90,6 +90,13 @@ pi-switch proxy failover <p1,p2,...>               # Same-model fallback chain
 pi-switch proxy start --daemon                     # Start proxy daemon
 pi-switch proxy status
 
+# Package management
+pi-switch package list                             # List installed packages
+pi-switch package add <id> <name> <version>        # Add a new package
+pi-switch package toggle <id>                      # Enable/disable package
+pi-switch package remove <id>                      # Remove package
+pi-switch package show <id>                        # Show package details
+
 # WebUI (browser config)
 pi-switch webui start [--host <ip>] [--port <port>] [--daemon]
 pi-switch webui status
@@ -113,6 +120,7 @@ pi-switch stats                                     # View request statistics
 | 🔌 **Provider Management** | CRUD, duplicate, search/filter, model management, expose to pi agent |
 | 💡 **Built-in Presets** | OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI — add profiles instantly |
 | 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, SSE streaming, User-Agent disguise, request-body filtering, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
+| 📦 **Package Management** | Install, enable/disable, and manage packages across CLI, TUI, and WebUI |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
 | 📊 **Usage Stats** | Per-provider, per-model request metrics & latency |

@@ -3,6 +3,7 @@ import type {
   DaemonResult,
   DoctorCheck,
   ModelEntry,
+  PackageEntry,
   PresetInfo,
   ProfileDetail,
   ProviderProfile,
@@ -41,6 +42,14 @@ export const api = {
   stats: () => req<UsageStats>("GET", "/stats"),
   proxyStatus: () => req<DaemonResult>("GET", "/proxy/status"),
   webuiInfo: () => req<{ authRequired: boolean }>("GET", "/webui/info"),
+
+  // package management
+  getPackages: () => req<{ packages: PackageEntry[] }>("GET", "/packages"),
+  getPackage: (id: string) => req<PackageEntry>("GET", `/packages/${enc(id)}`),
+  addPackage: (id: string, name: string, version: string) =>
+    req("POST", "/packages", { id, name, version, enabled: true }),
+  togglePackage: (id: string) => req("POST", `/packages/${enc(id)}/toggle`),
+  deletePackage: (id: string) => req("DELETE", `/packages/${enc(id)}`),
 
   // profile mutations
   init: () => req<{ messages: string[] }>("POST", "/init"),
