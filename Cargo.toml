@@ -28,7 +28,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["tokio", "http1", "json"] }
 hyper = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors"] }
 
 # web ui: embed the built React frontend into the .node so one artifact ships everything
