@@ -87,6 +87,7 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/logs/export", get(get_logs_export))
         // package management
         .route("/packages", get(get_packages).post(post_package))
+        .route("/packages/import", post(post_package_import))
         .route("/packages/:id", get(get_package).delete(delete_package))
         .route("/packages/:id/toggle", post(post_package_toggle))
         // profile mutations
@@ -272,6 +273,15 @@ async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
 async fn delete_package(Path(id): Path<String>) -> ApiJson {
     crate::package_ops::remove_package(&id)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+async fn post_package_import() -> ApiJson {
+    let imported = crate::package_ops::import_from_pi()?;
+    Ok(Json(json!({
+        "ok": true,
+        "count": imported.len(),
+        "message": format!("Imported {} packages from Pi Agent", imported.len())
+    })))
 }
 
 // ─── Mutation handlers ────────────────────────────────────

@@ -72,6 +72,17 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
     );
   };
 
+  const handleImport = async () => {
+    await run(
+      () => api.importPackages(),
+      "Packages imported from Pi Agent",
+      () => {
+        loadPackages();
+        refresh();
+      }
+    );
+  };
+
   if (loading) {
     return (
       <div>
@@ -85,9 +96,12 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
         <SectionTitle>📦 Packages</SectionTitle>
-        <Button onClick={() => setAdding(!adding)}>
-          {adding ? "Cancel" : "+ Add Package"}
-        </Button>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <Button onClick={handleImport}>📥 Import from Pi Agent</Button>
+          <Button onClick={() => setAdding(!adding)}>
+            {adding ? "Cancel" : "+ Add Package"}
+          </Button>
+        </div>
       </div>
 
       {adding && (

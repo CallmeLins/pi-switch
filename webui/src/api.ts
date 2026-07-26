@@ -48,6 +48,7 @@ export const api = {
   getPackage: (id: string) => req<PackageEntry>("GET", `/packages/${enc(id)}`),
   addPackage: (id: string, name: string, version: string) =>
     req("POST", "/packages", { id, name, version, enabled: true }),
+  importPackages: () => req<{ ok: boolean; count: number; message: string }>("POST", "/packages/import"),
   togglePackage: (id: string) => req("POST", `/packages/${enc(id)}/toggle`),
   deletePackage: (id: string) => req("DELETE", `/packages/${enc(id)}`),
 

@@ -694,6 +694,21 @@ impl App {
             return;
         }
 
+        // Handle 'i' key for import (works even when empty)
+        if let KeyCode::Char('i') = key.code {
+            match crate::package_ops::import_from_pi() {
+                Ok(imported) => {
+                    self.refresh();
+                    self.push_toast(
+                        ToastKind::Success,
+                        format!("Imported {} packages from Pi Agent", imported.len())
+                    );
+                }
+                Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+            }
+            return;
+        }
+
         let packages_len = self.data.packages.len();
         if packages_len == 0 {
             return;

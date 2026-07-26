@@ -277,7 +277,17 @@ pub async fn run_proxy_server(host: String, port: u16) -> napi::Result<()> {
 
     eprintln!("Proxy server listening on http://{}", addr);
 
-    let result = axum::serve(listener, app).await;
+    // Enable graceful shutdown on Ctrl+C
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        eprintln!("\nReceived Ctrl+C, shutting down gracefully...");
+    };
+
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await;
 
     match result {
         Ok(_) => Ok(()),
@@ -316,7 +326,18 @@ pub async fn run_web_server(
         eprintln!("(password also stored in ~/.pi-switch/webui_password)");
     }
 
-    match axum::serve(listener, app).await {
+    // Enable graceful shutdown on Ctrl+C
+    let shutdown_signal = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        eprintln!("\nReceived Ctrl+C, shutting down gracefully...");
+    };
+
+    match axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+    {
         Ok(_) => Ok(()),
         Err(e) => Err(napi::Error::from_reason(format!("Server error: {}", e))),
     }

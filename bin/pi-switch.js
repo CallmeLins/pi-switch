@@ -674,7 +674,9 @@ async function main() {
         } else {
           // Foreground mode: run server directly
           console.log(`Starting proxy server on http://${host}:${port} (foreground mode)`);
-          console.log(`Press Ctrl+C to stop`);
+          console.log(`Note: Ctrl+C may not work reliably on Windows. Recommend using --daemon flag.`);
+          console.log(`To stop: Find PID with 'netstat -ano | findstr :${port}', then 'taskkill /F /PID <pid>'`);
+
           await runProxyServer(host, port);
         }
         return;
@@ -737,7 +739,9 @@ async function main() {
           console.log(`Open http://${host}:${port} in your browser.`);
         } else {
           console.log(`Starting WebUI server on http://${host}:${port} (foreground mode)`);
-          console.log(`Open the URL in your browser. Press Ctrl+C to stop.`);
+          console.log(`Note: Ctrl+C may not work reliably on Windows. Recommend using --daemon flag.`);
+          console.log(`To stop: Find PID with 'netstat -ano | findstr :${port}', then 'taskkill /F /PID <pid>'`);
+
           await runWebServer(host, port, PROJECT_DIR);
         }
         return;

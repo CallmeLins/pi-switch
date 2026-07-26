@@ -268,13 +268,14 @@ pub(super) fn render_packages(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ("↑↓/jk", "Move"),
             ("Space", "Toggle"),
             ("d", "Delete"),
+            ("i", "Import"),
             ("r", "Refresh"),
             ("Esc", i18n::key_back())
         ],
     );
 
     if app.data.packages.is_empty() {
-        let empty_text = Paragraph::new("No packages installed.\n\nUse CLI to add packages:\n  pi-switch package add <id> <name> <version>")
+        let empty_text = Paragraph::new("No packages installed.\n\nPress 'i' to import from Pi Agent\nor use CLI to add packages:\n  pi-switch package add <spec>")
             .style(Style::default().fg(theme.dim))
             .wrap(Wrap { trim: false });
         frame.render_widget(empty_text, chunks[1]);
