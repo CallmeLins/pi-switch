@@ -83,18 +83,20 @@ impl Package {
 
         // Split by last @ to separate version
         let (name_part, version) = if let Some(pos) = without_prefix.rfind('@') {
-            // Handle scoped packages: @scope/name@version
-            let before_at = &without_prefix[..pos];
-            if before_at.starts_with('@') && before_at.contains('/') {
-                // This is @scope/name@version
-                let version = &without_prefix[pos + 1..];
-                (before_at, Some(version.to_string()))
-            } else if before_at.contains('@') {
-                // Multiple @, likely @scope/name@version format
-                (&without_prefix[..pos], Some(without_prefix[pos + 1..].to_string()))
+            // Handle scoped packages: @scope/name@version or @scope/name (no version)
+            if pos == 0 && without_prefix.contains('/') {
+                // This is @scope/name without version (@ is at the beginning)
+                (without_prefix, None)
             } else {
-                // Simple name@version
-                (before_at, Some(without_prefix[pos + 1..].to_string()))
+                let before_at = &without_prefix[..pos];
+                if before_at.starts_with('@') && before_at.contains('/') {
+                    // This is @scope/name@version
+                    let version = &without_prefix[pos + 1..];
+                    (before_at, Some(version.to_string()))
+                } else {
+                    // Simple name@version
+                    (before_at, Some(without_prefix[pos + 1..].to_string()))
+                }
             }
         } else {
             (without_prefix, None)
