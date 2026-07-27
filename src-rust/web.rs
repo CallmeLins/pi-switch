@@ -251,11 +251,8 @@ async fn get_package(Path(id): Path<String>) -> ApiJson {
 
 #[derive(Deserialize)]
 struct PackageBody {
-    id: String,
     name: String,
     version: String,
-    #[serde(default)]
-    enabled: bool,
 }
 
 async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {

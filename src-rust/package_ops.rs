@@ -1,4 +1,3 @@
-use crate::config;
 use crate::database::Database;
 use crate::error::{AppError, Result};
 use crate::package::{Package, PackageSource};
