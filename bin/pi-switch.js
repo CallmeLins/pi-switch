@@ -27,7 +27,7 @@ const PROJECT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 process.env.PI_SWITCH_PROJECT_DIR = PROJECT_DIR;
 
 function usage() {
-  console.log(`pi-switch v0.4.0 — lightweight profile switcher for pi agent
+  console.log(`pi-switch v0.4.1 — lightweight profile switcher for pi agent
 
 Usage:
   pi-switch provider list

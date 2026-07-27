@@ -1,6 +1,6 @@
 {
   "name": "@cokefenta/pi-switch",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Lightweight profile switcher for pi models.json",
   "type": "module",
   "bin": {
