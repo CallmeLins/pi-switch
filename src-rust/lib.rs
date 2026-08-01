@@ -11,6 +11,10 @@ mod service;
 mod stats;
 mod sync;
 mod tui;
+// Issue 03 wires SseUsageParser into the proxy tee path; until then the
+// module is only exercised by its own unit tests.
+#[allow(dead_code)]
+mod usage;
 mod web;
 
 use napi_derive::napi;
