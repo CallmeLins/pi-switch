@@ -197,8 +197,13 @@ async fn get_backups() -> ApiJson {
     Ok(Json(json!(service::list_backups()?)))
 }
 
-async fn get_stats() -> Json<Value> {
-    Json(service::stats_value())
+async fn get_stats(Query(q): Query<HashMap<String, String>>) -> ApiJson {
+    let window = crate::stats::parse_window_query(
+        q.get("range").map(String::as_str),
+        q.get("from").map(String::as_str),
+        q.get("to").map(String::as_str),
+    )?;
+    Ok(Json(service::stats_value(window)))
 }
 
 async fn get_proxy_status() -> ApiJson {
@@ -507,3 +512,79 @@ const PLACEHOLDER_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-
 npm run build:native</pre>
 <p>then restart the server. The REST API under <code>/api</code> is already live.</p>
 </body></html>"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::ServiceExt;
+
+    fn router() -> Router {
+        make_web_router(Arc::new(WebState {
+            project_dir: None,
+            password: None,
+        }))
+    }
+
+    async fn get(uri: &str) -> Response {
+        router()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn stats_without_window_params_returns_200() {
+        let res = get("/api/stats").await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn stats_custom_without_bounds_is_rejected_not_500() {
+        for uri in [
+            "/api/stats?range=custom",
+            "/api/stats?range=custom&from=1785664800000",
+            "/api/stats?range=custom&to=1785672000000",
+            "/api/stats?range=today",
+            "/api/stats?range=today&from=1785664800000",
+        ] {
+            let res = get(uri).await;
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "{uri} should be 400, not 500"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stats_invalid_range_or_inverted_window_is_rejected_not_500() {
+        for uri in [
+            "/api/stats?range=week",
+            "/api/stats?range=custom&from=abc&to=1785672000000",
+            "/api/stats?range=custom&from=1785672000000&to=1785664800000",
+            "/api/stats?range=custom&from=1785672000000&to=1785672000000",
+        ] {
+            let res = get(uri).await;
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "{uri} should be 400, not 500"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stats_with_valid_window_returns_200() {
+        for uri in [
+            "/api/stats?range=custom&from=1785664800000&to=1785672000000",
+            "/api/stats?range=today&from=1785664800000&to=1785672000000",
+            "/api/stats?range=last24h&from=1785664800000&to=1785672000000",
+            "/api/stats?range=last7d&from=1785664800000&to=1785672000000",
+            "/api/stats?from=1785664800000&to=1785672000000",
+        ] {
+            let res = get(uri).await;
+            assert_eq!(res.status(), StatusCode::OK, "{uri} should be 200");
+        }
+    }
+}

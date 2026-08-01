@@ -383,7 +383,7 @@ pub fn daemon_status_native(service: String) -> napi::Result<String> {
 
 #[napi]
 pub fn get_usage_stats() -> napi::Result<String> {
-    let stats = stats::get_stats();
+    let stats = stats::get_stats(None);
     serde_json::to_string_pretty(&stats).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
