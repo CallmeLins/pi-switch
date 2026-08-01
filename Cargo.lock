@@ -1759,6 +1759,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "env_logger",
+ "futures-util",
  "hyper",
  "libc",
  "log",
