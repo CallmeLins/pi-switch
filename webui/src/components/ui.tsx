@@ -34,9 +34,17 @@ export function Button({
 
 // ─── Cards / layout ───────────────────────────────────────
 
-export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
+export function Card({
+  className,
+  style,
+  children,
+}: {
+  className?: string;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+}) {
   return (
-    <div className={cx("rounded-xl border border-white/10 bg-zinc-900/50 p-4", className)}>
+    <div style={style} className={cx("rounded-xl border border-white/10 bg-zinc-900/50 p-4", className)}>
       {children}
     </div>
   );

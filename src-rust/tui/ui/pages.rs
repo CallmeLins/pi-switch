@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
+use crate::stats::TokenTotals;
 use crate::tui::app::{App, proxy_actions};
 use crate::tui::i18n;
 
@@ -379,6 +380,20 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
             format!("{} / {}", stats.retried_requests, stats.skipped_by_circuit),
         ));
     }
+    overview_lines.push(label_line(
+        app,
+        i18n::stats_tokens(),
+        token_summary(
+            &stats.total_tokens,
+            i18n::stats_input(),
+            i18n::stats_output(),
+        ),
+    ));
+    overview_lines.push(label_line(
+        app,
+        i18n::stats_cache_hit_rate(),
+        stats.cache_hit_rate.clone(),
+    ));
 
     let overview_block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -604,6 +619,115 @@ pub(super) fn render_settings(frame: &mut Frame<'_>, app: &App, area: Rect) {
             );
             frame.set_cursor_position((x + cursor_x, y));
         }
+    }
+}
+
+/// Format a cumulative token count for compact display (0, 999, 12.3K, 1.2M).
+/// The same K/M/B style is planned for the web UI dashboard.
+fn format_token_count(count: u64) -> String {
+    const UNITS: [&str; 5] = ["", "K", "M", "B", "T"];
+    let mut scaled = count as f64;
+    let mut unit = 0usize;
+    while scaled >= 1000.0 && unit < UNITS.len() - 1 {
+        scaled /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        return format!("{count}");
+    }
+    let rounded = (scaled * 10.0).round() / 10.0;
+    if rounded >= 1000.0 && unit < UNITS.len() - 1 {
+        scaled = rounded / 1000.0;
+        unit += 1;
+    } else {
+        scaled = rounded;
+    }
+    format!("{scaled:.1}{}", UNITS[unit])
+}
+
+/// Value shown for the cumulative-token line of the stats view. Renders
+/// "-" when there is no token data at all, otherwise a readable
+/// "12.3K input / 678 output" summary. The input/output words are injected
+/// so the function stays language-independent and testable.
+fn token_summary(total: &TokenTotals, input_word: &str, output_word: &str) -> String {
+    if total.total == 0 {
+        return "-".to_string();
+    }
+    format!(
+        "{} {input_word} / {} {output_word}",
+        format_token_count(total.input),
+        format_token_count(total.output)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_token_count, token_summary};
+    use crate::stats::TokenTotals;
+
+    fn totals(input: u64, output: u64) -> TokenTotals {
+        TokenTotals {
+            input,
+            output,
+            total: input + output,
+        }
+    }
+
+    #[test]
+    fn format_token_count_small_counts_are_plain() {
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(999), "999");
+    }
+
+    #[test]
+    fn format_token_count_uses_readable_suffixes() {
+        assert_eq!(format_token_count(1000), "1.0K");
+        assert_eq!(format_token_count(12_345), "12.3K");
+        assert_eq!(format_token_count(999_500), "999.5K");
+        assert_eq!(format_token_count(12_345_678), "12.3M");
+        assert_eq!(format_token_count(1_234_567_890), "1.2B");
+        assert_eq!(format_token_count(1_234_567_890_123), "1.2T");
+    }
+
+    #[test]
+    fn format_token_count_rounds_to_one_decimal() {
+        assert_eq!(format_token_count(12_349), "12.3K");
+        assert_eq!(format_token_count(12_351), "12.4K");
+    }
+
+    #[test]
+    fn format_token_count_carries_over_at_thousand_boundary() {
+        assert_eq!(format_token_count(999_950), "1.0M");
+        assert_eq!(format_token_count(999_999), "1.0M");
+    }
+
+    #[test]
+    fn token_summary_without_data_is_dash() {
+        assert_eq!(token_summary(&totals(0, 0), "input", "output"), "-");
+    }
+
+    #[test]
+    fn token_summary_renders_input_and_output() {
+        assert_eq!(
+            token_summary(&totals(12_345, 678), "input", "output"),
+            "12.3K input / 678 output"
+        );
+    }
+
+    #[test]
+    fn token_summary_zero_input_is_still_rendered() {
+        assert_eq!(
+            token_summary(&totals(0, 12_345_678), "input", "output"),
+            "0 input / 12.3M output"
+        );
+    }
+
+    #[test]
+    fn token_summary_accepts_localized_words() {
+        assert_eq!(
+            token_summary(&totals(1_234, 567), "输入", "输出"),
+            "1.2K 输入 / 567 输出"
+        );
     }
 }
 

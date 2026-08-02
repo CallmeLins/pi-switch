@@ -123,9 +123,21 @@ pi-switch stats                                     # View request statistics
 | 📦 **Package Management** | Install, enable/disable, and manage packages across CLI, TUI, and WebUI |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
-| 📊 **Usage Stats** | Per-provider, per-model request metrics & latency |
+| 📊 **Usage Stats** | Per-provider, per-model request metrics & latency; cumulative token totals, cache hit rate, per-conversation breakdown |
 | 💾 **Backup & Sync** | Auto-backup on mutation, AES-256-CBC encrypted export/import |
 | 🩺 **Diagnostics** | `doctor` command checks config, models.json, structure |
+
+---
+
+## 📊 Usage Statistics
+
+Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line. For streaming responses the upstream SSE stream is teed: each request's input/output/cached token counts (when the upstream reports them) and conversation id are parsed on the side and the log line is written when the stream ends — the stream itself is never buffered.
+
+- **TUI Stats page** shows the cumulative input/output tokens and the cache hit rate.
+- **Stats API** (`GET /api/stats`) returns `totalTokens` (input/output/total), `cacheHitRate`, per-provider token columns, and `byConversation` — conversations sorted by most recent activity (top 20), with requests without an id merged into a single `unlabeled` group.
+- **Cache hit rate** = cached input tokens ÷ total input tokens (output tokens excluded). When no cache data exists it shows `-`, never a misleading `0%`.
+- **Conversation id** comes from the client: `x-conversation-id` header first, `conversation_id` body field as fallback (ADR-0002).
+- Only successful requests with reported usage count towards token totals; failover/retry intermediate rows and old log lines without token fields are excluded gracefully, so upgrading never breaks or blanks existing history.
 
 ---
 
@@ -217,7 +229,8 @@ pi-switch/
 │   ├── presets.rs           # Built-in provider presets
 │   ├── proxy.rs             # Proxy server (gateway routing, failover, circuit breaker)
 │   ├── daemon.rs            # Daemon lifecycle
-│   ├── stats.rs             # Request log aggregation
+│   ├── stats.rs             # Request log aggregation + token usage stats
+│   ├── usage.rs             # Token usage extraction & SSE stream parsing
 │   ├── sync.rs              # Encrypted export/import
 │   └── tui/                 # Interactive terminal UI (ratatui)
 │       ├── app.rs           # State machine + key handler
@@ -231,6 +244,7 @@ pi-switch/
 
 **Config files:**
 - `~/.pi-switch/config.json` — profiles, proxy settings, failover chain
+- `~/.pi-switch/requests.log` — per-request JSON log (status, latency, token usage, conversation id)
 - `~/.pi-switch/backups/` — timestamped auto-backups on every mutation
 - `~/.pi/agent/models.json` — pi's provider registry (pi-switch writes a single gateway provider)
 

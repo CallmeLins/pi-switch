@@ -504,6 +504,8 @@ async fn handle_chat_completions(
             .into_response();
     }
 
+    let conversation_id = conversation_id_of(&headers, &body_value);
+
     let result = forward_with_failover(
         &config,
         &candidates,
@@ -511,6 +513,7 @@ async fn handle_chat_completions(
         &real_model,
         "chat/completions",
         &headers,
+        conversation_id.as_deref(),
     )
     .await;
 
@@ -558,8 +561,10 @@ async fn handle_messages(
         ).into_response();
     }
 
+    let conversation_id = conversation_id_of(&headers, &body_value);
+
     let result =
-        forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers)
+        forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers, conversation_id.as_deref())
             .await;
 
     match result {
@@ -732,6 +737,8 @@ async fn handle_responses(
                 Json(json!({ "error": { "message": format!("No upstream exposes model '{}'", requested_model), "type": "no_route" } }))).into_response();
         }
 
+        let conversation_id = conversation_id_of(&headers, &body_value);
+
         let result = forward_with_failover(
             &config,
             &candidates,
@@ -739,6 +746,7 @@ async fn handle_responses(
             &real_model,
             "chat/completions",
             &headers,
+            conversation_id.as_deref(),
         )
         .await;
         match result {
@@ -800,6 +808,8 @@ async fn handle_responses(
                 Json(json!({ "error": { "message": "Responses stream requires an openai-responses upstream (no Chat→Responses SSE conversion yet)", "type": "not_supported" } }))).into_response();
         }
 
+        let conversation_id = conversation_id_of(&headers, &body_value);
+
         let result = forward_with_failover(
             &config,
             &candidates,
@@ -807,6 +817,7 @@ async fn handle_responses(
             &real_model,
             "responses",
             &headers,
+            conversation_id.as_deref(),
         )
         .await;
         match result {
@@ -940,7 +951,94 @@ fn filter_private_params(value: Value) -> Value {
     recurse(value, None)
 }
 
+// ─── Conversation id ───────────────────────────────────────
+
+/// The client-supplied conversation identifier for a request: the
+/// `x-conversation-id` request header wins, the body `conversation_id`
+/// field is the fallback. Empty or non-string values are ignored.
+fn conversation_id_of(headers: &HeaderMap, body: &Value) -> Option<String> {
+    if let Some(value) = headers
+        .get("x-conversation-id")
+        .and_then(|v| v.to_str().ok())
+    {
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    body.get("conversation_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 // ─── Response passthrough (streaming + header preservation) ─
+
+/// Wrap an upstream response stream: copy every chunk into an `SseUsageParser`
+/// while forwarding it unchanged (no buffering, token-by-token passthrough),
+/// then run `on_finish` exactly once — on normal end, on error, or when the
+/// stream is dropped mid-flight (client cut the connection).
+struct StreamTee<S> {
+    inner: S,
+    parser: crate::usage::SseUsageParser,
+    on_finish: Option<Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>>,
+}
+
+impl<S, E> futures_util::Stream for StreamTee<S>
+where
+    S: futures_util::Stream<Item = std::result::Result<axum::body::Bytes, E>> + Unpin,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Item = std::result::Result<
+        axum::body::Bytes,
+        Box<dyn std::error::Error + Send + Sync>,
+    >;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+            std::task::Poll::Ready(Some(Ok(bytes))) => {
+                self.parser.push(&bytes);
+                std::task::Poll::Ready(Some(Ok(bytes)))
+            }
+            std::task::Poll::Ready(Some(Err(e))) => {
+                self.flush_log();
+                std::task::Poll::Ready(Some(Err(Box::new(e))))
+            }
+            std::task::Poll::Ready(None) => {
+                self.flush_log();
+                std::task::Poll::Ready(None)
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl<S> Drop for StreamTee<S> {
+    fn drop(&mut self) {
+        self.flush_log();
+    }
+}
+
+impl<S> StreamTee<S> {
+    fn new(
+        inner: S,
+        on_finish: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
+    ) -> Self {
+        Self {
+            inner,
+            parser: crate::usage::SseUsageParser::new(),
+            on_finish: Some(on_finish),
+        }
+    }
+
+    fn flush_log(&mut self) {
+        if let Some(cb) = self.on_finish.take() {
+            cb(self.parser.finish());
+        }
+    }
+}
 
 /// Upstream headers to forward to the client, minus per-hop framing headers the
 /// server recomputes. Keeps Content-Type / Content-Encoding / SSE headers intact.
@@ -958,18 +1056,68 @@ fn forward_headers(
         .collect()
 }
 
+/// Log fields captured at request time, flushed when the response stream ends
+/// (usage is parsed from the stream itself).
+struct StreamLogFields {
+    provider: String,
+    ok: bool,
+    error: Option<String>,
+    status: Option<u16>,
+    upstream_url: Option<String>,
+    model: Option<String>,
+    conversation_id: Option<String>,
+}
+
+impl StreamLogFields {
+    /// Fields for a successful passthrough response (the common tee path).
+    fn for_success(
+        provider: &str,
+        status: u16,
+        upstream_url: &str,
+        model: Option<&str>,
+        conversation_id: Option<&str>,
+    ) -> Self {
+        Self {
+            provider: provider.to_string(),
+            ok: true,
+            error: None,
+            status: Some(status),
+            upstream_url: Some(upstream_url.to_string()),
+            model: model.map(|s| s.to_string()),
+            conversation_id: conversation_id.map(|s| s.to_string()),
+        }
+    }
+}
+
 /// Stream an upstream response straight through to the client, preserving status and
 /// headers. Enables token-by-token SSE and keeps Content-Type (which the old buffered
 /// path dropped). Used for same-format passthrough (not the OpenAI↔Anthropic convert path).
-fn stream_response(r: reqwest::Response) -> Response {
+///
+/// When `log` is provided, the response stream is teed: every chunk is fed into the
+/// usage parser while being forwarded unchanged, and the log line (with token usage
+/// and conversation id) is appended once the stream ends — normally, on error, or
+/// when the client cuts the connection.
+fn stream_response(r: reqwest::Response, log: Option<StreamLogFields>) -> Response {
     let status = r.status().as_u16();
     let headers = forward_headers(r.headers());
     let mut builder = Response::builder().status(status);
     for (name, value) in headers {
         builder = builder.header(name, value);
     }
+
+        let body = match log {
+        Some(fields) => {
+            let tee = StreamTee::new(r.bytes_stream(), Box::new(move |usage| {
+                let entry = build_log_entry(&fields, usage.as_ref());
+                append_log_line(&entry);
+            }));
+            Body::from_stream(tee)
+        }
+        None => Body::from_stream(r.bytes_stream()),
+    };
+
     builder
-        .body(Body::from_stream(r.bytes_stream()))
+        .body(body)
         .unwrap_or_else(|_| {
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
@@ -985,6 +1133,7 @@ async fn forward_with_failover(
     real_model: &str,
     target_path: &str,
     _headers: &HeaderMap,
+    conversation_id: Option<&str>,
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
@@ -1010,7 +1159,18 @@ async fn forward_with_failover(
         let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
 
         if is_open {
-            log_request(name, false, Some("circuit_open"), None, None, None, None).await;
+            log_request(
+                name,
+                false,
+                Some("circuit_open"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                conversation_id,
+            )
+            .await;
             continue;
         }
 
@@ -1025,6 +1185,8 @@ async fn forward_with_failover(
                     None,
                     None,
                     None,
+                    None,
+                    conversation_id,
                 )
                 .await;
                 continue;
@@ -1071,6 +1233,7 @@ async fn forward_with_failover(
                     let status = r.status();
                     if status.is_success() {
                         let anthro_data: Value = r.json().await.unwrap_or(Value::Null);
+                        let usage = crate::usage::extract_usage(&anthro_data);
                         let openai_data = anthropic_to_openai_response(&anthro_data);
                         record_success(name, is_half_open).await;
                         log_request(
@@ -1081,6 +1244,8 @@ async fn forward_with_failover(
                             Some(&url),
                             None,
                             body.get("model").and_then(|v| v.as_str()),
+                            usage,
+                            conversation_id,
                         )
                         .await;
                         return Ok(Json(openai_data).into_response());
@@ -1101,6 +1266,8 @@ async fn forward_with_failover(
                             Some(&url),
                             None,
                             body.get("model").and_then(|v| v.as_str()),
+                            None,
+                            conversation_id,
                         )
                         .await;
                         circuit_state = read_circuit_state().await;
@@ -1115,6 +1282,8 @@ async fn forward_with_failover(
                             Some(&url),
                             None,
                             body.get("model").and_then(|v| v.as_str()),
+                            None,
+                            conversation_id,
                         )
                         .await;
                         return Ok(Response::builder()
@@ -1133,6 +1302,8 @@ async fn forward_with_failover(
                         None,
                         None,
                         body.get("model").and_then(|v| v.as_str()),
+                        None,
+                        conversation_id,
                     )
                     .await;
                     circuit_state = read_circuit_state().await;
@@ -1159,18 +1330,17 @@ async fn forward_with_failover(
                     let status = r.status();
                     if status.is_success() {
                         record_success(name, is_half_open).await;
-                        log_request(
-                            name,
-                            true,
-                            None,
-                            Some(status.as_u16()),
-                            Some(&url),
-                            None,
-                            body.get("model").and_then(|v| v.as_str()),
-                        )
-                        .await;
                         // Stream straight through (preserves Content-Type + enables SSE).
-                        return Ok(stream_response(r));
+                        // The response stream is teed into the usage parser; the log line
+                        // (with token usage + conversation id) is written when it ends.
+                        let fields = StreamLogFields::for_success(
+                            name,
+                            status.as_u16(),
+                            &url,
+                            body.get("model").and_then(|v| v.as_str()),
+                            conversation_id,
+                        );
+                        return Ok(stream_response(r, Some(fields)));
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
                         record_failure(
@@ -1188,6 +1358,8 @@ async fn forward_with_failover(
                             Some(&url),
                             None,
                             body.get("model").and_then(|v| v.as_str()),
+                            None,
+                            conversation_id,
                         )
                         .await;
                         circuit_state = read_circuit_state().await;
@@ -1202,9 +1374,11 @@ async fn forward_with_failover(
                             Some(&url),
                             None,
                             body.get("model").and_then(|v| v.as_str()),
+                            None,
+                            conversation_id,
                         )
                         .await;
-                        return Ok(stream_response(r));
+                        return Ok(stream_response(r, None));
                     }
                 }
                 Err(e) => {
@@ -1217,6 +1391,8 @@ async fn forward_with_failover(
                         None,
                         None,
                         body.get("model").and_then(|v| v.as_str()),
+                        None,
+                        conversation_id,
                     )
                     .await;
                     circuit_state = read_circuit_state().await;
@@ -1235,6 +1411,7 @@ async fn forward_anthropic_with_failover(
     body: &Value,
     real_model: &str,
     _headers: &HeaderMap,
+    conversation_id: Option<&str>,
 ) -> Result<Response> {
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
@@ -1301,19 +1478,32 @@ async fn forward_anthropic_with_failover(
                 let status = r.status();
                 if status.is_success() {
                     record_success(name, is_half_open).await;
+                    // Anthropic → Anthropic passthrough: stream through, preserve
+                    // headers. The stream is teed into the usage parser; the log line
+                    // (with token usage + conversation id) is written when it ends.
+                    let fields = StreamLogFields::for_success(
+                        name,
+                        status.as_u16(),
+                        &url,
+                        body.get("model").and_then(|v| v.as_str()),
+                        conversation_id,
+                    );
+                    return Ok(stream_response(r, Some(fields)));
                 }
                 log_request(
                     name,
-                    status.is_success(),
+                    false,
                     None,
                     Some(status.as_u16()),
                     Some(&url),
                     None,
                     body.get("model").and_then(|v| v.as_str()),
+                    None,
+                    conversation_id,
                 )
                 .await;
-                // Anthropic → Anthropic passthrough: stream through, preserve headers.
-                return Ok(stream_response(r));
+                // Non-retryable error: pass the upstream response through unchanged.
+                return Ok(stream_response(r, None));
             }
             Ok(r) => {
                 let status = r.status().as_u16();
@@ -1342,31 +1532,35 @@ async fn forward_anthropic_with_failover(
 
 // ─── Request logging ──────────────────────────────────────
 
-async fn log_request(
-    provider: &str,
-    ok: bool,
-    error: Option<&str>,
-    status: Option<u16>,
-    upstream_url: Option<&str>,
-    _attempts: Option<&[Value]>,
-    model: Option<&str>,
-) {
+/// Build the JSON object written to `requests.log` for one proxied request.
+/// Token usage is optional: rows without it (old requests, unavailable usage)
+/// get null fields, keeping the format backwards compatible.
+fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageSummary>) -> Value {
+    json!({
+        "ts": Utc::now().to_rfc3339(),
+        "ok": fields.ok,
+        "provider": fields.provider,
+        "error": fields.error,
+        "status": fields.status,
+        "upstreamUrl": fields.upstream_url,
+        "model": fields.model,
+        "promptTokens": usage.map(|u| u.prompt_tokens),
+        "completionTokens": usage.map(|u| u.completion_tokens),
+        "cachedTokens": usage.map(|u| u.cached_tokens),
+        "conversationId": fields.conversation_id,
+    })
+}
+
+/// Serialize `entry` and append it to `requests.log` (creating the file and
+/// parent directory as needed). Synchronous: callable from stream teardown
+/// paths where awaiting is not possible.
+fn append_log_line(entry: &Value) {
     let log_path = config_dir().join("requests.log");
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
 
-    let entry = json!({
-        "ts": Utc::now().to_rfc3339(),
-        "ok": ok,
-        "provider": provider,
-        "error": error,
-        "status": status,
-        "upstreamUrl": upstream_url,
-        "model": model,
-    });
-
-    if let Ok(json) = serde_json::to_string(&entry) {
+    if let Ok(json) = serde_json::to_string(entry) {
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1378,13 +1572,37 @@ async fn log_request(
     }
 }
 
+async fn log_request(
+    provider: &str,
+    ok: bool,
+    error: Option<&str>,
+    status: Option<u16>,
+    upstream_url: Option<&str>,
+    _attempts: Option<&[Value]>,
+    model: Option<&str>,
+    usage: Option<crate::usage::UsageSummary>,
+    conversation_id: Option<&str>,
+) {
+    let fields = StreamLogFields {
+        provider: provider.to_string(),
+        ok,
+        error: error.map(|s| s.to_string()),
+        status,
+        upstream_url: upstream_url.map(|s| s.to_string()),
+        model: model.map(|s| s.to_string()),
+        conversation_id: conversation_id.map(|s| s.to_string()),
+    };
+    let entry = build_log_entry(&fields, usage.as_ref());
+    append_log_line(&entry);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{filter_private_params, make_router, resolve_route, ProxyState};
     use crate::config::PiSwitchConfig;
     use axum::{
         body::{to_bytes, Body},
-        http::{Request, StatusCode},
+        http::{HeaderMap, HeaderValue, Request, StatusCode},
     };
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1584,5 +1802,280 @@ mod tests {
         assert_eq!(output["type"], "message");
         assert_eq!(output["content"][0]["type"], "output_text");
         assert_eq!(output["content"][0]["text"], "Hello!");
+    }
+
+    #[test]
+    fn conversation_id_prefers_header_over_body() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-id", HeaderValue::from_static("conv-header"));
+        let body = serde_json::json!({ "conversation_id": "conv-body" });
+        assert_eq!(
+            super::conversation_id_of(&headers, &body),
+            Some("conv-header".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_id_falls_back_to_body_when_header_absent_or_empty() {
+        let body = serde_json::json!({ "conversation_id": "conv-body" });
+
+        let no_header = HeaderMap::new();
+        assert_eq!(
+            super::conversation_id_of(&no_header, &body),
+            Some("conv-body".to_string())
+        );
+
+        let mut empty_header = HeaderMap::new();
+        empty_header.insert("x-conversation-id", HeaderValue::from_static(""));
+        assert_eq!(
+            super::conversation_id_of(&empty_header, &body),
+            Some("conv-body".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_id_returns_none_when_unavailable_or_malformed() {
+        let headers = HeaderMap::new();
+
+        assert_eq!(super::conversation_id_of(&headers, &serde_json::json!({})), None);
+        assert_eq!(
+            super::conversation_id_of(&headers, &serde_json::json!({ "conversation_id": 123 })),
+            None,
+            "non-string body field is ignored"
+        );
+        assert_eq!(
+            super::conversation_id_of(&headers, &serde_json::json!({ "conversation_id": null })),
+            None
+        );
+        assert_eq!(
+            super::conversation_id_of(&headers, &serde_json::json!({ "conversation_id": "" })),
+            None,
+            "empty body field is ignored"
+        );
+    }
+
+    #[test]
+    fn log_entry_includes_usage_and_conversation_when_present() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 200,
+            completion_tokens: 30,
+            cached_tokens: 120,
+        };
+        let fields = super::StreamLogFields {
+            provider: "hyb".to_string(),
+            ok: true,
+            error: None,
+            status: Some(200),
+            upstream_url: Some("http://upstream/chat/completions".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            conversation_id: Some("conv-1".to_string()),
+        };
+        let entry = super::build_log_entry(&fields, Some(&usage));
+        assert!(entry.get("ts").and_then(|v| v.as_str()).is_some());
+        assert_eq!(entry["ok"], true);
+        assert_eq!(entry["provider"], "hyb");
+        assert_eq!(entry["status"], 200);
+        assert_eq!(entry["upstreamUrl"], "http://upstream/chat/completions");
+        assert_eq!(entry["model"], "gpt-5.4");
+        assert_eq!(entry["promptTokens"], 200);
+        assert_eq!(entry["completionTokens"], 30);
+        assert_eq!(entry["cachedTokens"], 120);
+        assert_eq!(entry["conversationId"], "conv-1");
+    }
+
+    #[test]
+    fn log_entry_leaves_token_fields_null_without_usage() {
+        let fields = super::StreamLogFields {
+            provider: "hyb".to_string(),
+            ok: false,
+            error: Some("boom".to_string()),
+            status: None,
+            upstream_url: None,
+            model: None,
+            conversation_id: None,
+        };
+        let entry = super::build_log_entry(&fields, None);
+        assert_eq!(entry["ok"], false);
+        assert_eq!(entry["error"], "boom");
+        assert_eq!(entry["promptTokens"], serde_json::Value::Null);
+        assert_eq!(entry["completionTokens"], serde_json::Value::Null);
+        assert_eq!(entry["cachedTokens"], serde_json::Value::Null);
+        assert_eq!(entry["conversationId"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn log_entry_roundtrips_through_request_log_entry() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cached_tokens: 40,
+        };
+        let fields = super::StreamLogFields::for_success(
+            "hyb",
+            200,
+            "http://upstream",
+            Some("gpt-5.4"),
+            Some("conv-1"),
+        );
+        let entry = super::build_log_entry(&fields, Some(&usage));
+        let parsed: crate::stats::RequestLogEntry = serde_json::from_value(entry).unwrap();
+        assert_eq!(parsed.provider.as_deref(), Some("hyb"));
+        assert_eq!(parsed.prompt_tokens, Some(100));
+        assert_eq!(parsed.completion_tokens, Some(50));
+        assert_eq!(parsed.cached_tokens, Some(40));
+        assert_eq!(parsed.conversation_id.as_deref(), Some("conv-1"));
+    }
+
+    fn tee_slot() -> (
+        std::sync::Arc<std::sync::Mutex<Option<Option<crate::usage::UsageSummary>>>>,
+        Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
+    ) {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let handle = slot.clone();
+        let cb: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send> =
+            Box::new(move |summary| {
+                *handle.lock().unwrap() = Some(summary);
+            });
+        (slot, cb)
+    }
+
+    fn openai_stream() -> String {
+        concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":30,\"prompt_tokens_details\":{\"cached_tokens\":120}}}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn stream_tee_forwards_chunks_unchanged_and_reports_usage() {
+        use axum::body::Bytes;
+        use futures_util::TryStreamExt;
+
+        let (slot, cb) = tee_slot();
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from(openai_stream()))];
+        let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
+
+        let out: Vec<Bytes> = tee.try_collect().await.unwrap();
+        assert_eq!(out, vec![Bytes::from(openai_stream())], "chunks pass through");
+
+        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        assert_eq!(
+            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (200, 30, 120)
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_tee_handles_usage_split_across_chunks() {
+        use axum::body::Bytes;
+        use futures_util::TryStreamExt;
+
+        let stream = openai_stream();
+        let cut = stream.find("\"usage\"").unwrap();
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from(stream[..cut].to_string())),
+            Ok(Bytes::from(stream[cut..].to_string())),
+        ];
+
+        let (slot, cb) = tee_slot();
+        let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
+        let out: Vec<Bytes> = tee.try_collect().await.unwrap();
+
+        let joined: String = out
+            .into_iter()
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .collect();
+        assert_eq!(joined, stream, "chunks reassemble to the original stream");
+
+        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        assert_eq!(
+            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (200, 30, 120)
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_tee_reports_none_when_stream_has_no_usage() {
+        use axum::body::Bytes;
+        use futures_util::TryStreamExt;
+
+        let stream = concat!(
+            "data: {\"id\":\"chatcmpl-2\",\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (slot, cb) = tee_slot();
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from(stream))];
+        let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
+
+        tee.try_collect::<Vec<Bytes>>().await.unwrap();
+        assert_eq!(*slot.lock().unwrap(), Some(None), "callback runs with no usage");
+    }
+
+    #[tokio::test]
+    async fn stream_tee_propagates_error_and_still_reports() {
+        use axum::body::Bytes;
+        use futures_util::TryStreamExt;
+
+        let (slot, cb) = tee_slot();
+        let tee = super::StreamTee::new(
+            futures_util::stream::iter(vec![
+                Ok(Bytes::from("data: {\"id\":\"1\"}\n\n")),
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "upstream died")),
+            ]),
+            cb,
+        );
+
+        let err = tee.try_collect::<Vec<Bytes>>().await.unwrap_err();
+        assert!(err.to_string().contains("upstream died"));
+        assert_eq!(
+            *slot.lock().unwrap(),
+            Some(None),
+            "error end still triggers the callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_tee_drop_mid_stream_still_reports() {
+        use axum::body::Bytes;
+        use futures_util::TryStreamExt;
+
+        let stream = concat!(
+            "data: {\"id\":\"chatcmpl-3\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-3\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":50}}}\n\n",
+        );
+        let (slot, cb) = tee_slot();
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from(stream)),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ];
+        let mut tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
+
+        let first = tee.try_next().await.unwrap().unwrap();
+        assert_eq!(first, Bytes::from(stream));
+        drop(tee);
+
+        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        assert_eq!(
+            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (100, 10, 50),
+            "client cut still flushes the log line with whatever usage arrived"
+        );
+    }
+
+    #[test]
+    fn stream_tee_drop_mid_stream_without_usage_reports_none() {
+        use axum::body::Bytes;
+
+        let (slot, cb) = tee_slot();
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from("data: {\"id\":\"1\"}\n\n"))];
+        let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
+
+        drop(tee);
+        assert_eq!(*slot.lock().unwrap(), Some(None));
     }
 }

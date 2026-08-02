@@ -122,9 +122,21 @@ pi-switch stats                                     # 查看请求统计
 | 📦 **Package 管理** | 在 CLI、TUI、WebUI 中安装、启用/禁用和管理包 |
 | 🖥️ **交互式 TUI** | ratatui 驱动、Dracula 主题、鼠标支持、vim 键位 (`hjkl`) |
 | 🌐 **双语支持** | English / 中文，持久化到配置，Settings 中切换 |
-| 📊 **使用统计** | 按 provider、按模型的请求指标与延迟 |
+| 📊 **使用统计** | 按 provider、按模型的请求指标与延迟；累计 token 总量、缓存命中率、按对话统计 |
 | 💾 **备份与同步** | 每次修改自动备份、AES-256-CBC 加密导出/导入 |
 | 🩺 **诊断工具** | `doctor` 命令检查配置、models.json、结构完整性 |
+
+---
+
+## 📊 使用统计
+
+每次代理请求都会以 JSON 行追加写入 `~/.pi-switch/requests.log`。流式响应通过 tee 旁路解析：请求的输入/输出/命中缓存 token 数（上游上报时）与对话标识在流结束后补写进日志——流本身从不缓冲，逐 token 体验不变。
+
+- **TUI 统计页**：显示累计输入/输出 token 与缓存命中率。
+- **统计接口**（`GET /api/stats`）：返回 `totalTokens`（输入/输出/总计）、`cacheHitRate`、按供应商的 token 累计列与 `byConversation`（按最近活跃倒序、截取 Top 20；无标识请求合并为 `unlabeled` 一组）。
+- **缓存命中率** = 命中缓存的输入 token ÷ 总输入 token（输出 token 不参与）。无缓存数据时显示 `-`，绝不显示误导的 `0%`。
+- **对话标识**来自客户端：`x-conversation-id` 请求头优先，body `conversation_id` 兜底（ADR-0002）。
+- 仅成功且上报了 usage 的请求计入 token 统计；failover/重试的中间行与升级前的旧日志行（无 token 字段）优雅跳过，升级不会清空或污染既有历史。
 
 ---
 
@@ -216,7 +228,8 @@ pi-switch/
 │   ├── presets.rs           # 内置 provider 预设
 │   ├── proxy.rs             # 代理服务器（网关路由、故障转移、断路器）
 │   ├── daemon.rs            # 守护进程管理
-│   ├── stats.rs             # 请求日志聚合
+│   ├── stats.rs             # 请求日志聚合 + token 统计
+│   ├── usage.rs             # Token 使用量提取 & SSE 流解析
 │   ├── sync.rs              # 加密导出/导入
 │   └── tui/                 # 交互式终端 UI（ratatui）
 │       ├── app.rs           # 状态机 + 按键处理
@@ -230,6 +243,7 @@ pi-switch/
 
 **配置文件：**
 - `~/.pi-switch/config.json` — profiles、代理设置、故障转移链
+- `~/.pi-switch/requests.log` — 每次请求的 JSON 日志（状态、延迟、token 使用量、对话标识）
 - `~/.pi-switch/backups/` — 每次修改自动生成带时间戳的备份
 - `~/.pi/agent/models.json` — pi 的 provider 注册表（pi-switch 写入单个网关 provider）
 

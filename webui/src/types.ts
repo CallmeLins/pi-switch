@@ -125,14 +125,44 @@ export interface ProfileDetail {
   providerId: string;
 }
 
+export interface TokenTotals {
+  input: number;
+  output: number;
+  total: number;
+}
+
+export interface ProviderStats {
+  total: number;
+  ok: number;
+  failed: number;
+  retries: number;
+  avgMs: number;
+  totalMs: number;
+  lastUsed?: string;
+  promptTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+}
+
+export interface ConversationStats {
+  conversationId: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  lastActive?: string;
+}
+
 export interface UsageStats {
   totalRequests: number;
   okRequests: number;
   failedRequests: number;
   successRate: string;
   avgLatencyMs?: number;
-  byProvider: Record<string, { total: number; ok: number; failed: number }>;
+  byProvider: Record<string, ProviderStats>;
   byModel?: Record<string, { total: number; ok: number; failed: number }>;
+  totalTokens?: TokenTotals;
+  cacheHitRate?: string;
+  byConversation?: ConversationStats[];
   [key: string]: unknown;
 }
 
