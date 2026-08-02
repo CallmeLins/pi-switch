@@ -1,22 +1,84 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppState, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
-import { Button, Card, SectionTitle } from "./ui";
+import { Button, Card, Input, SectionTitle } from "./ui";
 import { formatTokenCount, formatTotalTokens, shortConversationId } from "../lib/format";
+import { computeStatsWindow, todayString } from "../lib/statsWindow";
+import type { StatsRange } from "../lib/statsWindow";
+
+const PRESETS: { key: StatsRange; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "last24h", label: "24h" },
+  { key: "last7d", label: "7d" },
+  { key: "custom", label: "Custom" },
+];
 
 export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> }) {
   const [stats, setStats] = useState<UsageStats | null>(null);
+  const [range, setRange] = useState<StatsRange>("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [customError, setCustomError] = useState<string | null>(null);
 
-  const load = async () => {
+  const seq = useRef(0);
+  const load = async (range: StatsRange, from: number, to: number) => {
+    const id = ++seq.current;
     try {
-      setStats(await api.stats());
+      const next = await api.stats(range, from, to);
+      if (id === seq.current) {
+        setStats(next);
+      }
     } catch {
-      setStats(null);
+      if (id === seq.current) {
+        setStats(null);
+      }
     }
   };
   useEffect(() => {
-    void load();
+    const { from, to } = computeStatsWindow("today", null, null);
+    void load("today", from, to);
   }, []);
+
+  const select = (key: StatsRange) => {
+    setRange(key);
+    if (key === "custom") {
+      const from = customFrom || todayString();
+      const to = customTo || todayString();
+      if (customFrom && customTo && to < from) {
+        setCustomError("End must be on or after start");
+        return;
+      }
+      setCustomFrom(from);
+      setCustomTo(to);
+      const { from: f, to: t } = computeStatsWindow("custom", from, to);
+      void load("custom", f, t);
+    } else {
+      setCustomError(null);
+      const { from, to } = computeStatsWindow(key, null, null);
+      void load(key, from, to);
+    }
+  };
+
+  const onCustomDate =
+    (which: "from" | "to") => (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      const from = which === "from" ? value : customFrom;
+      const to = which === "to" ? value : customTo;
+      if (which === "from") {
+        setCustomFrom(value);
+      } else {
+        setCustomTo(value);
+      }
+      if (!from || !to) {
+        setCustomError("Select both start and end dates");
+      } else if (to < from) {
+        setCustomError("End must be on or after start");
+      } else {
+        setCustomError(null);
+        const { from: f, to: t } = computeStatsWindow("custom", from, to);
+        void load("custom", f, t);
+      }
+    };
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
 
@@ -24,8 +86,29 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     <div>
       <SectionTitle hint="proxy request usage">Stats</SectionTitle>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {PRESETS.map(({ key, label }) => (
+          <Button
+            key={key}
+            variant={range === key ? "primary" : "subtle"}
+            aria-pressed={range === key}
+            onClick={() => select(key)}
+          >
+            {label}
+          </Button>
+        ))}
+        {range === "custom" && (
+          <span className="flex items-center gap-2">
+            <Input type="date" aria-label="From" value={customFrom} onChange={onCustomDate("from")} />
+            <span className="text-xs text-zinc-500">→</span>
+            <Input type="date" aria-label="To" value={customTo} onChange={onCustomDate("to")} />
+            {customError && <span className="text-xs text-red-300">{customError}</span>}
+          </span>
+        )}
+      </div>
+
       <div className="mb-3 flex gap-2">
-        <Button onClick={() => void load()}>Refresh</Button>
+        <Button onClick={() => select(range)}>Refresh</Button>
         <a href={logsExportUrl("json")} className="inline-flex">
           <Button>Export JSON</Button>
         </a>
