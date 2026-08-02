@@ -701,7 +701,7 @@ impl App {
                     self.refresh();
                     self.push_toast(
                         ToastKind::Success,
-                        format!("Imported {} packages from Pi Agent", imported.len())
+                        format!("Imported {} packages from Pi Agent", imported.len()),
                     );
                 }
                 Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
@@ -741,7 +741,9 @@ impl App {
                     match crate::package_ops::remove_package(&pkg_id) {
                         Ok(_) => {
                             self.refresh();
-                            if self.packages_idx >= self.data.packages.len() && self.packages_idx > 0 {
+                            if self.packages_idx >= self.data.packages.len()
+                                && self.packages_idx > 0
+                            {
                                 self.packages_idx -= 1;
                             }
                             self.push_toast(ToastKind::Success, "Package removed");

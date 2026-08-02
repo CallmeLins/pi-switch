@@ -45,8 +45,12 @@ fn render_content(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         Route::Home => pages::render_home(frame, app, area),
         Route::Profiles => profiles::render_profiles(frame, app, area),
         Route::ProfileDetail(name) => profiles::render_profile_detail(frame, app, area, &name),
-        Route::FetchModels(name) => profiles::render_model_selection(frame, app, area, &name, false),
-        Route::ExposeModels(name) => profiles::render_model_selection(frame, app, area, &name, true),
+        Route::FetchModels(name) => {
+            profiles::render_model_selection(frame, app, area, &name, false)
+        }
+        Route::ExposeModels(name) => {
+            profiles::render_model_selection(frame, app, area, &name, true)
+        }
         Route::Form => profiles::render_form(frame, app, area),
         Route::Proxy => pages::render_proxy(frame, app, area),
         Route::Packages => pages::render_packages(frame, app, area),
@@ -80,7 +84,9 @@ pub(super) fn highlight_symbol(theme: &Theme) -> &'static str {
 
 pub(super) fn pane_border_style(theme: &Theme, focused: bool) -> Style {
     if focused {
-        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.dim)
     }
@@ -90,10 +96,7 @@ pub(super) fn content_block(app: &App, title: impl Into<Line<'static>>) -> Block
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(pane_border_style(
-            &app.theme,
-            app.focus == Focus::Content,
-        ))
+        .border_style(pane_border_style(&app.theme, app.focus == Focus::Content))
         .title(title.into())
 }
 
@@ -106,7 +109,9 @@ pub(super) fn key_bar_line<'a>(theme: &Theme, items: &[(&'a str, &'a str)]) -> L
     let key_style = if theme.no_color {
         Style::default().add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     };
     let desc_style = Style::default().fg(theme.dim);
 
@@ -128,8 +133,7 @@ pub(super) fn render_key_bar_center(
     items: &[(&str, &str)],
 ) {
     frame.render_widget(
-        Paragraph::new(key_bar_line(theme, items))
-            .alignment(ratatui::layout::Alignment::Center),
+        Paragraph::new(key_bar_line(theme, items)).alignment(ratatui::layout::Alignment::Center),
         area,
     );
 }

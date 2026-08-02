@@ -157,7 +157,11 @@ fn render_loading(frame: &mut Frame<'_>, app: &App, kind: &LoadingKind) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD));
+        .border_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -165,7 +169,9 @@ fn render_loading(frame: &mut Frame<'_>, app: &App, kind: &LoadingKind) {
     let tick_idx = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() / 80) % spinner.len() as u128;
+        .as_millis()
+        / 80)
+        % spinner.len() as u128;
     let spinner_char = spinner[tick_idx as usize];
 
     frame.render_widget(
@@ -261,11 +267,7 @@ fn toast_rect(content_area: Rect, message: &str) -> Rect {
         .saturating_sub(4)
         .clamp(1, TOAST_MAX_WIDTH);
     let min_width = TOAST_MIN_WIDTH.min(max_width);
-    let content_width = message
-        .lines()
-        .map(display_width)
-        .max()
-        .unwrap_or(0);
+    let content_width = message.lines().map(display_width).max().unwrap_or(0);
     let width = content_width.saturating_add(8).clamp(min_width, max_width);
 
     let inner_width = width.saturating_sub(2).max(1);

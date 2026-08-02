@@ -1,8 +1,8 @@
 use crate::config::{load_config, PiSwitchConfig};
 use crate::daemon::{daemon_status, DaemonResult, PROXY};
+use crate::package::Package;
 use crate::presets::{all_presets, Preset};
 use crate::stats::{get_stats, UsageStats};
-use crate::package::Package;
 
 pub struct ProfileRow {
     pub name: String,
@@ -54,7 +54,8 @@ fn read_pi_default_model() -> Option<String> {
         .map(str::to_string)
 }
 
-fn list_backup_files() -> Vec<String> {    let dir = crate::config::backup_dir();
+fn list_backup_files() -> Vec<String> {
+    let dir = crate::config::backup_dir();
     if !dir.exists() {
         return vec![];
     }
@@ -98,8 +99,7 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
             let circuit_breaker_open = cb_status
                 .map(|s| s.state == "open" || s.state == "half_open")
                 .unwrap_or(false);
-            let circuit_breaker_error = cb_status
-                .and_then(|s| s.last_error.clone());
+            let circuit_breaker_error = cb_status.and_then(|s| s.last_error.clone());
 
             ProfileRow {
                 name: name.clone(),

@@ -5,14 +5,14 @@ pub enum Route {
     Home,
     Profiles,
     ProfileDetail(String),
-    FetchModels(String),      // Fetch & select models for provider
-    ExposeModels(String),     // Select which models to expose to pi
-    Packages,                 // Package management
+    FetchModels(String),  // Fetch & select models for provider
+    ExposeModels(String), // Select which models to expose to pi
+    Packages,             // Package management
     Proxy,
     Stats,
     Backups,
     Settings,
-    FailoverEditor,           // Edit failover chain with checkbox+sortable list
+    FailoverEditor, // Edit failover chain with checkbox+sortable list
     Form,
 }
 

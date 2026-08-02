@@ -130,7 +130,9 @@ fn parse_entries(text: &str) -> Vec<RequestLogEntry> {
     text.lines()
         .filter_map(|line| {
             let line = line.trim();
-            if line.is_empty() { return None; }
+            if line.is_empty() {
+                return None;
+            }
             serde_json::from_str(line).ok()
         })
         .collect()
@@ -138,31 +140,42 @@ fn parse_entries(text: &str) -> Vec<RequestLogEntry> {
 
 fn parse_logs() -> Vec<RequestLogEntry> {
     let path = config_dir().join("requests.log");
-    if !path.exists() { return vec![]; }
+    if !path.exists() {
+        return vec![];
+    }
 
     parse_entries(&std::fs::read_to_string(&path).unwrap_or_default())
 }
 
 fn read_circuit_state() -> HashMap<String, CircuitBreakerEntry> {
     let path = config_dir().join("circuit.json");
-    if !path.exists() { return HashMap::new(); }
+    if !path.exists() {
+        return HashMap::new();
+    }
 
     let content = std::fs::read_to_string(&path).unwrap_or_default();
     let state: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
 
-    state.get("providers")
+    state
+        .get("providers")
         .and_then(|p| p.as_object())
         .map(|obj| {
             obj.iter()
                 .filter_map(|(k, v)| {
-                    serde_json::from_value(v.clone()).ok().map(|entry| (k.clone(), entry))
+                    serde_json::from_value(v.clone())
+                        .ok()
+                        .map(|entry| (k.clone(), entry))
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn circuit_breaker_status(entry: &CircuitBreakerEntry, cooldown_ms: u64, now_ms: u64) -> CircuitBreakerStatus {
+fn circuit_breaker_status(
+    entry: &CircuitBreakerEntry,
+    cooldown_ms: u64,
+    now_ms: u64,
+) -> CircuitBreakerStatus {
     let state = if let Some(opened_at) = entry.opened_at {
         if now_ms.saturating_sub(opened_at) < cooldown_ms {
             "open"
@@ -216,7 +229,10 @@ pub fn aggregate(
     let circuit_breaker: HashMap<String, CircuitBreakerStatus> = circuit
         .iter()
         .map(|(name, entry)| {
-            (name.clone(), circuit_breaker_status(entry, cooldown_ms, now_ms))
+            (
+                name.clone(),
+                circuit_breaker_status(entry, cooldown_ms, now_ms),
+            )
         })
         .collect();
 
@@ -231,7 +247,11 @@ pub fn aggregate(
         by_provider: HashMap::new(),
         by_model: HashMap::new(),
         circuit_breaker,
-        total_tokens: TokenTotals { input: 0, output: 0, total: 0 },
+        total_tokens: TokenTotals {
+            input: 0,
+            output: 0,
+            total: 0,
+        },
         cache_hit_rate: "-".into(),
         by_conversation: Vec::new(),
     };
@@ -249,8 +269,12 @@ pub fn aggregate(
             Some(true) => stats.ok_requests += 1,
             _ => stats.failed_requests += 1,
         }
-        if entry.retry.unwrap_or(false) { stats.retried_requests += 1; }
-        if entry.skipped.unwrap_or(false) { stats.skipped_by_circuit += 1; }
+        if entry.retry.unwrap_or(false) {
+            stats.retried_requests += 1;
+        }
+        if entry.skipped.unwrap_or(false) {
+            stats.skipped_by_circuit += 1;
+        }
         let usage = usage_of(entry);
         if let Some(u) = &usage {
             total_input += u.prompt;
@@ -260,20 +284,24 @@ pub fn aggregate(
 
         // Per conversation: every row counts toward requests/last-active;
         // only countable usage rows contribute tokens.
-        let key = entry.conversation_id.as_deref()
+        let key = entry
+            .conversation_id
+            .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or("unlabeled")
             .to_string();
-        let conv = conversations.entry(key.clone()).or_insert_with(|| ConversationStats {
-            conversation_id: key.clone(),
-            requests: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            last_active: None,
-        });
+        let conv = conversations
+            .entry(key.clone())
+            .or_insert_with(|| ConversationStats {
+                conversation_id: key.clone(),
+                requests: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                last_active: None,
+            });
         conv.requests += 1;
         if let Some(ts) = entry.ts.as_deref() {
-            if conv.last_active.as_deref().map_or(true, |last| ts > last) {
+            if conv.last_active.as_deref().is_none_or(|last| ts > last) {
                 conv.last_active = Some(ts.to_string());
             }
         }
@@ -284,13 +312,30 @@ pub fn aggregate(
 
         // Per provider
         let provider = entry.provider.as_deref().unwrap_or("unknown");
-        let ps = stats.by_provider.entry(provider.to_string()).or_insert(ProviderStats {
-            total: 0, ok: 0, failed: 0, retries: 0, avg_ms: 0, total_ms: 0, last_used: None,
-            prompt_tokens: 0, output_tokens: 0, cached_tokens: 0,
-        });
+        let ps = stats
+            .by_provider
+            .entry(provider.to_string())
+            .or_insert(ProviderStats {
+                total: 0,
+                ok: 0,
+                failed: 0,
+                retries: 0,
+                avg_ms: 0,
+                total_ms: 0,
+                last_used: None,
+                prompt_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+            });
         ps.total += 1;
-        if entry.ok.unwrap_or(false) { ps.ok += 1; } else { ps.failed += 1; }
-        if entry.retry.unwrap_or(false) { ps.retries += 1; }
+        if entry.ok.unwrap_or(false) {
+            ps.ok += 1;
+        } else {
+            ps.failed += 1;
+        }
+        if entry.retry.unwrap_or(false) {
+            ps.retries += 1;
+        }
         if let Some(u) = &usage {
             ps.prompt_tokens += u.prompt;
             ps.output_tokens += u.completion;
@@ -300,13 +345,20 @@ pub fn aggregate(
             ps.total_ms += ms;
             ps.avg_ms = ps.total_ms / ps.total;
         }
-        if let Some(ref ts) = entry.ts { ps.last_used = Some(ts.clone()); }
+        if let Some(ref ts) = entry.ts {
+            ps.last_used = Some(ts.clone());
+        }
 
         // Per model
         let model = entry.model.as_deref().unwrap_or("unknown");
-        let ms = stats.by_model.entry(model.to_string()).or_insert(ModelStats { total: 0, ok: 0 });
+        let ms = stats
+            .by_model
+            .entry(model.to_string())
+            .or_insert(ModelStats { total: 0, ok: 0 });
         ms.total += 1;
-        if entry.ok.unwrap_or(false) { ms.ok += 1; }
+        if entry.ok.unwrap_or(false) {
+            ms.ok += 1;
+        }
 
         // Latency
         if let Some(ms) = entry.ms {
@@ -319,8 +371,10 @@ pub fn aggregate(
         stats.avg_latency_ms = total_ms / latency_count;
     }
     if stats.total_requests > 0 {
-        stats.success_rate = format!("{:.1}%",
-            (stats.ok_requests as f64 / stats.total_requests as f64) * 100.0);
+        stats.success_rate = format!(
+            "{:.1}%",
+            (stats.ok_requests as f64 / stats.total_requests as f64) * 100.0
+        );
     }
 
     stats.total_tokens = TokenTotals {
@@ -376,20 +430,48 @@ fn csv_of(entries: &[RequestLogEntry]) -> String {
         csv.push_str(&format!(
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             entry.ts.as_deref().unwrap_or(""),
-            entry.ok.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
+            entry
+                .ok
+                .map(|b| if b { "true" } else { "false" })
+                .unwrap_or(""),
             entry.provider.as_deref().unwrap_or(""),
             entry.model.as_deref().unwrap_or(""),
             entry.status.map(|s| s.to_string()).unwrap_or_default(),
             entry.ms.map(|m| m.to_string()).unwrap_or_default(),
-            entry.error.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
-            entry.retry.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
-            entry.skipped.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
+            entry
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .replace(',', ";")
+                .replace('\n', " "),
+            entry
+                .retry
+                .map(|b| if b { "true" } else { "false" })
+                .unwrap_or(""),
+            entry
+                .skipped
+                .map(|b| if b { "true" } else { "false" })
+                .unwrap_or(""),
             entry.converted.as_deref().unwrap_or(""),
             entry.upstream_url.as_deref().unwrap_or(""),
-            entry.prompt_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.completion_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.conversation_id.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
+            entry
+                .prompt_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .completion_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .cached_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .conversation_id
+                .as_deref()
+                .unwrap_or("")
+                .replace(',', ";")
+                .replace('\n', " "),
         ));
     }
 
@@ -485,10 +567,12 @@ mod tests {
 
         let stats = aggregate(&[], &circuit, 60_000, 1_030_000);
 
-        assert_eq!(stats.circuit_breaker["hot"].state, "open", "30s since opened < 60s cooldown");
         assert_eq!(
-            stats.circuit_breaker["cooled"].state,
-            "half_open",
+            stats.circuit_breaker["hot"].state, "open",
+            "30s since opened < 60s cooldown"
+        );
+        assert_eq!(
+            stats.circuit_breaker["cooled"].state, "half_open",
             "90s since opened > 60s cooldown"
         );
         assert_eq!(stats.circuit_breaker["healthy"].state, "closed");
@@ -533,9 +617,15 @@ mod tests {
         assert_eq!((hyb.total_ms, hyb.avg_ms), (130, 65));
         assert_eq!(hyb.last_used.as_deref(), Some("2026-08-02T10:00:03Z"));
         let fox_ps = &stats.by_provider["fox"];
-        assert_eq!((fox_ps.total, fox_ps.ok, fox_ps.failed, fox_ps.retries), (1, 0, 1, 1));
+        assert_eq!(
+            (fox_ps.total, fox_ps.ok, fox_ps.failed, fox_ps.retries),
+            (1, 0, 1, 1)
+        );
         let unknown_ps = &stats.by_provider["unknown"];
-        assert_eq!((unknown_ps.total, unknown_ps.ok, unknown_ps.failed), (1, 0, 1));
+        assert_eq!(
+            (unknown_ps.total, unknown_ps.ok, unknown_ps.failed),
+            (1, 0, 1)
+        );
 
         let gpt = &stats.by_model["gpt-5.4"];
         assert_eq!((gpt.total, gpt.ok), (2, 1));
@@ -925,9 +1015,7 @@ mod tests {
 
     #[test]
     fn parse_entries_reads_token_and_conversation_fields() {
-        let text = concat!(
-            "{\"ok\":true,\"provider\":\"hyb\",\"promptTokens\":100,\"completionTokens\":50,\"cachedTokens\":40,\"conversationId\":\"conv-1\"}\n",
-        );
+        let text = "{\"ok\":true,\"provider\":\"hyb\",\"promptTokens\":100,\"completionTokens\":50,\"cachedTokens\":40,\"conversationId\":\"conv-1\"}\n";
         let entries = parse_entries(text);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].prompt_tokens, Some(100));

@@ -1,9 +1,7 @@
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState,
-};
+use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use crate::tui::app::{App, Focus};
@@ -35,11 +33,7 @@ pub(super) fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut right_spans: Vec<Span<'_>> = Vec::new();
 
     if app.data.daemon.running {
-        let port = app
-            .data
-            .daemon
-            .port
-            .unwrap_or(0);
+        let port = app.data.daemon.port.unwrap_or(0);
         let proxy_style = if theme.no_color {
             Style::default().add_modifier(Modifier::BOLD)
         } else {
@@ -120,17 +114,23 @@ pub(super) fn render_nav(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ])
     });
 
-    let table = Table::new(rows, [ratatui::layout::Constraint::Length(4), ratatui::layout::Constraint::Min(10)])
-        .column_spacing(1)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Plain)
-                .border_style(pane_border_style(theme, app.focus == Focus::Nav))
-                .title(i18n::menu_title()),
-        )
-        .row_highlight_style(selection_style(theme))
-        .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(
+        rows,
+        [
+            ratatui::layout::Constraint::Length(4),
+            ratatui::layout::Constraint::Min(10),
+        ],
+    )
+    .column_spacing(1)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(pane_border_style(theme, app.focus == Focus::Nav))
+            .title(i18n::menu_title()),
+    )
+    .row_highlight_style(selection_style(theme))
+    .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
     state.select(Some(app.nav_idx));
@@ -146,10 +146,7 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Style::default().fg(theme.dim),
         )]
     } else if theme.no_color {
-        vec![Span::styled(
-            i18n::footer_no_color(),
-            Style::default(),
-        )]
+        vec![Span::styled(i18n::footer_no_color(), Style::default())]
     } else {
         let nav_bg = palette_color((101, 113, 160));
         let act_bg = palette_color((248, 248, 248));
@@ -168,7 +165,10 @@ pub(super) fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let nav_sep = Span::styled("  ", nav_desc_style);
         let act_sep = Span::styled("  ", act_desc_style);
 
-        let nav_items: &[(&str, &str)] = &[("←→", i18n::footer_nav_label()), ("↑↓", i18n::footer_nav_move())];
+        let nav_items: &[(&str, &str)] = &[
+            ("←→", i18n::footer_nav_label()),
+            ("↑↓", i18n::footer_nav_move()),
+        ];
         let act_items: &[(&str, &str)] = &[
             ("/", i18n::footer_act_filter()),
             ("Esc", i18n::footer_act_back()),

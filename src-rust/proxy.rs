@@ -563,9 +563,15 @@ async fn handle_messages(
 
     let conversation_id = conversation_id_of(&headers, &body_value);
 
-    let result =
-        forward_anthropic_with_failover(&config, &candidates, &body_value, &real_model, &headers, conversation_id.as_deref())
-            .await;
+    let result = forward_anthropic_with_failover(
+        &config,
+        &candidates,
+        &body_value,
+        &real_model,
+        &headers,
+        conversation_id.as_deref(),
+    )
+    .await;
 
     match result {
         Ok(resp) => resp,
@@ -988,10 +994,7 @@ where
     S: futures_util::Stream<Item = std::result::Result<axum::body::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
 {
-    type Item = std::result::Result<
-        axum::body::Bytes,
-        Box<dyn std::error::Error + Send + Sync>,
-    >;
+    type Item = std::result::Result<axum::body::Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -1105,25 +1108,26 @@ fn stream_response(r: reqwest::Response, log: Option<StreamLogFields>) -> Respon
         builder = builder.header(name, value);
     }
 
-        let body = match log {
+    let body = match log {
         Some(fields) => {
-            let tee = StreamTee::new(r.bytes_stream(), Box::new(move |usage| {
-                let entry = build_log_entry(&fields, usage.as_ref());
-                append_log_line(&entry);
-            }));
+            let tee = StreamTee::new(
+                r.bytes_stream(),
+                Box::new(move |usage| {
+                    let entry = build_log_entry(&fields, usage.as_ref());
+                    append_log_line(&entry);
+                }),
+            );
             Body::from_stream(tee)
         }
         None => Body::from_stream(r.bytes_stream()),
     };
 
-    builder
-        .body(body)
-        .unwrap_or_else(|_| {
-            Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(Body::empty())
-                .unwrap()
-        })
+    builder.body(body).unwrap_or_else(|_| {
+        Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(Body::empty())
+            .unwrap()
+    })
 }
 
 async fn forward_with_failover(
@@ -1572,6 +1576,7 @@ fn append_log_line(entry: &Value) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn log_request(
     provider: &str,
     ok: bool,
@@ -1837,7 +1842,10 @@ mod tests {
     fn conversation_id_returns_none_when_unavailable_or_malformed() {
         let headers = HeaderMap::new();
 
-        assert_eq!(super::conversation_id_of(&headers, &serde_json::json!({})), None);
+        assert_eq!(
+            super::conversation_id_of(&headers, &serde_json::json!({})),
+            None
+        );
         assert_eq!(
             super::conversation_id_of(&headers, &serde_json::json!({ "conversation_id": 123 })),
             None,
@@ -1926,10 +1934,12 @@ mod tests {
         assert_eq!(parsed.conversation_id.as_deref(), Some("conv-1"));
     }
 
-    fn tee_slot() -> (
+    type TeeSlot = (
         std::sync::Arc<std::sync::Mutex<Option<Option<crate::usage::UsageSummary>>>>,
         Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
-    ) {
+    );
+
+    fn tee_slot() -> TeeSlot {
         let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
         let handle = slot.clone();
         let cb: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send> =
@@ -1959,11 +1969,19 @@ mod tests {
         let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
 
         let out: Vec<Bytes> = tee.try_collect().await.unwrap();
-        assert_eq!(out, vec![Bytes::from(openai_stream())], "chunks pass through");
+        assert_eq!(
+            out,
+            vec![Bytes::from(openai_stream())],
+            "chunks pass through"
+        );
 
         let summary = slot.lock().unwrap().take().flatten().unwrap();
         assert_eq!(
-            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (
+                summary.prompt_tokens,
+                summary.completion_tokens,
+                summary.cached_tokens
+            ),
             (200, 30, 120)
         );
     }
@@ -1992,7 +2010,11 @@ mod tests {
 
         let summary = slot.lock().unwrap().take().flatten().unwrap();
         assert_eq!(
-            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (
+                summary.prompt_tokens,
+                summary.completion_tokens,
+                summary.cached_tokens
+            ),
             (200, 30, 120)
         );
     }
@@ -2007,12 +2029,15 @@ mod tests {
             "data: [DONE]\n\n",
         );
         let (slot, cb) = tee_slot();
-        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> =
-            vec![Ok(Bytes::from(stream))];
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from(stream))];
         let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
 
         tee.try_collect::<Vec<Bytes>>().await.unwrap();
-        assert_eq!(*slot.lock().unwrap(), Some(None), "callback runs with no usage");
+        assert_eq!(
+            *slot.lock().unwrap(),
+            Some(None),
+            "callback runs with no usage"
+        );
     }
 
     #[tokio::test]
@@ -2024,7 +2049,7 @@ mod tests {
         let tee = super::StreamTee::new(
             futures_util::stream::iter(vec![
                 Ok(Bytes::from("data: {\"id\":\"1\"}\n\n")),
-                Err(std::io::Error::new(std::io::ErrorKind::Other, "upstream died")),
+                Err(std::io::Error::other("upstream died")),
             ]),
             cb,
         );
@@ -2048,10 +2073,8 @@ mod tests {
             "data: {\"id\":\"chatcmpl-3\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":50}}}\n\n",
         );
         let (slot, cb) = tee_slot();
-        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> = vec![
-            Ok(Bytes::from(stream)),
-            Ok(Bytes::from("data: [DONE]\n\n")),
-        ];
+        let chunks: Vec<std::result::Result<Bytes, std::io::Error>> =
+            vec![Ok(Bytes::from(stream)), Ok(Bytes::from("data: [DONE]\n\n"))];
         let mut tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
 
         let first = tee.try_next().await.unwrap().unwrap();
@@ -2060,7 +2083,11 @@ mod tests {
 
         let summary = slot.lock().unwrap().take().flatten().unwrap();
         assert_eq!(
-            (summary.prompt_tokens, summary.completion_tokens, summary.cached_tokens),
+            (
+                summary.prompt_tokens,
+                summary.completion_tokens,
+                summary.cached_tokens
+            ),
             (100, 10, 50),
             "client cut still flushes the log line with whatever usage arrived"
         );

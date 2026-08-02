@@ -203,7 +203,9 @@ async fn get_stats() -> Json<Value> {
 
 async fn get_proxy_status() -> ApiJson {
     let result = daemon::daemon_status(&daemon::PROXY)?;
-    Ok(Json(serde_json::to_value(result).unwrap_or_else(|_| json!({}))))
+    Ok(Json(
+        serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 async fn get_webui_info(State(state): State<Arc<WebState>>) -> Json<Value> {
@@ -246,7 +248,9 @@ async fn get_packages() -> ApiJson {
 
 async fn get_package(Path(id): Path<String>) -> ApiJson {
     let package = crate::package_ops::get_package(&id)?;
-    Ok(Json(serde_json::to_value(package).unwrap_or_else(|_| json!({}))))
+    Ok(Json(
+        serde_json::to_value(package).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -410,7 +414,12 @@ async fn post_proxy_start(
     State(state): State<Arc<WebState>>,
     Json(body): Json<ProxyStartBody>,
 ) -> ApiJson {
-    let result = daemon::daemon_start(&daemon::PROXY, body.host, body.port, state.project_dir.clone())?;
+    let result = daemon::daemon_start(
+        &daemon::PROXY,
+        body.host,
+        body.port,
+        state.project_dir.clone(),
+    )?;
     ok(serde_json::to_value(result).unwrap_or_else(|_| json!({})))
 }
 
@@ -479,7 +488,10 @@ async fn static_handler(uri: Uri) -> Response {
 
     if let Some(content) = WebAssets::get(path) {
         let mime = content.metadata.mimetype();
-        return ([(header::CONTENT_TYPE, mime.to_string())], content.data.into_owned())
+        return (
+            [(header::CONTENT_TYPE, mime.to_string())],
+            content.data.into_owned(),
+        )
             .into_response();
     }
 

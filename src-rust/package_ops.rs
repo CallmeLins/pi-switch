@@ -207,8 +207,8 @@ pub fn sync_packages_to_pi() -> Result<()> {
 
     // Read existing settings
     let mut settings = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)
-            .map_err(|e| AppError::io(&settings_path, e))?;
+        let content =
+            std::fs::read_to_string(&settings_path).map_err(|e| AppError::io(&settings_path, e))?;
         serde_json::from_str::<serde_json::Value>(&content)
             .map_err(|e| AppError::json(&settings_path, e))?
     } else {
@@ -222,8 +222,7 @@ pub fn sync_packages_to_pi() -> Result<()> {
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| AppError::Message(format!("Failed to serialize settings: {}", e)))?;
 
-    std::fs::write(&settings_path, content)
-        .map_err(|e| AppError::io(&settings_path, e))?;
+    std::fs::write(&settings_path, content).map_err(|e| AppError::io(&settings_path, e))?;
 
     Ok(())
 }
@@ -240,10 +239,10 @@ pub fn import_from_pi() -> Result<Vec<Package>> {
     }
 
     // Read settings
-    let content = std::fs::read_to_string(&settings_path)
-        .map_err(|e| AppError::io(&settings_path, e))?;
-    let settings: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| AppError::json(&settings_path, e))?;
+    let content =
+        std::fs::read_to_string(&settings_path).map_err(|e| AppError::io(&settings_path, e))?;
+    let settings: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| AppError::json(&settings_path, e))?;
 
     // Extract packages array
     let specs = settings["packages"]
