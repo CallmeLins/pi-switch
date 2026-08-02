@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AppState, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
-import { formatTokenCount, formatTotalTokens, shortConversationId } from "../lib/format";
+import { formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
 import { computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { StatsRange } from "../lib/statsWindow";
 
@@ -81,6 +81,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     };
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
+  const totals = stats?.totalTokens;
 
   return (
     <div>
@@ -125,13 +126,23 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         </Card>
       ) : (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
             <Metric label="Total" value={stats.totalRequests} />
             <Metric label="OK" value={stats.okRequests} tone="green" />
             <Metric label="Failed" value={stats.failedRequests} tone="red" />
             <Metric label="Success" value={stats.successRate} />
-            <Metric label="Tokens" value={formatTotalTokens(stats.totalTokens)} />
             <Metric label="Cache 率" value={stats.cacheHitRate ?? "-"} />
+          </div>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            <Metric label="Input" value={formatTokenDimension(totals?.input)} />
+            <Metric label="Output" value={formatTokenDimension(totals?.output)} />
+            <Metric label="Cached" value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
+            <Metric
+              label="Reasoning"
+              value={formatTokenDimension(totals?.reasoning)}
+              badge="⊆ Output"
+            />
+            <Metric label="Total" value={formatTotalTokens(totals)} />
           </div>
           {stats.avgLatencyMs != null && (
             <div className="mb-4 text-sm text-zinc-400">
@@ -185,9 +196,18 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       {shortConversationId(c.conversationId)}
                     </span>
                     <span className="text-zinc-500">{c.requests} requests</span>
-                    <span className="text-zinc-400">
-                      {formatTokenCount(c.inputTokens + c.outputTokens)}
-                    </span>
+                    {[
+                      { label: "Cached", value: formatTokenDimension(c.cachedTokens) },
+                      { label: "Reasoning", value: formatTokenDimension(c.reasoningTokens) },
+                      {
+                        label: "Total",
+                        value: formatTokenDimension(c.inputTokens + c.outputTokens),
+                      },
+                    ].map(({ label, value }) => (
+                      <span key={label} className="text-zinc-400">
+                        {label} {value}
+                      </span>
+                    ))}
                   </div>
                 ))}
               </div>
@@ -203,16 +223,21 @@ function Metric({
   label,
   value,
   tone = "zinc",
+  badge,
 }: {
   label: string;
   value: string | number;
   tone?: "zinc" | "green" | "red";
+  badge?: string;
 }) {
   const color =
     tone === "green" ? "text-emerald-300" : tone === "red" ? "text-red-300" : "text-zinc-100";
   return (
     <Card className="py-3">
-      <div className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+        {label}
+        {badge && <span className="ml-1 text-[9px] normal-case text-zinc-600">{badge}</span>}
+      </div>
       <div className={"mt-1 text-xl font-semibold " + color}>{value}</div>
     </Card>
   );

@@ -29,6 +29,13 @@ export function formatTotalTokens(total: TokenTotals | undefined): string {
   return formatTokenCount(total.total);
 }
 
+export function formatTokenDimension(count: number | undefined): string {
+  if (!count) {
+    return "-";
+  }
+  return formatTokenCount(count);
+}
+
 const SHORT_ID_MAX = 16;
 const SHORT_ID_KEEP = 12;
 

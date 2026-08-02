@@ -129,6 +129,8 @@ export interface TokenTotals {
   input: number;
   output: number;
   total: number;
+  cached: number;
+  reasoning: number;
 }
 
 export interface ProviderStats {
@@ -142,6 +144,7 @@ export interface ProviderStats {
   promptTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  reasoningTokens: number;
 }
 
 export interface ConversationStats {
@@ -149,6 +152,8 @@ export interface ConversationStats {
   requests: number;
   inputTokens: number;
   outputTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
   lastActive?: string;
 }
 
