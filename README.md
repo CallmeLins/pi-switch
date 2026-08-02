@@ -123,7 +123,7 @@ pi-switch stats                                     # View request statistics
 | 📦 **Package Management** | Install, enable/disable, and manage packages across CLI, TUI, and WebUI |
 | 🖥️ **Interactive TUI** | ratatui-powered, Dracula theme, mouse support, vim keys (`hjkl`) |
 | 🌐 **Bilingual** | English / 中文, persisted to config, toggle in Settings |
-| 📊 **Usage Stats** | Per-provider, per-model request metrics & latency; cumulative token totals, cache hit rate, per-conversation breakdown |
+| 📊 **Usage Stats** | Per-provider, per-model request metrics & latency; four-dimension token totals (input/output/cached/reasoning), cache hit rate, time-window queries (today/24h/7d/custom), per-conversation breakdown |
 | 💾 **Backup & Sync** | Auto-backup on mutation, AES-256-CBC encrypted export/import |
 | 🩺 **Diagnostics** | `doctor` command checks config, models.json, structure |
 
@@ -131,10 +131,12 @@ pi-switch stats                                     # View request statistics
 
 ## 📊 Usage Statistics
 
-Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line. For streaming responses the upstream SSE stream is teed: each request's input/output/cached token counts (when the upstream reports them) and conversation id are parsed on the side and the log line is written when the stream ends — the stream itself is never buffered.
+Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line. For streaming responses the upstream SSE stream is teed: each request's input/output/cached/reasoning token counts (when the upstream reports them) and conversation id are parsed on the side and the log line is written when the stream ends — the stream itself is never buffered. Reasoning tokens are a subset of output tokens (parsed from `completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens` where the upstream reports them); they never inflate the total.
 
 - **TUI Stats page** shows the cumulative input/output tokens and the cache hit rate.
-- **Stats API** (`GET /api/stats`) returns `totalTokens` (input/output/total), `cacheHitRate`, per-provider token columns, and `byConversation` — conversations sorted by most recent activity (top 20), with requests without an id merged into a single `unlabeled` group.
+- **Stats API** (`GET /api/stats`) returns `totalTokens` with four dimensions — input / output / cached / reasoning (`total = input + output`, reasoning is a subset of output) — plus `cacheHitRate`, per-provider token columns, and `byConversation` — conversations sorted by most recent activity (top 20), with requests without an id merged into a single `unlabeled` group.
+- **Time window** — the WebUI stats page has a time-range picker: **Today** (local calendar day from 00:00), **Last 24h** and **Last 7d** (rolling windows), and **Custom** (start day 00:00 → end day 24:00, both dates required). The default is Today. The picker converts the window to `from`/`to` epoch-millis and calls `GET /api/stats?range=<today|last24h|last7d|custom>&from=<ms>&to=<ms>`; a bare request with no window parameters returns the full history.
+- **WebUI dashboard** — token totals render as five tiles (Input / Output / Cached / Reasoning / Total) with subset badges (`Cached ⊆ Input`, `Reasoning ⊆ Output`), and each conversation row adds Cached / Reasoning / Total columns; missing or zero values show `-`.
 - **Cache hit rate** = cached input tokens ÷ total input tokens (output tokens excluded). When no cache data exists it shows `-`, never a misleading `0%`.
 - **Conversation id** comes from the client: `x-conversation-id` header first, `conversation_id` body field as fallback (ADR-0002).
 - Only successful requests with reported usage count towards token totals; failover/retry intermediate rows and old log lines without token fields are excluded gracefully, so upgrading never breaks or blanks existing history.

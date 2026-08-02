@@ -122,7 +122,7 @@ pi-switch stats                                     # 查看请求统计
 | 📦 **Package 管理** | 在 CLI、TUI、WebUI 中安装、启用/禁用和管理包 |
 | 🖥️ **交互式 TUI** | ratatui 驱动、Dracula 主题、鼠标支持、vim 键位 (`hjkl`) |
 | 🌐 **双语支持** | English / 中文，持久化到配置，Settings 中切换 |
-| 📊 **使用统计** | 按 provider、按模型的请求指标与延迟；累计 token 总量、缓存命中率、按对话统计 |
+| 📊 **使用统计** | 按 provider、按模型的请求指标与延迟；四维度 token 总量（输入/输出/缓存/推理）、缓存命中率、时间窗口查询（当天/24h/7 天/自定义）、按对话统计 |
 | 💾 **备份与同步** | 每次修改自动备份、AES-256-CBC 加密导出/导入 |
 | 🩺 **诊断工具** | `doctor` 命令检查配置、models.json、结构完整性 |
 
@@ -130,10 +130,12 @@ pi-switch stats                                     # 查看请求统计
 
 ## 📊 使用统计
 
-每次代理请求都会以 JSON 行追加写入 `~/.pi-switch/requests.log`。流式响应通过 tee 旁路解析：请求的输入/输出/命中缓存 token 数（上游上报时）与对话标识在流结束后补写进日志——流本身从不缓冲，逐 token 体验不变。
+每次代理请求都会以 JSON 行追加写入 `~/.pi-switch/requests.log`。流式响应通过 tee 旁路解析：请求的输入/输出/命中缓存/推理 token 数（上游上报时）与对话标识在流结束后补写进日志——流本身从不缓冲，逐 token 体验不变。推理 token 是输出 token 的子集（解析自上游上报的 `completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens`），不计入总量。
 
 - **TUI 统计页**：显示累计输入/输出 token 与缓存命中率。
-- **统计接口**（`GET /api/stats`）：返回 `totalTokens`（输入/输出/总计）、`cacheHitRate`、按供应商的 token 累计列与 `byConversation`（按最近活跃倒序、截取 Top 20；无标识请求合并为 `unlabeled` 一组）。
+- **统计接口**（`GET /api/stats`）：返回 `totalTokens` 四维度——输入/输出/缓存/推理（`total = 输入 + 输出`，推理是输出的子集）——以及 `cacheHitRate`、按供应商的 token 累计列与 `byConversation`（按最近活跃倒序、截取 Top 20；无标识请求合并为 `unlabeled` 一组）。
+- **时间窗口**：WebUI 统计页带时间范围选择器：**当天**（本地自然日 0 点起）、**24 小时以内**与**7 天以内**（滚动窗口）、**自定义**（起日 0 点至止日 24 点，起止日期均必填）。默认当天。选择器把窗口换算成 `from`/`to` 毫秒调用 `GET /api/stats?range=<today|last24h|last7d|custom>&from=<毫秒>&to=<毫秒>`；不带窗口参数的请求返回全量历史。
+- **WebUI 面板**：token 总量平铺 5 格（输入/输出/缓存/推理/合计）并带子集角标（`Cached ⊆ Input`、`Reasoning ⊆ Output`）；每个对话行增加缓存/推理/合计三列；缺失或 0 值显示 `-`。
 - **缓存命中率** = 命中缓存的输入 token ÷ 总输入 token（输出 token 不参与）。无缓存数据时显示 `-`，绝不显示误导的 `0%`。
 - **对话标识**来自客户端：`x-conversation-id` 请求头优先，body `conversation_id` 兜底（ADR-0002）。
 - 仅成功且上报了 usage 的请求计入 token 统计；failover/重试的中间行与升级前的旧日志行（无 token 字段）优雅跳过，升级不会清空或污染既有历史。
