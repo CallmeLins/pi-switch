@@ -74,6 +74,30 @@ pub struct ConversationStats {
     pub reasoning_tokens: u64,
     #[serde(rename = "lastActive")]
     pub last_active: Option<String>,
+    #[serde(rename = "cacheRate")]
+    pub cache_rate: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecentRequest {
+    pub ts: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub ok: Option<bool>,
+    pub status: Option<u16>,
+    pub error: Option<String>,
+    #[serde(rename = "promptTokens")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(rename = "completionTokens")]
+    pub completion_tokens: Option<u64>,
+    #[serde(rename = "cachedTokens")]
+    pub cached_tokens: Option<u64>,
+    #[serde(rename = "reasoningTokens")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(rename = "totalTokens")]
+    pub total_tokens: Option<u64>,
+    #[serde(rename = "cacheRate")]
+    pub cache_rate: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,6 +128,8 @@ pub struct UsageStats {
     pub cache_hit_rate: String,
     #[serde(rename = "byConversation")]
     pub by_conversation: Vec<ConversationStats>,
+    #[serde(rename = "recentRequests")]
+    pub recent_requests: Vec<RecentRequest>,
 }
 
 #[derive(Debug, Serialize)]
@@ -241,6 +267,30 @@ fn in_window(entry: &RequestLogEntry, window: Option<(u64, u64)>) -> bool {
     ts_ms >= from_ms && ts_ms < to_ms
 }
 
+/// Format a cache hit rate from aggregated input/cached token counts:
+/// no input (or nothing to divide) renders `-`; a measured 0% renders
+/// `0.0%`; otherwise one-decimal percent (cached / input).
+fn cache_rate_of(input: u64, cached: u64) -> String {
+    if input == 0 {
+        return "-".into();
+    }
+    if cached == 0 {
+        return "0.0%".into();
+    }
+    format!("{:.1}%", (cached as f64 / input as f64) * 100.0)
+}
+
+/// Descending comparator for optional RFC3339 timestamps: newer first,
+/// missing timestamps sorted last.
+fn cmp_ts_desc(a: &Option<String>, b: &Option<String>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => y.cmp(x),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
 /// Aggregate request-log entries into a `UsageStats`. Pure: all inputs are
 /// injected (entries, circuit state, cooldown, current time, optional
 /// time window), no I/O. The window is `(from_ms, to_ms)` in epoch
@@ -275,6 +325,7 @@ pub fn aggregate(
         total_tokens: TokenTotals { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 },
         cache_hit_rate: "-".into(),
         by_conversation: Vec::new(),
+        recent_requests: Vec::new(),
     };
 
     let mut total_ms: u64 = 0;
@@ -318,6 +369,7 @@ pub fn aggregate(
             cached_tokens: 0,
             reasoning_tokens: 0,
             last_active: None,
+            cache_rate: "-".into(),
         });
         conv.requests += 1;
         if let Some(ts) = entry.ts.as_deref() {
@@ -364,6 +416,32 @@ pub fn aggregate(
             total_ms += ms;
             latency_count += 1;
         }
+
+        // Per-request detail rows: every in-window entry gets one row; token
+        // fields only from countable usage, otherwise null with a "-" rate.
+        let mut detail = RecentRequest {
+            ts: entry.ts.clone(),
+            provider: entry.provider.clone(),
+            model: entry.model.clone(),
+            ok: entry.ok,
+            status: entry.status,
+            error: entry.error.clone(),
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            reasoning_tokens: None,
+            total_tokens: None,
+            cache_rate: "-".into(),
+        };
+        if let Some(u) = &usage {
+            detail.prompt_tokens = Some(u.prompt);
+            detail.completion_tokens = Some(u.completion);
+            detail.cached_tokens = Some(u.cached);
+            detail.reasoning_tokens = Some(u.reasoning);
+            detail.total_tokens = Some(u.prompt + u.completion);
+            detail.cache_rate = cache_rate_of(u.prompt, u.cached);
+        }
+        stats.recent_requests.push(detail);
     }
 
     if latency_count > 0 {
@@ -388,14 +466,17 @@ pub fn aggregate(
     };
 
     let mut by_conversation: Vec<ConversationStats> = conversations.into_values().collect();
-    by_conversation.sort_by(|a, b| match (&a.last_active, &b.last_active) {
-        (Some(x), Some(y)) => y.cmp(x),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
+    for conv in &mut by_conversation {
+        conv.cache_rate = cache_rate_of(conv.input_tokens, conv.cached_tokens);
+    }
+    by_conversation.sort_by(|a, b| cmp_ts_desc(&a.last_active, &b.last_active));
     by_conversation.truncate(20);
     stats.by_conversation = by_conversation;
+
+    stats
+        .recent_requests
+        .sort_by(|a, b| cmp_ts_desc(&a.ts, &b.ts));
+    stats.recent_requests.truncate(100);
 
     stats
 }
@@ -540,6 +621,7 @@ mod tests {
         assert!(stats.by_provider.is_empty());
         assert!(stats.by_model.is_empty());
         assert!(stats.circuit_breaker.is_empty());
+        assert!(stats.recent_requests.is_empty());
     }
 
     #[test]
@@ -818,6 +900,7 @@ mod tests {
         assert_eq!(json["byConversation"], serde_json::json!([]));
         assert_eq!(json["cacheHitRate"], "-");
         assert_eq!(json["totalTokens"]["total"], 0);
+        assert_eq!(json["recentRequests"], serde_json::json!([]));
     }
 
     #[test]
@@ -1141,6 +1224,277 @@ mod tests {
         let entries = parse_entries(text);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].reasoning_tokens, Some(20));
+    }
+
+    #[test]
+    fn aggregate_recent_requests_carry_full_usage_fields() {
+        let row = with_reasoning(
+            with_usage(
+                entry(true, "hyb", "gpt-5.4", 100, "2026-08-02T10:00:00Z"),
+                1234,
+                567,
+                890,
+            ),
+            100,
+        );
+
+        let stats = aggregate(&[row], &HashMap::new(), 60_000, 0, None);
+
+        assert_eq!(stats.recent_requests.len(), 1);
+        let r = &stats.recent_requests[0];
+        assert_eq!(r.ts.as_deref(), Some("2026-08-02T10:00:00Z"));
+        assert_eq!(r.provider.as_deref(), Some("hyb"));
+        assert_eq!(r.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(r.ok, Some(true));
+        assert_eq!(r.status, Some(200));
+        assert_eq!(r.error, None);
+        assert_eq!(
+            (
+                r.prompt_tokens,
+                r.completion_tokens,
+                r.cached_tokens,
+                r.reasoning_tokens,
+            ),
+            (Some(1234), Some(567), Some(890), Some(100))
+        );
+        assert_eq!(r.total_tokens, Some(1801), "input + output, reasoning not double-counted");
+        assert_eq!(r.cache_rate, "72.1%", "890 cached / 1234 input");
+    }
+
+    #[test]
+    fn aggregate_recent_requests_serialize_with_camel_case_keys() {
+        let row = with_usage(
+            entry(true, "hyb", "gpt-5.4", 0, "2026-08-02T10:00:00Z"),
+            100,
+            50,
+            40,
+        );
+        let stats = aggregate(&[row], &HashMap::new(), 60_000, 0, None);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["recentRequests"][0]["promptTokens"], 100);
+        assert_eq!(json["recentRequests"][0]["totalTokens"], 150);
+        assert_eq!(json["recentRequests"][0]["cacheRate"], "40.0%");
+        assert_eq!(json["recentRequests"][0]["ts"], "2026-08-02T10:00:00Z");
+    }
+
+    #[test]
+    fn aggregate_recent_requests_cache_rate_three_states() {
+        let zero_cache = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
+        let zero_input = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"),
+            0,
+            0,
+            0,
+        );
+        let normal = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:02Z"),
+            1234,
+            567,
+            890,
+        );
+
+        let stats = aggregate(&[zero_cache, zero_input, normal], &HashMap::new(), 60_000, 0, None);
+
+        let by_ts = |ts: &str| {
+            stats
+                .recent_requests
+                .iter()
+                .find(|r| r.ts.as_deref() == Some(ts))
+                .unwrap()
+        };
+        assert_eq!(by_ts("2026-08-02T10:00:00Z").cache_rate, "0.0%", "cached=0 is a real measurement");
+        assert_eq!(by_ts("2026-08-02T10:00:01Z").cache_rate, "-", "input=0 has no rate");
+        assert_eq!(by_ts("2026-08-02T10:00:02Z").cache_rate, "72.1%");
+    }
+
+    #[test]
+    fn aggregate_recent_requests_no_usage_rows_keep_null_token_fields() {
+        let mut failed = entry(false, "fox", "claude-sonnet", 0, "2026-08-02T10:00:01Z");
+        failed.error = Some("rate limited".into());
+        failed.status = Some(429);
+        let mut retried = entry(true, "fox", "claude-sonnet", 0, "2026-08-02T10:00:02Z");
+        retried.retry = Some(true);
+        let old_row = entry(true, "hyb", "gpt-5.4", 0, "2026-08-02T10:00:03Z");
+
+        let stats = aggregate(
+            &[failed, retried, old_row],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+
+        assert_eq!(stats.recent_requests.len(), 3, "no-usage rows still appear");
+        for r in &stats.recent_requests {
+            assert_eq!(
+                (
+                    r.prompt_tokens,
+                    r.completion_tokens,
+                    r.cached_tokens,
+                    r.reasoning_tokens,
+                    r.total_tokens,
+                ),
+                (None, None, None, None, None),
+                "no usage means null token fields, never 0"
+            );
+            assert_eq!(r.cache_rate, "-", "no usage means no rate");
+        }
+        let by_ts = |ts: &str| {
+            stats
+                .recent_requests
+                .iter()
+                .find(|r| r.ts.as_deref() == Some(ts))
+                .unwrap()
+        };
+        assert_eq!(by_ts("2026-08-02T10:00:01Z").ok, Some(false));
+        assert_eq!(by_ts("2026-08-02T10:00:01Z").status, Some(429));
+        assert_eq!(by_ts("2026-08-02T10:00:01Z").error.as_deref(), Some("rate limited"));
+    }
+
+    #[test]
+    fn aggregate_recent_requests_respect_window() {
+        let mut missing_ts = entry(true, "hyb", "m1", 0, "2026-08-02T10:30:00Z");
+        missing_ts.ts = None;
+        // Window [2026-08-02T10:00:00Z, 2026-08-02T12:00:00Z): from inclusive, to exclusive.
+        let window = Some((1_785_664_800_000, 1_785_672_000_000));
+        let stats = aggregate(
+            &[
+                entry(true, "hyb", "m1", 0, "2026-08-02T09:59:59Z"),
+                entry(true, "hyb", "m1", 0, "2026-08-02T10:00:00Z"),
+                entry(true, "hyb", "m1", 0, "2026-08-02T11:00:00Z"),
+                entry(true, "hyb", "m1", 0, "2026-08-02T12:00:00Z"),
+                missing_ts,
+            ],
+            &HashMap::new(),
+            60_000,
+            0,
+            window,
+        );
+
+        let ts: Vec<Option<&str>> = stats.recent_requests.iter().map(|r| r.ts.as_deref()).collect();
+        assert_eq!(
+            ts,
+            vec![Some("2026-08-02T11:00:00Z"), Some("2026-08-02T10:00:00Z")],
+            "only in-window rows, missing ts excluded, sorted desc"
+        );
+    }
+
+    #[test]
+    fn aggregate_recent_requests_sort_desc_and_truncate_100() {
+        let mut entries: Vec<RequestLogEntry> = (0..100)
+            .map(|i| {
+                with_usage(
+                    entry(true, "hyb", "m1", 0, &format!("2026-08-02T10:{:02}:{:02}Z", i / 60, i % 60)),
+                    1,
+                    1,
+                    0,
+                )
+            })
+            .collect();
+        let mut no_ts = entry(true, "hyb", "m1", 0, "2026-08-02T10:00:00Z");
+        no_ts.ts = None;
+        entries.push(no_ts);
+
+        let stats = aggregate(&entries, &HashMap::new(), 60_000, 0, None);
+
+        assert_eq!(stats.recent_requests.len(), 100, "capped at 100");
+        assert_eq!(
+            stats.recent_requests[0].ts.as_deref(),
+            Some("2026-08-02T10:01:39Z"),
+            "newest ts first"
+        );
+        assert_eq!(
+            stats.recent_requests[99].ts.as_deref(),
+            Some("2026-08-02T10:00:00Z"),
+            "oldest kept ts last"
+        );
+        assert!(
+            stats.recent_requests.iter().all(|r| r.ts.is_some()),
+            "ts-missing row truncated after the 100 kept"
+        );
+    }
+
+    #[test]
+    fn aggregate_recent_requests_window_excluding_everything_yields_empty() {
+        let window = Some((1_785_664_800_000, 1_785_672_000_000));
+        let stats = aggregate(
+            &[
+                entry(true, "hyb", "m1", 0, "2026-08-01T00:00:00Z"),
+                entry(true, "hyb", "m1", 0, "2026-08-03T00:00:00Z"),
+            ],
+            &HashMap::new(),
+            60_000,
+            0,
+            window,
+        );
+
+        assert!(stats.recent_requests.is_empty(), "window excludes all rows");
+    }
+
+    #[test]
+    fn aggregate_recent_requests_sort_ts_missing_last() {
+        let mut no_ts = entry(true, "hyb", "m1", 0, "2026-08-02T10:00:00Z");
+        no_ts.ts = None;
+
+        let stats = aggregate(
+            &[
+                entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"),
+                no_ts,
+                entry(true, "hyb", "m1", 0, "2026-08-02T10:00:02Z"),
+            ],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+
+        assert_eq!(stats.recent_requests.len(), 3);
+        assert_eq!(stats.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:00:02Z"));
+        assert_eq!(stats.recent_requests[1].ts.as_deref(), Some("2026-08-02T10:00:01Z"));
+        assert_eq!(stats.recent_requests[2].ts, None, "missing ts sorted last");
+    }
+
+    #[test]
+    fn aggregate_conversation_cache_rate_three_states() {
+        let mut zero_cached = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
+        zero_cached.conversation_id = Some("conv-zero-cached".into());
+        let mut zero_input = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"),
+            0,
+            0,
+            0,
+        );
+        zero_input.conversation_id = Some("conv-zero-input".into());
+        let mut normal = with_usage(
+            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:02Z"),
+            1234,
+            567,
+            890,
+        );
+        normal.conversation_id = Some("conv-normal".into());
+
+        let stats = aggregate(&[zero_cached, zero_input, normal], &HashMap::new(), 60_000, 0, None);
+
+        let by_id = |id: &str| {
+            stats
+                .by_conversation
+                .iter()
+                .find(|c| c.conversation_id == id)
+                .unwrap()
+        };
+        assert_eq!(by_id("conv-zero-cached").cache_rate, "0.0%", "cached=0 measured");
+        assert_eq!(by_id("conv-zero-input").cache_rate, "-", "input=0 no rate");
+        assert_eq!(by_id("conv-normal").cache_rate, "72.1%");
     }
 
     #[test]
