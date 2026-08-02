@@ -688,6 +688,18 @@ fn chat_response_to_responses(chat: Value, model: &str, created: Option<u64>) ->
             "input_tokens": u.get("prompt_tokens").unwrap_or(&Value::Null),
             "output_tokens": u.get("completion_tokens").unwrap_or(&Value::Null),
             "total_tokens": u.get("total_tokens").unwrap_or(&Value::Null),
+            "input_tokens_details": {
+                "cached_tokens": u
+                    .get("prompt_tokens_details")
+                    .and_then(|d| d.get("cached_tokens"))
+                    .unwrap_or(&Value::Null),
+            },
+            "output_tokens_details": {
+                "reasoning_tokens": u
+                    .get("completion_tokens_details")
+                    .and_then(|d| d.get("reasoning_tokens"))
+                    .unwrap_or(&Value::Null),
+            },
         })
     });
 
@@ -1547,6 +1559,7 @@ fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageS
         "promptTokens": usage.map(|u| u.prompt_tokens),
         "completionTokens": usage.map(|u| u.completion_tokens),
         "cachedTokens": usage.map(|u| u.cached_tokens),
+        "reasoningTokens": usage.map(|u| u.reasoning_tokens),
         "conversationId": fields.conversation_id,
     })
 }
@@ -1805,6 +1818,55 @@ mod tests {
     }
 
     #[test]
+    fn chat_response_to_responses_preserves_cache_and_reasoning_details() {
+        let chat = serde_json::json!({
+            "id": "chatcmpl-124",
+            "choices": [{
+                "message": { "role": "assistant", "content": "Hello!" },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150,
+                "prompt_tokens_details": { "cached_tokens": 40 },
+                "completion_tokens_details": { "reasoning_tokens": 20 },
+            },
+        });
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        let usage = &resp["usage"];
+        assert_eq!(usage["input_tokens"], 100);
+        assert_eq!(usage["output_tokens"], 50);
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], 40);
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 20);
+    }
+
+    #[test]
+    fn chat_response_to_responses_omits_details_when_absent() {
+        let chat = serde_json::json!({
+            "id": "chatcmpl-125",
+            "choices": [{
+                "message": { "role": "assistant", "content": "Hi" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 },
+        });
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        let usage = &resp["usage"];
+        assert_eq!(usage["input_tokens"], 10);
+        assert_eq!(usage["output_tokens"], 5);
+        assert_eq!(
+            usage["input_tokens_details"]["cached_tokens"],
+            serde_json::Value::Null,
+            "no cached info -> null, not an error"
+        );
+        assert_eq!(
+            usage["output_tokens_details"]["reasoning_tokens"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
     fn conversation_id_prefers_header_over_body() {
         let mut headers = HeaderMap::new();
         headers.insert("x-conversation-id", HeaderValue::from_static("conv-header"));
@@ -1860,6 +1922,7 @@ mod tests {
             prompt_tokens: 200,
             completion_tokens: 30,
             cached_tokens: 120,
+            reasoning_tokens: 20,
         };
         let fields = super::StreamLogFields {
             provider: "hyb".to_string(),
@@ -1880,6 +1943,7 @@ mod tests {
         assert_eq!(entry["promptTokens"], 200);
         assert_eq!(entry["completionTokens"], 30);
         assert_eq!(entry["cachedTokens"], 120);
+        assert_eq!(entry["reasoningTokens"], 20);
         assert_eq!(entry["conversationId"], "conv-1");
     }
 
@@ -1900,6 +1964,7 @@ mod tests {
         assert_eq!(entry["promptTokens"], serde_json::Value::Null);
         assert_eq!(entry["completionTokens"], serde_json::Value::Null);
         assert_eq!(entry["cachedTokens"], serde_json::Value::Null);
+        assert_eq!(entry["reasoningTokens"], serde_json::Value::Null);
         assert_eq!(entry["conversationId"], serde_json::Value::Null);
     }
 
@@ -1909,6 +1974,7 @@ mod tests {
             prompt_tokens: 100,
             completion_tokens: 50,
             cached_tokens: 40,
+            reasoning_tokens: 0,
         };
         let fields = super::StreamLogFields::for_success(
             "hyb",

@@ -457,12 +457,12 @@ pub fn export_logs_json() -> crate::error::Result<String> {
 
 fn csv_of(entries: &[RequestLogEntry]) -> String {
     let mut csv = String::from(
-        "timestamp,ok,provider,model,status,latency_ms,error,retry,skipped,converted,upstream_url,promptTokens,completionTokens,cachedTokens,conversationId\n",
+        "timestamp,ok,provider,model,status,latency_ms,error,retry,skipped,converted,upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId\n",
     );
 
     for entry in entries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             entry.ts.as_deref().unwrap_or(""),
             entry.ok.map(|b| if b { "true" } else { "false" }).unwrap_or(""),
             entry.provider.as_deref().unwrap_or(""),
@@ -477,6 +477,7 @@ fn csv_of(entries: &[RequestLogEntry]) -> String {
             entry.prompt_tokens.map(|t| t.to_string()).unwrap_or_default(),
             entry.completion_tokens.map(|t| t.to_string()).unwrap_or_default(),
             entry.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
+            entry.reasoning_tokens.map(|t| t.to_string()).unwrap_or_default(),
             entry.conversation_id.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
         ));
     }
@@ -1063,11 +1064,14 @@ mod tests {
 
     #[test]
     fn csv_export_includes_token_and_conversation_columns() {
-        let mut e = with_usage(
-            entry(true, "hyb", "gpt-5.4", 12, "2026-08-02T10:00:00Z"),
-            100,
-            50,
-            40,
+        let mut e = with_reasoning(
+            with_usage(
+                entry(true, "hyb", "gpt-5.4", 12, "2026-08-02T10:00:00Z"),
+                100,
+                50,
+                40,
+            ),
+            20,
         );
         e.conversation_id = Some("conv-9".into());
         let csv = csv_of(&[e]);
@@ -1075,12 +1079,12 @@ mod tests {
         let header = lines.next().unwrap();
         assert!(
             header.ends_with(
-                "upstream_url,promptTokens,completionTokens,cachedTokens,conversationId"
+                "upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId"
             ),
             "header: {header}"
         );
         let row = lines.next().unwrap();
-        assert!(row.ends_with(",100,50,40,conv-9"), "row: {row}");
+        assert!(row.ends_with(",100,50,40,20,conv-9"), "row: {row}");
         assert!(lines.next().is_none(), "exactly one data row");
     }
 
@@ -1090,17 +1094,18 @@ mod tests {
         e.conversation_id = Some("a,b\nc".into());
         let csv = csv_of(&[e]);
         let row = csv.lines().nth(1).unwrap();
-        assert!(row.ends_with(",,,a;b c"), "got: {row}");
+        assert!(row.ends_with(",,,,a;b c"), "got: {row}");
     }
 
     #[test]
     fn json_export_serializes_token_and_conversation_fields() {
-        let mut e = with_usage(entry(true, "hyb", "gpt-5.4", 12, "t"), 100, 50, 40);
+        let mut e = with_reasoning(with_usage(entry(true, "hyb", "gpt-5.4", 12, "t"), 100, 50, 40), 20);
         e.conversation_id = Some("conv-9".into());
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"promptTokens\":100"));
         assert!(json.contains("\"completionTokens\":50"));
         assert!(json.contains("\"cachedTokens\":40"));
+        assert!(json.contains("\"reasoningTokens\":20"));
         assert!(json.contains("\"conversationId\":\"conv-9\""));
     }
 

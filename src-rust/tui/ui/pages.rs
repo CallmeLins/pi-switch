@@ -670,6 +670,8 @@ mod tests {
             input,
             output,
             total: input + output,
+            cached: 0,
+            reasoning: 0,
         }
     }
 
