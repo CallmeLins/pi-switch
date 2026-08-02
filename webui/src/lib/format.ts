@@ -36,6 +36,24 @@ export function formatTokenDimension(count: number | undefined): string {
   return formatTokenCount(count);
 }
 
+export function formatRequestToken(count: number | null | undefined): string {
+  if (count == null) {
+    return "-";
+  }
+  return formatTokenCount(count);
+}
+
+export function formatRequestTime(ts?: string | null): string {
+  if (!ts) {
+    return "-";
+  }
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) {
+    return "-";
+  }
+  return d.toLocaleTimeString("en-GB", { hour12: false });
+}
+
 const SHORT_ID_MAX = 16;
 const SHORT_ID_KEEP = 12;
 

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPanel } from "./StatsPanel";
 import type { UsageStats } from "../types";
@@ -267,6 +267,170 @@ describe("StatsPanel", () => {
     expect(screen.getByText("Export JSON")).toBeInTheDocument();
     expect(screen.getByText("Export CSV")).toBeInTheDocument();
     expect(screen.getByText("Refresh")).toBeInTheDocument();
+  });
+
+  it("renders the request details table with full token columns", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 1234,
+          completionTokens: 567,
+          cachedTokens: 890,
+          reasoningTokens: 100,
+          totalTokens: 1801,
+          cacheRate: "72.1%",
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("Request details")).toBeInTheDocument();
+    expect(screen.getByText("deepseek-chat")).toBeInTheDocument();
+    expect(screen.getByText("1.2K")).toBeInTheDocument();
+    expect(screen.getByText("567")).toBeInTheDocument();
+    expect(screen.getByText("890")).toBeInTheDocument();
+    expect(screen.getByText("100")).toBeInTheDocument();
+    expect(screen.getByText("1.8K")).toBeInTheDocument();
+    expect(screen.getByText("72.1%")).toBeInTheDocument();
+    expect(screen.getByText("200")).toBeInTheDocument();
+    const expectedTime = new Date("2026-08-02T10:00:00Z").toLocaleTimeString("en-GB", {
+      hour12: false,
+    });
+    expect(screen.getByText(expectedTime)).toBeInTheDocument();
+  });
+
+  it("renders dashes for rows without usage and shows status plus error for failures", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 1234,
+          completionTokens: 567,
+          cachedTokens: 890,
+          reasoningTokens: 100,
+          totalTokens: 1801,
+          cacheRate: "72.1%",
+        },
+        {
+          ts: "2026-08-02T10:01:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: false,
+          status: 429,
+          error: "rate limited by provider",
+          promptTokens: null,
+          completionTokens: null,
+          cachedTokens: null,
+          reasoningTokens: null,
+          totalTokens: null,
+          cacheRate: "-",
+        },
+        {
+          ts: "2026-08-02T10:02:00Z",
+          provider: "fox",
+          model: "gpt-4o",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: null,
+          completionTokens: null,
+          cachedTokens: null,
+          reasoningTokens: null,
+          totalTokens: null,
+          cacheRate: "-",
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("Request details")).toBeInTheDocument();
+    expect(screen.getByText("429 rate limited by provider")).toBeInTheDocument();
+    expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+
+    const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
+    expect(within(rows[1]).getByText("200")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("72.1%")).toBeInTheDocument();
+    expect(within(rows[2]).getAllByText("-").length).toBe(6);
+    expect(within(rows[3]).getAllByText("-").length).toBe(6);
+  });
+
+  it("shows input, output and cache rate per conversation alongside the existing dimensions", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      byConversation: [
+        {
+          conversationId: "conv-a1b2c3d4e5f6g7h8i9",
+          requests: 3,
+          inputTokens: 312300,
+          outputTokens: 51200,
+          cachedTokens: 200000,
+          reasoningTokens: 20000,
+          lastActive: "2026-08-02T10:00:00Z",
+          cacheRate: "64.1%",
+        },
+        {
+          conversationId: "unlabeled",
+          requests: 2,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: null,
+          cacheRate: "-",
+        },
+        {
+          conversationId: "conv-z9y8x7w6v5u4t3s2r1q0",
+          requests: 5,
+          inputTokens: 13500,
+          outputTokens: 0,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: "2026-08-02T10:01:00Z",
+          cacheRate: "0.0%",
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("Input 312.3K")).toBeInTheDocument();
+    expect(screen.getByText("Output 51.2K")).toBeInTheDocument();
+    expect(screen.getByText("Rate 64.1%")).toBeInTheDocument();
+    expect(screen.getByText("Input 13.5K")).toBeInTheDocument();
+    expect(screen.getByText("Rate 0.0%")).toBeInTheDocument();
+    expect(screen.getAllByText("Input -").length).toBe(1);
+    expect(screen.getAllByText("Output -").length).toBe(2);
+    expect(screen.getAllByText("Rate -").length).toBe(1);
+
+    expect(screen.getByText("Cached 200.0K")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning 20.0K")).toBeInTheDocument();
+    expect(screen.getByText("Total 363.5K")).toBeInTheDocument();
+    expect(screen.getByText("Total 13.5K")).toBeInTheDocument();
+  });
+
+  it("does not render the request details card when recentRequests is empty or absent", async () => {
+    statsMock.mockResolvedValue({ ...fullStats(), recentRequests: [] });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    expect(screen.queryByText("Request details")).not.toBeInTheDocument();
+
+    cleanup();
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    expect(screen.queryByText("Request details")).not.toBeInTheDocument();
   });
 
   it("renders the four window presets with today selected by default", async () => {

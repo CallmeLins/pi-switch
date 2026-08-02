@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { AppState, UsageStats } from "../types";
+import type { AppState, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
-import { formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
+import { formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
 import { computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { StatsRange } from "../lib/statsWindow";
 
@@ -188,28 +188,82 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
               <div className="mb-2 text-sm font-semibold text-zinc-200">By conversation</div>
               <div className="divide-y divide-white/5">
                 {stats.byConversation.map((c) => (
-                  <div
-                    key={c.conversationId}
-                    className="flex items-center justify-between gap-3 py-1.5 text-sm"
-                  >
-                    <span className="truncate text-zinc-200">
-                      {shortConversationId(c.conversationId)}
-                    </span>
-                    <span className="text-zinc-500">{c.requests} requests</span>
-                    {[
-                      { label: "Cached", value: formatTokenDimension(c.cachedTokens) },
-                      { label: "Reasoning", value: formatTokenDimension(c.reasoningTokens) },
-                      {
-                        label: "Total",
-                        value: formatTokenDimension(c.inputTokens + c.outputTokens),
-                      },
-                    ].map(({ label, value }) => (
-                      <span key={label} className="text-zinc-400">
-                        {label} {value}
+                  <div key={c.conversationId} className="py-1.5 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate text-zinc-200">
+                        {shortConversationId(c.conversationId)}
                       </span>
-                    ))}
+                      <span className="text-zinc-500">{c.requests} requests</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
+                      <span>Input {formatTokenDimension(c.inputTokens)}</span>
+                      <span>Output {formatTokenDimension(c.outputTokens)}</span>
+                      <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
+                      <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
+                      <span>Rate {c.cacheRate ?? "-"}</span>
+                      <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
+                    </div>
                   </div>
                 ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {stats.recentRequests?.length ? (
+            <Card className="mt-4">
+              <div className="mb-2 text-sm font-semibold text-zinc-200">Request details</div>
+              <div className="overflow-x-auto">
+                <table aria-label="Request details" className="w-full text-sm">
+                  <thead className="text-left text-xs text-zinc-500">
+                    <tr>
+                      <th className="pb-1 pr-2">Time</th>
+                      <th className="pb-1 pr-2">Provider</th>
+                      <th className="pb-1 pr-2">Model</th>
+                      <th className="pb-1 pr-2">Status</th>
+                      <th className="pb-1 pr-2 text-right">Input</th>
+                      <th className="pb-1 pr-2 text-right">Output</th>
+                      <th className="pb-1 pr-2 text-right">Cached</th>
+                      <th className="pb-1 pr-2 text-right">Reasoning</th>
+                      <th className="pb-1 pr-2 text-right">Rate</th>
+                      <th className="pb-1 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.recentRequests.map((r, i) => {
+                      const status = formatRequestStatus(r);
+                      const tokenCols = [
+                        ["Input", formatRequestToken(r.promptTokens)],
+                        ["Output", formatRequestToken(r.completionTokens)],
+                        ["Cached", formatRequestToken(r.cachedTokens)],
+                        ["Reasoning", formatRequestToken(r.reasoningTokens)],
+                        ["Rate", r.cacheRate ?? "-"],
+                        ["Total", formatRequestToken(r.totalTokens)],
+                      ] as const;
+                      return (
+                        <tr
+                          key={`${r.ts ?? ""}-${r.model ?? ""}-${i}`}
+                          className="border-t border-white/5"
+                        >
+                          <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
+                            {formatRequestTime(r.ts)}
+                          </td>
+                          <td className="py-1 pr-2 text-zinc-300">{r.provider ?? "-"}</td>
+                          <td className="py-1 pr-2 text-zinc-300">{r.model ?? "-"}</td>
+                          <td className="py-1 pr-2 text-zinc-400">
+                            <span className="block max-w-[14rem] truncate" title={status}>
+                              {status}
+                            </span>
+                          </td>
+                          {tokenCols.map(([label, value]) => (
+                            <td key={label} className="py-1 pr-2 text-right text-zinc-400">
+                              {value}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Card>
           ) : null}
@@ -248,4 +302,12 @@ function formatProviderTokens(tokens: number): string {
     return "-";
   }
   return formatTokenCount(tokens);
+}
+
+function formatRequestStatus(r: RecentRequest): string {
+  if (r.ok) {
+    return r.status != null ? String(r.status) : "ok";
+  }
+  const parts = [r.status != null ? String(r.status) : null, r.error ?? null].filter(Boolean);
+  return parts.join(" ") || "failed";
 }

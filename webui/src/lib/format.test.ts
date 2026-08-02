@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatRequestTime,
+  formatRequestToken,
   formatTokenCount,
   formatTokenDimension,
   formatTotalTokens,
@@ -68,6 +70,42 @@ describe("formatTokenDimension", () => {
 
   it("renders a dash when the dimension is missing", () => {
     expect(formatTokenDimension(undefined)).toBe("-");
+  });
+});
+
+describe("formatRequestToken", () => {
+  it("renders a count readably with the same suffixes as totals", () => {
+    expect(formatRequestToken(999)).toBe("999");
+    expect(formatRequestToken(12_345)).toBe("12.3K");
+    expect(formatRequestToken(0)).toBe("0");
+  });
+
+  it("renders a dash only when the token count is missing", () => {
+    expect(formatRequestToken(null)).toBe("-");
+    expect(formatRequestToken(undefined)).toBe("-");
+  });
+});
+
+describe("formatRequestTime", () => {
+  it("renders a dash when the timestamp is missing", () => {
+    expect(formatRequestTime(undefined)).toBe("-");
+    expect(formatRequestTime(null)).toBe("-");
+  });
+
+  it("renders a dash for an unparseable timestamp", () => {
+    expect(formatRequestTime("not-a-date")).toBe("-");
+  });
+
+  it("formats a valid timestamp as local HH:MM:SS", () => {
+    const ts = "2026-08-02T10:00:00Z";
+    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    expect(formatRequestTime(ts)).toBe(expected);
+  });
+
+  it("keeps the seconds component", () => {
+    const ts = "2026-08-02T10:04:07Z";
+    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    expect(formatRequestTime(ts)).toBe(expected);
   });
 });
 
