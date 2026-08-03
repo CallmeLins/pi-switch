@@ -97,15 +97,23 @@ describe("formatRequestTime", () => {
     expect(formatRequestTime("not-a-date")).toBe("-");
   });
 
-  it("formats a valid timestamp as local HH:MM:SS", () => {
+  it("formats a valid timestamp as local YYYY-MM-DD HH:MM:SS", () => {
     const ts = "2026-08-02T10:00:00Z";
-    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const expected = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
+      d.getHours(),
+    )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     expect(formatRequestTime(ts)).toBe(expected);
   });
 
   it("keeps the seconds component", () => {
     const ts = "2026-08-02T10:04:07Z";
-    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    const d = new Date(ts);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const expected = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
+      d.getHours(),
+    )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
     expect(formatRequestTime(ts)).toBe(expected);
   });
 });

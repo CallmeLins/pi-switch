@@ -1,5 +1,6 @@
 import type {
   AppState,
+  ConversationsPage,
   DaemonResult,
   DoctorCheck,
   ModelEntry,
@@ -11,7 +12,7 @@ import type {
   UsageStats,
   ValidationIssue,
 } from "./types";
-import type { StatsRange } from "./lib/statsWindow";
+import type { ConversationRange, StatsRange } from "./lib/statsWindow";
 
 // Single point of coupling to the backend. Every call maps to one REST route in
 // src-rust/web.rs, which in turn delegates to the shared ops/service layer.
@@ -45,6 +46,21 @@ export const api = {
       "GET",
       `/stats?range=${range}&from=${from}&to=${to}&page=${page}&limit=${limit}`
     ),
+  statsConversations: (
+    range: ConversationRange,
+    from: number | null,
+    to: number | null,
+    page = 0,
+    limit = 50,
+  ) => {
+    // "all" means full history: omit the window params so the backend keeps
+    // the null-window (no params) behaviour.
+    const params =
+      range === "all"
+        ? `page=${page}&limit=${limit}`
+        : `range=${range}&from=${from}&to=${to}&page=${page}&limit=${limit}`;
+    return req<ConversationsPage>("GET", `/stats/conversations?${params}`);
+  },
   proxyStatus: () => req<DaemonResult>("GET", "/proxy/status"),
   webuiInfo: () => req<{ authRequired: boolean }>("GET", "/webui/info"),
 

@@ -1,16 +1,33 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPanel } from "./StatsPanel";
-import type { UsageStats } from "../types";
+import type { ConversationStats, ConversationsPage, UsageStats } from "../types";
 
 const statsMock = vi.fn();
+const convMock = vi.fn();
 
 vi.mock("../api", () => ({
-  api: { stats: (...args: unknown[]) => statsMock(...args) },
+  api: {
+    stats: (...args: unknown[]) => statsMock(...args),
+    statsConversations: (...args: unknown[]) => convMock(...args),
+  },
   logsExportUrl: (format: "json" | "csv") => `/api/logs/export?format=${format}`,
 }));
 
 const FIXED_NOW = new Date(2026, 7, 2, 15, 30, 0).getTime();
+
+/** Local "YYYY-MM-DD HH:MM:SS" rendering, mirroring formatRequestTime. */
+function fullTime(ts: string): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(
+    d.getMinutes(),
+  )}:${p(d.getSeconds())}`;
+}
+
+function convPage(conversations: ConversationStats[] = []): ConversationsPage {
+  return { conversations, total: conversations.length };
+}
 
 function fullStats(): UsageStats {
   return {
@@ -55,35 +72,6 @@ function fullStats(): UsageStats {
       reasoning: 20_000,
     },
     cacheHitRate: "53.3%",
-    byConversation: [
-      {
-        conversationId: "unlabeled",
-        requests: 3,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        lastActive: "2026-08-02T10:05:00Z",
-      },
-      {
-        conversationId: "conv-a1b2c3d4e5f6g7",
-        requests: 5,
-        inputTokens: 300_000,
-        outputTokens: 50_000,
-        cachedTokens: 200_000,
-        reasoningTokens: 20_000,
-        lastActive: "2026-08-02T10:03:00Z",
-      },
-      {
-        conversationId: "conv-x",
-        requests: 2,
-        inputTokens: 12_300,
-        outputTokens: 1_200,
-        cachedTokens: 0,
-        reasoningTokens: 0,
-        lastActive: "2026-08-02T09:00:00Z",
-      },
-    ],
   };
 }
 
@@ -111,13 +99,14 @@ function legacyStats(): UsageStats {
     },
     totalTokens: { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 },
     cacheHitRate: "-",
-    byConversation: [],
   };
 }
 
 describe("StatsPanel", () => {
   beforeEach(() => {
     statsMock.mockReset();
+    convMock.mockReset();
+    convMock.mockResolvedValue(convPage());
   });
 
   afterEach(() => {
@@ -135,11 +124,21 @@ describe("StatsPanel", () => {
       byProvider: {},
       totalTokens: { input: 0, output: 0, total: 0 },
       cacheHitRate: "-",
-      byConversation: [],
     });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     expect(await screen.findByText(/No request data yet/)).toBeInTheDocument();
     expect(screen.queryByText(/By conversation/)).not.toBeInTheDocument();
+  });
+
+  it("mounts and fetches both windows in parallel", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    expect(statsMock).toHaveBeenCalledTimes(1);
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 0, 50);
+    expect(convMock).toHaveBeenCalledTimes(1);
+    expect(convMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 0, 50);
   });
 
   it("renders the total cost card with an unknown hint", async () => {
@@ -169,16 +168,20 @@ describe("StatsPanel", () => {
       byProvider: {},
       totalTokens: { input: 0, output: 0, total: 0 },
       cacheHitRate: "-",
-      byConversation: [],
     });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     expect(await screen.findByText(/No request data yet/)).toBeInTheDocument();
     expect(screen.queryByText("Cost")).not.toBeInTheDocument();
   });
 
-
-  it("renders token cards, provider token column and conversation list with data", async () => {
+  it("renders token cards, provider token column and the conversation table", async () => {
     statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([
+        { conversationId: "conv-a1b2c3d4e5f6g7", requests: 5, inputTokens: 300_000, outputTokens: 50_000, cachedTokens: 200_000, reasoningTokens: 20_000, lastActive: "2026-08-02T10:03:00Z" },
+        { conversationId: "unlabeled", requests: 3, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T10:05:00Z" },
+      ]),
+    );
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect(await screen.findByText("363.5K")).toBeInTheDocument();
@@ -190,11 +193,12 @@ describe("StatsPanel", () => {
     expect(screen.getAllByText("350.0K").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("13.5K").length).toBeGreaterThanOrEqual(1);
 
-    expect(screen.getByText("By conversation")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.getByText("conv-a1b2c3d…")).toBeInTheDocument();
-    expect(screen.getByText("unlabeled")).toBeInTheDocument();
-    expect(screen.getByText("3 requests")).toBeInTheDocument();
+    const table = await screen.findByRole("table", { name: "By conversation" });
+    expect(within(table).getByText("conv-a1b2c3d…")).toBeInTheDocument();
+    expect(within(table).getByText("unlabeled")).toBeInTheDocument();
+    expect(within(table).getByText("5")).toBeInTheDocument();
+    expect(within(table).getByText("3")).toBeInTheDocument();
   });
 
   it("renders dashes for token metrics when only legacy data exists", async () => {
@@ -204,36 +208,15 @@ describe("StatsPanel", () => {
     expect((await screen.findAllByText("Tokens")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(3);
     expect(screen.getAllByText("4").length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText(/By conversation/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(await screen.findByText("No conversation data in this range.")).toBeInTheDocument();
   });
+
   it("shows the cost per conversation and per request", async () => {
     statsMock.mockResolvedValue({
       ...fullStats(),
       totalCost: 0.75,
-      byConversation: [
-        {
-          conversationId: "conv-a",
-          requests: 2,
-          inputTokens: 100,
-          outputTokens: 10,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          lastActive: "2026-08-02T10:00:00Z",
-          cacheRate: "0.0%",
-          cost: 0.75,
-        },
-        {
-          conversationId: "unlabeled",
-          requests: 1,
-          inputTokens: 100,
-          outputTokens: 10,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          lastActive: null,
-          cacheRate: "-",
-          cost: null,
-        },
-      ],
       recentRequests: [
         {
           ts: "2026-08-02T10:00:00Z",
@@ -267,17 +250,45 @@ describe("StatsPanel", () => {
         },
       ],
     });
+    convMock.mockResolvedValue(
+      convPage([
+        {
+          conversationId: "conv-a",
+          requests: 2,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: "2026-08-02T10:00:00Z",
+          cacheRate: "0.0%",
+          cost: 0.75,
+        },
+        {
+          conversationId: "unlabeled",
+          requests: 1,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          cacheRate: "-",
+          cost: null,
+        },
+      ]),
+    );
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     await screen.findByText("363.5K");
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.getByText("Cost $0.75")).toBeInTheDocument();
-    expect(screen.getByText("Cost -")).toBeInTheDocument();
+    const convTable = await screen.findByRole("table", { name: "By conversation" });
+    const convRows = within(convTable).getAllByRole("row");
+    expect(within(convRows[1]).getByText("$0.75")).toBeInTheDocument();
+    expect(within(convRows[2]).getAllByText("-").length).toBeGreaterThanOrEqual(3);
 
     const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
     expect(within(rows[1]).getByText("$0.75")).toBeInTheDocument();
     expect(within(rows[2]).getAllByText("-").length).toBe(7);
   });
+
   it("tolerates an old backend that omits the token fields", async () => {
     statsMock.mockResolvedValue({
       totalRequests: 2,
@@ -304,7 +315,8 @@ describe("StatsPanel", () => {
 
     expect((await screen.findAllByText("2")).length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(2);
-    expect(screen.queryByText(/By conversation/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(await screen.findByText("No conversation data in this range.")).toBeInTheDocument();
   });
 
   it("renders five token cards with subset badges", async () => {
@@ -322,15 +334,23 @@ describe("StatsPanel", () => {
 
   it("shows cache, reasoning and total columns per conversation", async () => {
     statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([
+        { conversationId: "conv-a", requests: 2, inputTokens: 300_000, outputTokens: 50_000, cachedTokens: 200_000, reasoningTokens: 20_000, lastActive: "2026-08-02T10:00:00Z" },
+        { conversationId: "conv-x", requests: 1, inputTokens: 12_300, outputTokens: 1_200, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T09:00:00Z" },
+        { conversationId: "unlabeled", requests: 1, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 },
+      ]),
+    );
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText("363.5K");
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    const table = await screen.findByRole("table", { name: "By conversation" });
 
-    expect(screen.getByText("Cached 200.0K")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning 20.0K")).toBeInTheDocument();
-    expect(screen.getByText("Total 350.0K")).toBeInTheDocument();
-    expect(screen.getByText("Total 13.5K")).toBeInTheDocument();
-    expect(screen.getByText("Total -")).toBeInTheDocument();
+    expect(within(table).getByText("200.0K")).toBeInTheDocument();
+    expect(within(table).getByText("20.0K")).toBeInTheDocument();
+    expect(within(table).getByText("350.0K")).toBeInTheDocument();
+    expect(within(table).getByText("13.5K")).toBeInTheDocument();
+    expect(within(table).getAllByText("0").length).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps rendering legacy data that lacks cache/reasoning fields", async () => {
@@ -354,18 +374,21 @@ describe("StatsPanel", () => {
       },
       totalTokens: { input: 1_000, output: 500, total: 1_500 },
       cacheHitRate: "0%",
-      byConversation: [
-        { conversationId: "conv-old", requests: 1, inputTokens: 1_000, outputTokens: 500 },
-      ],
     } as never);
+    convMock.mockResolvedValue(
+      convPage([
+        { conversationId: "conv-old", requests: 1, inputTokens: 1_000, outputTokens: 500, cachedTokens: 0, reasoningTokens: 0 },
+      ]),
+    );
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect((await screen.findAllByText("1.5K")).length).toBeGreaterThanOrEqual(1);
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.getByText("Cached -")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning -")).toBeInTheDocument();
-    expect(screen.getByText("Total 1.5K")).toBeInTheDocument();
-    expect(screen.getByText("conv-old")).toBeInTheDocument();
+    const table = await screen.findByRole("table", { name: "By conversation" });
+    expect(within(table).getByText("conv-old")).toBeInTheDocument();
+    expect(within(table).getByText("1.0K")).toBeInTheDocument();
+    expect(within(table).getByText("500")).toBeInTheDocument();
+    expect(within(table).getAllByText("-").length).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps the existing request metrics and export actions", async () => {
@@ -379,7 +402,7 @@ describe("StatsPanel", () => {
     expect(screen.getByText("Refresh")).toBeInTheDocument();
   });
 
-  it("renders the request details table with full token columns", async () => {
+  it("renders the request details table with full token columns and full time", async () => {
     statsMock.mockResolvedValue({
       ...fullStats(),
       recentRequests: [
@@ -410,10 +433,7 @@ describe("StatsPanel", () => {
     expect(screen.getByText("1.8K")).toBeInTheDocument();
     expect(screen.getByText("72.1%")).toBeInTheDocument();
     expect(screen.getByText("200")).toBeInTheDocument();
-    const expectedTime = new Date("2026-08-02T10:00:00Z").toLocaleTimeString("en-GB", {
-      hour12: false,
-    });
-    expect(screen.getByText(expectedTime)).toBeInTheDocument();
+    expect(screen.getByText(fullTime("2026-08-02T10:00:00Z"))).toBeInTheDocument();
   });
 
   it("renders dashes for rows without usage and shows status plus error for failures", async () => {
@@ -477,61 +497,6 @@ describe("StatsPanel", () => {
     expect(within(rows[3]).getAllByText("-").length).toBe(7);
   });
 
-  it("shows input, output and cache rate per conversation alongside the existing dimensions", async () => {
-    statsMock.mockResolvedValue({
-      ...fullStats(),
-      byConversation: [
-        {
-          conversationId: "conv-a1b2c3d4e5f6g7h8i9",
-          requests: 3,
-          inputTokens: 312300,
-          outputTokens: 51200,
-          cachedTokens: 200000,
-          reasoningTokens: 20000,
-          lastActive: "2026-08-02T10:00:00Z",
-          cacheRate: "64.1%",
-        },
-        {
-          conversationId: "unlabeled",
-          requests: 2,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          lastActive: null,
-          cacheRate: "-",
-        },
-        {
-          conversationId: "conv-z9y8x7w6v5u4t3s2r1q0",
-          requests: 5,
-          inputTokens: 13500,
-          outputTokens: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          lastActive: "2026-08-02T10:01:00Z",
-          cacheRate: "0.0%",
-        },
-      ],
-    });
-    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
-
-    await screen.findByText("363.5K");
-    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.getByText("Input 312.3K")).toBeInTheDocument();
-    expect(screen.getByText("Output 51.2K")).toBeInTheDocument();
-    expect(screen.getByText("Rate 64.1%")).toBeInTheDocument();
-    expect(screen.getByText("Input 13.5K")).toBeInTheDocument();
-    expect(screen.getByText("Rate 0.0%")).toBeInTheDocument();
-    expect(screen.getAllByText("Input -").length).toBe(1);
-    expect(screen.getAllByText("Output -").length).toBe(2);
-    expect(screen.getAllByText("Rate -").length).toBe(1);
-
-    expect(screen.getByText("Cached 200.0K")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning 20.0K")).toBeInTheDocument();
-    expect(screen.getByText("Total 363.5K")).toBeInTheDocument();
-    expect(screen.getByText("Total 13.5K")).toBeInTheDocument();
-  });
-
   it("does not render the request details card when recentRequests is empty or absent", async () => {
     statsMock.mockResolvedValue({ ...fullStats(), recentRequests: [] });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
@@ -569,32 +534,62 @@ describe("StatsPanel", () => {
     );
   });
 
+  it("collapses request details by default and hides the table when collapsed", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "m1",
+          ok: true,
+          status: 200,
+          error: null,
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    const header = await screen.findByRole("button", { name: /Request details/ });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("table", { name: "Request details" })).toBeInTheDocument();
+
+    fireEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("table", { name: "Request details" })).not.toBeInTheDocument();
+
+    fireEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("table", { name: "Request details" })).toBeInTheDocument();
+  });
+
   it("collapses conversations by default and toggles on header click", async () => {
     statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(convPage([{ conversationId: "unlabeled", requests: 3, inputTokens: 0, outputTokens: 0, cachedTokens: 0, reasoningTokens: 0 }]));
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText("363.5K");
 
-    expect(screen.queryByText("unlabeled")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "By conversation" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /By conversation/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
 
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.getByText("unlabeled")).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "By conversation" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /By conversation/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
 
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
-    expect(screen.queryByText("unlabeled")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "By conversation" })).not.toBeInTheDocument();
   });
 
   it("shows the conversation name and falls back to the truncated id", async () => {
-    statsMock.mockResolvedValue({
-      ...fullStats(),
-      byConversation: [
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([
         {
           conversationId: "conv-a1b2c3d4e5f6g7h8i9",
           name: "My chat",
@@ -614,16 +609,18 @@ describe("StatsPanel", () => {
           reasoningTokens: 0,
           lastActive: "2026-08-02T10:01:00Z",
         },
-      ],
-    });
+      ]),
+    );
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText("363.5K");
     fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    const table = await screen.findByRole("table", { name: "By conversation" });
 
-    expect(screen.getByText("My chat")).toBeInTheDocument();
-    expect(screen.queryByText("conv-a1b2c3d…")).not.toBeInTheDocument();
-    const unnamed = screen.getByText("conv-z9y8x7w…");
+    expect(within(table).getByText("My chat")).toBeInTheDocument();
+    expect(within(table).queryByText("conv-a1b2c3d…")).not.toBeInTheDocument();
+    const unnamed = within(table).getByText("conv-z9y8x7w…");
     expect(unnamed).toHaveAttribute("title", "conv-z9y8x7w6v5u4t3s2r1q0");
+    expect(within(table).getByText(fullTime("2026-08-02T10:01:00Z"))).toBeInTheDocument();
   });
 
   it("renders the four window presets with today selected by default", async () => {
@@ -637,10 +634,7 @@ describe("StatsPanel", () => {
     expect(screen.getByRole("button", { name: "7d" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Custom" })).toBeInTheDocument();
     expect(today).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(screen.getByRole("button", { name: "24h" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("reveals the custom date inputs only in custom mode", async () => {
@@ -653,10 +647,7 @@ describe("StatsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Custom" }));
     expect(screen.getByLabelText("From")).toBeInTheDocument();
     expect(screen.getByLabelText("To")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Custom" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: "Custom" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Today" }));
     expect(screen.queryByLabelText("From")).not.toBeInTheDocument();
@@ -864,6 +855,30 @@ describe("StatsPanel", () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(statsMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("auto-refresh also refreshes the conversation window with its own bounds", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText(/Auto-refresh/), { target: { value: "5000" } });
+    statsMock.mockClear();
+    convMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statsMock).toHaveBeenCalledTimes(1);
+    expect(convMock).toHaveBeenCalledTimes(1);
+    expect(convMock).toHaveBeenLastCalledWith(
+      "today",
+      new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
+      expect.any(Number),
+      0,
+      50,
+    );
     vi.useRealTimers();
   });
 
@@ -1103,7 +1118,6 @@ describe("StatsPanel", () => {
       byProvider: {},
       totalTokens: { input: 0, output: 0, total: 0 },
       cacheHitRate: "-",
-      byConversation: [],
     });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText(/No request data yet/);
@@ -1126,5 +1140,147 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText("Request details");
     expect(screen.queryByText(/rows/)).not.toBeInTheDocument();
+  });
+
+  it("shows the empty hint when the conversation window has no data", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(convPage());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(await screen.findByText("No conversation data in this range.")).toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "By conversation" })).not.toBeInTheDocument();
+  });
+
+  it("switches conversation presets and sends window params", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(convPage([{ conversationId: "c1", requests: 1, inputTokens: 10, outputTokens: 1, cachedTokens: 0, reasoningTokens: 0 }]));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    await screen.findByRole("table", { name: "By conversation" });
+    convMock.mockClear();
+
+    // The main row also has a 24h/7d button; the conversation row is second.
+    fireEvent.click(screen.getAllByRole("button", { name: "24h" })[1]);
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith(
+        "last24h",
+        FIXED_NOW - 24 * 3600 * 1000,
+        FIXED_NOW,
+        0,
+        50,
+      ),
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "7d" })[1]);
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith(
+        "last7d",
+        FIXED_NOW - 7 * 24 * 3600 * 1000,
+        FIXED_NOW,
+        0,
+        50,
+      ),
+    );
+  });
+
+  it("All-time omits the window params and pages the full history", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(convPage([{ conversationId: "c1", requests: 1, inputTokens: 10, outputTokens: 1, cachedTokens: 0, reasoningTokens: 0 }]));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    await screen.findByRole("table", { name: "By conversation" });
+    convMock.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "All-time" }));
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith("all", null, null, 0, 50),
+    );
+    expect(screen.getByRole("button", { name: "All-time" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("pages the conversation table with prev/next and page buttons", async () => {
+    const makeConv = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        conversationId: `conv-${i}`,
+        requests: 1,
+        inputTokens: 10,
+        outputTokens: 1,
+        lastActive: `2026-08-02T10:00:0${i}Z`,
+      }));
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValueOnce({ conversations: makeConv(50), total: 120 });
+    convMock.mockResolvedValueOnce({ conversations: makeConv(50), total: 120 });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    const table = await screen.findByRole("table", { name: "By conversation" });
+    expect(within(table).getByText("conv-0")).toBeInTheDocument();
+    expect(screen.getByText("120 rows")).toBeInTheDocument();
+
+    expect(screen.getByRole("button", { name: "Previous conversation page" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next conversation page" }));
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 1, 50),
+    );
+    expect(await screen.findByText("conv-0")).toBeInTheDocument();
+  });
+
+  it("conversation custom range defaults to today, validates dates and requests with bounds", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(convPage([{ conversationId: "c1", requests: 1, inputTokens: 10, outputTokens: 1, cachedTokens: 0, reasoningTokens: 0 }]));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    await screen.findByRole("table", { name: "By conversation" });
+    convMock.mockClear();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Custom" })[1]);
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith(
+        "custom",
+        new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
+        new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Conversation from"), { target: { value: "2026-08-01" } });
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith(
+        "custom",
+        new Date(2026, 7, 1, 0, 0, 0, 0).getTime(),
+        new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
+      ),
+    );
+
+    convMock.mockClear();
+    fireEvent.change(screen.getByLabelText("Conversation to"), { target: { value: "2026-07-31" } });
+    expect(screen.getByText("End must be on or after start")).toBeInTheDocument();
+    expect(convMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Conversation to"), { target: { value: "2026-08-04" } });
+    await waitFor(() =>
+      expect(convMock).toHaveBeenLastCalledWith(
+        "custom",
+        new Date(2026, 7, 1, 0, 0, 0, 0).getTime(),
+        new Date(2026, 7, 5, 0, 0, 0, 0).getTime(),
+        0,
+        50,
+      ),
+    );
+    expect(screen.queryByText("End must be on or after start")).not.toBeInTheDocument();
   });
 });

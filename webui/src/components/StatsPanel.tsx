@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppState, RecentRequest, UsageStats } from "../types";
+import type { AppState, ConversationsPage, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
 import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
-import { computeStatsWindow, todayString } from "../lib/statsWindow";
-import type { StatsRange } from "../lib/statsWindow";
+import { computeConversationWindow, computeStatsWindow, todayString } from "../lib/statsWindow";
+import type { ConversationRange, StatsRange } from "../lib/statsWindow";
 
 const PRESETS: { key: StatsRange; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "last24h", label: "24h" },
   { key: "last7d", label: "7d" },
   { key: "custom", label: "Custom" },
+];
+
+const CONV_PRESETS: { key: ConversationRange; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "last24h", label: "24h" },
+  { key: "last7d", label: "7d" },
+  { key: "custom", label: "Custom" },
+  { key: "all", label: "All-time" },
 ];
 
 const PAGE_SIZES = [50, 100, 200, 500];
@@ -31,9 +39,16 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
   const [customError, setCustomError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState<number | null>(null);
   const [conversationsOpen, setConversationsOpen] = useState(false);
+  const [requestsOpen, setRequestsOpen] = useState(true);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
-
+  const [convRange, setConvRange] = useState<ConversationRange>("today");
+  const [convFrom, setConvFrom] = useState("");
+  const [convTo, setConvTo] = useState("");
+  const [convError, setConvError] = useState<string | null>(null);
+  const [convPage, setConvPage] = useState(0);
+  const [convPageSize, setConvPageSize] = useState(50);
+  const [convData, setConvData] = useState<ConversationsPage | null>(null);
   const seq = useRef(0);
   const load = useCallback(
     async (
@@ -72,10 +87,45 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     [],
   );
 
+  const convSeq = useRef(0);
+  const loadConversations = useCallback(
+    async (
+      range: ConversationRange,
+      from: number | null,
+      to: number | null,
+      page: number,
+      pageSize: number,
+      keepOnError = false,
+    ) => {
+      const id = ++convSeq.current;
+      try {
+        const next = await api.statsConversations(range, from, to, page, pageSize);
+        if (id === convSeq.current) {
+          const lastPage = next.total > 0 ? Math.ceil(next.total / pageSize) - 1 : 0;
+          if (page > lastPage) {
+            // Same clamp semantics as the main load: a shrunken window can
+            // invalidate the current page, so clamp and re-request once.
+            setConvPage(lastPage);
+            void loadConversations(range, from, to, lastPage, pageSize, keepOnError);
+            return;
+          }
+          setConvData(next);
+        }
+      } catch {
+        if (id === convSeq.current && !keepOnError) {
+          setConvData(null);
+        }
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     const { from, to } = computeStatsWindow("today", null, null);
     void load("today", from, to, 0, 50);
-  }, [load]);
+    const conv = computeConversationWindow("today", null, null);
+    void loadConversations("today", conv.from, conv.to, 0, 50);
+  }, [load, loadConversations]);
 
   // Current window bounds for the active range; custom falls back to today.
   const windowBounds = useCallback(
@@ -86,8 +136,19 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     [range, customFrom, customTo],
   );
 
+  // Independent window bounds for the conversation browser; "all" is a null
+  // window (full history).
+  const convWindowBounds = useCallback(
+    () =>
+      convRange === "custom"
+        ? computeConversationWindow("custom", convFrom || todayString(), convTo || todayString())
+        : computeConversationWindow(convRange, null, null),
+    [convRange, convFrom, convTo],
+  );
+
   // Poll the current window on the selected interval; switching tiers resets
   // the timer (the effect re-runs) and switching back to Off stops it.
+  // Auto-refresh refreshes both windows, each with its own bounds.
   useEffect(() => {
     if (refreshMs == null) {
       return;
@@ -95,9 +156,27 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     const id = setInterval(() => {
       const { from, to } = windowBounds();
       void load(range, from, to, page, pageSize, true);
+      const conv = convWindowBounds();
+      void loadConversations(convRange, conv.from, conv.to, convPage, convPageSize, true);
     }, refreshMs);
     return () => clearInterval(id);
-  }, [refreshMs, range, customFrom, customTo, page, pageSize, load, windowBounds]);
+  }, [
+    refreshMs,
+    range,
+    customFrom,
+    customTo,
+    page,
+    pageSize,
+    load,
+    windowBounds,
+    convRange,
+    convFrom,
+    convTo,
+    convPage,
+    convPageSize,
+    loadConversations,
+    convWindowBounds,
+  ]);
   const select = (key: StatsRange, keepPage = false) => {
     setRange(key);
     if (key === "custom") {
@@ -119,6 +198,28 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         setPage(0);
       }
       void load(key, from, to, keepPage ? page : 0, pageSize);
+    }
+  };
+
+  const convSelect = (key: ConversationRange) => {
+    setConvRange(key);
+    if (key === "custom") {
+      const from = convFrom || todayString();
+      const to = convTo || todayString();
+      if (convFrom && convTo && to < from) {
+        setConvError("End must be on or after start");
+        return;
+      }
+      setConvFrom(from);
+      setConvTo(to);
+      setConvPage(0);
+      const { from: f, to: t } = computeConversationWindow("custom", from, to);
+      void loadConversations("custom", f, t, 0, convPageSize);
+    } else {
+      setConvError(null);
+      const { from, to } = computeConversationWindow(key, null, null);
+      setConvPage(0);
+      void loadConversations(key, from, to, 0, convPageSize);
     }
   };
 
@@ -144,6 +245,28 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       }
     };
 
+  const onConvCustomDate =
+    (which: "from" | "to") => (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      const from = which === "from" ? value : convFrom;
+      const to = which === "to" ? value : convTo;
+      if (which === "from") {
+        setConvFrom(value);
+      } else {
+        setConvTo(value);
+      }
+      if (!from || !to) {
+        setConvError("Select both start and end dates");
+      } else if (to < from) {
+        setConvError("End must be on or after start");
+      } else {
+        setConvError(null);
+        setConvPage(0);
+        const { from: f, to: t } = computeConversationWindow("custom", from, to);
+        void loadConversations("custom", f, t, 0, convPageSize);
+      }
+    };
+
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
   const totals = stats?.totalTokens;
   const totalRows = stats?.recentRequestTotal;
@@ -152,6 +275,13 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     setPage(nextPage);
     const { from, to } = windowBounds();
     void load(range, from, to, nextPage, pageSize);
+  };
+  const convTotalPages =
+    convData && convData.total > 0 ? Math.ceil(convData.total / convPageSize) : 0;
+  const convGoPage = (nextPage: number) => {
+    setConvPage(nextPage);
+    const { from, to } = convWindowBounds();
+    void loadConversations(convRange, from, to, nextPage, convPageSize);
   };
 
   return (
@@ -279,8 +409,18 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
 
           {stats.recentRequests?.length ? (
             <Card className="mt-4">
-              <div className="mb-2 text-sm font-semibold text-zinc-200">Request details</div>
-              <div className="overflow-x-auto">
+              <button
+                type="button"
+                aria-expanded={requestsOpen}
+                onClick={() => setRequestsOpen((v) => !v)}
+                className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
+              >
+                <span>Request details</span>
+                <span className="text-zinc-500">{requestsOpen ? "▾" : "▸"}</span>
+              </button>
+              {requestsOpen && (
+                <>
+                  <div className="overflow-x-auto">
                 <table aria-label="Request details" className="w-full text-sm">
                   <thead className="text-left text-xs text-zinc-500">
                     <tr>
@@ -395,45 +535,160 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   </label>
                 </div>
               )}
-            </Card>
-          ) : null}
-
-          {stats.byConversation?.length ? (
-            <Card className="mt-4">
-              <button
-                type="button"
-                aria-expanded={conversationsOpen}
-                onClick={() => setConversationsOpen((v) => !v)}
-                className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
-              >
-                <span>By conversation</span>
-                <span className="text-zinc-500">{conversationsOpen ? "▾" : "▸"}</span>
-              </button>
-              {conversationsOpen && (
-                <div className="divide-y divide-white/5">
-                  {stats.byConversation.map((c) => (
-                    <div key={c.conversationId} className="py-1.5 text-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="truncate text-zinc-200" title={c.conversationId}>
-                          {c.name || shortConversationId(c.conversationId)}
-                        </span>
-                        <span className="text-zinc-500">{c.requests} requests</span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
-                        <span>Input {formatTokenDimension(c.inputTokens)}</span>
-                        <span>Output {formatTokenDimension(c.outputTokens)}</span>
-                        <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
-                        <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
-                        <span>Rate {c.cacheRate ?? "-"}</span>
-                        <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
-                        <span>Cost {formatCost(c.cost)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                </>
               )}
             </Card>
           ) : null}
+
+          <Card className="mt-4">
+            <button
+              type="button"
+              aria-expanded={conversationsOpen}
+              onClick={() => setConversationsOpen((v) => !v)}
+              className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
+            >
+              <span>By conversation</span>
+              <span className="text-zinc-500">{conversationsOpen ? "▾" : "▸"}</span>
+            </button>
+            {conversationsOpen && (
+              <div>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {CONV_PRESETS.map(({ key, label }) => (
+                    <Button
+                      key={key}
+                      variant={convRange === key ? "primary" : "subtle"}
+                      aria-pressed={convRange === key}
+                      onClick={() => convSelect(key)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                  {convRange === "custom" && (
+                    <span className="flex items-center gap-2">
+                      <Input type="date" aria-label="Conversation from" value={convFrom} onChange={onConvCustomDate("from")} />
+                      <span className="text-xs text-zinc-500">→</span>
+                      <Input type="date" aria-label="Conversation to" value={convTo} onChange={onConvCustomDate("to")} />
+                      {convError && <span className="text-xs text-red-300">{convError}</span>}
+                    </span>
+                  )}
+                </div>
+                {!convData || convData.total === 0 ? (
+                  <div className="text-sm text-zinc-500">No conversation data in this range.</div>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table aria-label="By conversation" className="w-full text-sm">
+                        <thead className="text-left text-xs text-zinc-500">
+                          <tr>
+                            <th className="pb-1 pr-2">Time</th>
+                            <th className="pb-1 pr-2">Session</th>
+                            <th className="pb-1 pr-2 text-right">Requests</th>
+                            <th className="pb-1 pr-2 text-right">Input</th>
+                            <th className="pb-1 pr-2 text-right">Output</th>
+                            <th className="pb-1 pr-2 text-right">Cached</th>
+                            <th className="pb-1 pr-2 text-right">Reasoning</th>
+                            <th className="pb-1 pr-2 text-right">Rate</th>
+                            <th className="pb-1 pr-2 text-right">Total</th>
+                            <th className="pb-1 text-right">Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {convData.conversations.map((c) => (
+                            <tr key={c.conversationId} className="border-t border-white/5">
+                              <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
+                                {formatRequestTime(c.lastActive)}
+                              </td>
+                              <td className="py-1 pr-2 text-zinc-300">
+                                <span className="block max-w-[14rem] truncate" title={c.conversationId}>
+                                  {c.name || shortConversationId(c.conversationId)}
+                                </span>
+                              </td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">{c.requests}</td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">
+                                {formatRequestToken(c.inputTokens)}
+                              </td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">
+                                {formatRequestToken(c.outputTokens)}
+                              </td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">
+                                {formatRequestToken(c.cachedTokens)}
+                              </td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">
+                                {formatRequestToken(c.reasoningTokens)}
+                              </td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">{c.cacheRate ?? "-"}</td>
+                              <td className="py-1 pr-2 text-right text-zinc-400">
+                                {formatRequestToken(c.inputTokens + c.outputTokens)}
+                              </td>
+                              <td className="py-1 text-right text-zinc-400">{formatCost(c.cost)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+                      <span>{convData.total} rows</span>
+                      {convTotalPages > 1 && (
+                        <span className="flex items-center gap-1">
+                          <Button
+                            aria-label="Previous conversation page"
+                            disabled={convPage === 0}
+                            onClick={() => convGoPage(convPage - 1)}
+                          >
+                            ‹
+                          </Button>
+                          {pageNumbers(convPage, convTotalPages).map((n, i) =>
+                            n === "…" ? (
+                              <span key={`gap-${i}`} className="px-1 text-zinc-600">
+                                …
+                              </span>
+                            ) : (
+                              <Button
+                                key={n}
+                                variant={n - 1 === convPage ? "primary" : "subtle"}
+                                aria-pressed={n - 1 === convPage}
+                                onClick={() => convGoPage(n - 1)}
+                              >
+                                {n}
+                              </Button>
+                            ),
+                          )}
+                          <Button
+                            aria-label="Next conversation page"
+                            disabled={convPage >= convTotalPages - 1}
+                            onClick={() => convGoPage(convPage + 1)}
+                          >
+                            ›
+                          </Button>
+                        </span>
+                      )}
+                      <label className="flex items-center gap-1 text-zinc-500">
+                        Rows per page
+                        <select
+                          aria-label="Conversation rows per page"
+                          value={convPageSize}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            setConvPageSize(next);
+                            setConvPage(0);
+                            const { from, to } = convWindowBounds();
+                            void loadConversations(convRange, from, to, 0, next);
+                          }}
+                          className="rounded border border-white/10 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200"
+                        >
+                          {PAGE_SIZES.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </Card>
         </>
       )}
     </div>

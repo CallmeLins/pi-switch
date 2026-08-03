@@ -82,6 +82,7 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/config/validate", get(get_validate))
         .route("/backups", get(get_backups))
         .route("/stats", get(get_stats))
+        .route("/stats/conversations", get(get_stats_conversations))
         .route("/proxy/status", get(get_proxy_status))
         .route("/webui/info", get(get_webui_info))
         .route("/logs/export", get(get_logs_export))
@@ -209,6 +210,19 @@ async fn get_stats(Query(q): Query<HashMap<String, String>>) -> ApiJson {
     let page = q.get("page").and_then(|s| s.parse::<usize>().ok());
     let limit = q.get("limit").and_then(|s| s.parse::<usize>().ok());
     Ok(Json(service::stats_value(window, page, limit)))
+}
+
+async fn get_stats_conversations(Query(q): Query<HashMap<String, String>>) -> ApiJson {
+    // Same window semantics as `/stats`: no range/from/to at all means full
+    // history (the All-time preset); a partial or invalid window is a 400.
+    let window = crate::stats::parse_window_query(
+        q.get("range").map(String::as_str),
+        q.get("from").map(String::as_str),
+        q.get("to").map(String::as_str),
+    )?;
+    let page = q.get("page").and_then(|s| s.parse::<usize>().ok());
+    let limit = q.get("limit").and_then(|s| s.parse::<usize>().ok());
+    Ok(Json(service::conversations_value(window, page, limit)))
 }
 
 async fn get_proxy_status() -> ApiJson {
@@ -606,5 +620,62 @@ mod tests {
         .unwrap();
         let total = body.get("recentRequestTotal").expect("stats body must include recentRequestTotal");
         assert!(total.is_u64() || total.is_i64(), "recentRequestTotal must be a number");
+    }
+
+    #[tokio::test]
+    async fn proxy_status_route_still_registered() {
+        // Regression guard: /proxy/status must never be dropped when adding
+        // sibling routes (it feeds the ProxyPanel on mount).
+        let res = get("/api/proxy/status").await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn conversations_without_window_params_returns_200_all_history() {
+        let res = get("/api/stats/conversations").await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let convs = body.get("conversations").expect("body must include conversations");
+        assert!(convs.is_array(), "conversations must be an array");
+        let total = body.get("total").expect("body must include total");
+        assert!(total.is_u64() || total.is_i64(), "total must be a number");
+    }
+
+    #[tokio::test]
+    async fn conversations_with_valid_window_returns_200() {
+        for uri in [
+            "/api/stats/conversations?range=custom&from=1785664800000&to=1785672000000",
+            "/api/stats/conversations?range=today&from=1785664800000&to=1785672000000",
+            "/api/stats/conversations?range=last24h&from=1785664800000&to=1785672000000",
+            "/api/stats/conversations?range=last7d&from=1785664800000&to=1785672000000",
+            "/api/stats/conversations?from=1785664800000&to=1785672000000",
+            "/api/stats/conversations?page=0&limit=50",
+        ] {
+            let res = get(uri).await;
+            assert_eq!(res.status(), StatusCode::OK, "{uri} should be 200");
+        }
+    }
+
+    #[tokio::test]
+    async fn conversations_invalid_window_is_rejected_not_500() {
+        for uri in [
+            "/api/stats/conversations?range=week",
+            "/api/stats/conversations?range=custom",
+            "/api/stats/conversations?range=today&from=1785664800000",
+            "/api/stats/conversations?range=custom&from=abc&to=1785672000000",
+            "/api/stats/conversations?range=custom&from=1785672000000&to=1785664800000",
+        ] {
+            let res = get(uri).await;
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "{uri} should be 400, not 500"
+            );
+        }
     }
 }
