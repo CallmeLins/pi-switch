@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use crate::daemon::{daemon_start, daemon_stop, PROXY};
 use crate::ops;
 
-use super::data::{ProfileRow, UiData};
+use super::data::{ProfileRow, StatsRange, UiData};
 use super::form::{FieldKind, FormFocus, FormMode, ProviderFormState};
 use super::i18n;
 use super::route::{NavItem, Route};
@@ -141,6 +141,16 @@ pub fn user_agent_preset_value(idx: usize) -> Option<&'static str> {
         1 => Some("codex"),
         2 => Some("gemini"),
         _ => None,
+    }
+}
+
+/// Localized label for a stats time range (used in key-bar hint + toast).
+fn stats_range_label(range: StatsRange) -> &'static str {
+    match range {
+        StatsRange::All => i18n::stats_range_all(),
+        StatsRange::Today => i18n::stats_range_today(),
+        StatsRange::Last24h => i18n::stats_range_24h(),
+        StatsRange::Last7d => i18n::stats_range_7d(),
     }
 }
 
@@ -810,6 +820,8 @@ impl App {
                 self.refresh();
                 self.push_toast(ToastKind::Info, i18n::toast_refreshed());
             }
+            KeyCode::Left => self.cycle_stats_range(false),
+            KeyCode::Right => self.cycle_stats_range(true),
             KeyCode::Up => {
                 self.stats_scroll = self.stats_scroll.saturating_sub(1);
             }
@@ -818,6 +830,22 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Cycle the stats time range (All ⇄ Today ⇄ 24h ⇄ 7d) and reload stats.
+    fn cycle_stats_range(&mut self, forward: bool) {
+        let next = if forward {
+            self.data.stats_range.next()
+        } else {
+            self.data.stats_range.prev()
+        };
+        if next == self.data.stats_range {
+            return;
+        }
+        self.data.stats_range = next;
+        self.stats_scroll = 0;
+        self.refresh();
+        self.push_toast(ToastKind::Info, stats_range_label(next));
     }
 
     fn on_backups_key(&mut self, key: KeyEvent) {

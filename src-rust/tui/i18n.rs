@@ -314,6 +314,27 @@ pub fn stats_input() -> &'static str {
 pub fn stats_output() -> &'static str {
     t!("output", "输出")
 }
+pub fn stats_cached() -> &'static str {
+    t!("cached", "缓存")
+}
+pub fn stats_reasoning() -> &'static str {
+    t!("reasoning", "推理")
+}
+
+// ─── Stats time range labels ────────────────────────────
+
+pub fn stats_range_all() -> &'static str {
+    t!("All", "全部")
+}
+pub fn stats_range_today() -> &'static str {
+    t!("Today", "当天")
+}
+pub fn stats_range_24h() -> &'static str {
+    t!("24h", "24h")
+}
+pub fn stats_range_7d() -> &'static str {
+    t!("7d", "7天")
+}
 
 // ─── Backups labels ──────────────────────────────────────
 

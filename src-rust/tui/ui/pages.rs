@@ -442,6 +442,7 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
         chunks[0],
         &[
             ("↑↓", i18n::key_scroll()),
+            ("←→", range_label(&app.data.stats_range)),
             ("r", i18n::key_refresh()),
             ("Esc", i18n::key_back()),
         ],
@@ -498,6 +499,8 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
             &stats.total_tokens,
             i18n::stats_input(),
             i18n::stats_output(),
+            i18n::stats_cached(),
+            i18n::stats_reasoning(),
         ),
     ));
     overview_lines.push(label_line(
@@ -783,17 +786,37 @@ fn format_token_count(count: u64) -> String {
 
 /// Value shown for the cumulative-token line of the stats view. Renders
 /// "-" when there is no token data at all, otherwise a readable
-/// "12.3K input / 678 output" summary. The input/output words are injected
-/// so the function stays language-independent and testable.
-fn token_summary(total: &TokenTotals, input_word: &str, output_word: &str) -> String {
+/// "12.3K input / 678 output · 4.2K cached / 345 reasoning" summary.
+/// The dimension words are injected so the function stays
+/// language-independent and testable.
+fn token_summary(
+    total: &TokenTotals,
+    input_word: &str,
+    output_word: &str,
+    cached_word: &str,
+    reasoning_word: &str,
+) -> String {
     if total.total == 0 {
         return "-".to_string();
     }
     format!(
-        "{} {input_word} / {} {output_word}",
+        "{} {input_word} / {} {output_word} · {} {cached_word} / {} {reasoning_word}",
         format_token_count(total.input),
-        format_token_count(total.output)
+        format_token_count(total.output),
+        format_token_count(total.cached),
+        format_token_count(total.reasoning),
     )
+}
+
+/// Localized label for the active stats time range.
+fn range_label(range: &crate::tui::data::StatsRange) -> &'static str {
+    use crate::tui::data::StatsRange;
+    match range {
+        StatsRange::All => i18n::stats_range_all(),
+        StatsRange::Today => i18n::stats_range_today(),
+        StatsRange::Last24h => i18n::stats_range_24h(),
+        StatsRange::Last7d => i18n::stats_range_7d(),
+    }
 }
 
 pub(super) fn render_failover_editor(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -873,6 +896,16 @@ mod tests {
         }
     }
 
+    fn totals_full(input: u64, output: u64, cached: u64, reasoning: u64) -> TokenTotals {
+        TokenTotals {
+            input,
+            output,
+            total: input + output,
+            cached,
+            reasoning,
+        }
+    }
+
     #[test]
     fn format_token_count_small_counts_are_plain() {
         assert_eq!(format_token_count(0), "0");
@@ -903,30 +936,59 @@ mod tests {
 
     #[test]
     fn token_summary_without_data_is_dash() {
-        assert_eq!(token_summary(&totals(0, 0), "input", "output"), "-");
+        assert_eq!(
+            token_summary(&totals(0, 0), "input", "output", "cached", "reasoning"),
+            "-"
+        );
     }
 
     #[test]
     fn token_summary_renders_input_and_output() {
         assert_eq!(
-            token_summary(&totals(12_345, 678), "input", "output"),
-            "12.3K input / 678 output"
+            token_summary(&totals(12_345, 678), "input", "output", "cached", "reasoning"),
+            "12.3K input / 678 output · 0 cached / 0 reasoning"
+        );
+    }
+
+    #[test]
+    fn token_summary_renders_cached_and_reasoning_dimensions() {
+        assert_eq!(
+            token_summary(
+                &totals_full(12_345, 678, 4_200, 345),
+                "input",
+                "output",
+                "cached",
+                "reasoning",
+            ),
+            "12.3K input / 678 output · 4.2K cached / 345 reasoning"
         );
     }
 
     #[test]
     fn token_summary_zero_input_is_still_rendered() {
         assert_eq!(
-            token_summary(&totals(0, 12_345_678), "input", "output"),
-            "0 input / 12.3M output"
+            token_summary(
+                &totals(0, 12_345_678),
+                "input",
+                "output",
+                "cached",
+                "reasoning",
+            ),
+            "0 input / 12.3M output · 0 cached / 0 reasoning"
         );
     }
 
     #[test]
     fn token_summary_accepts_localized_words() {
         assert_eq!(
-            token_summary(&totals(1_234, 567), "输入", "输出"),
-            "1.2K 输入 / 567 输出"
+            token_summary(
+                &totals_full(1_234, 567, 300, 0),
+                "输入",
+                "输出",
+                "缓存",
+                "推理",
+            ),
+            "1.2K 输入 / 567 输出 · 300 缓存 / 0 推理"
         );
     }
 }
