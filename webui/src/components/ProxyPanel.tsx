@@ -3,6 +3,7 @@ import type { AppState, DaemonResult } from "../types";
 import { api } from "../api";
 import { Badge, Button, Card, Field, Input, SectionTitle } from "./ui";
 import { useAction } from "./ui";
+import { useI18n } from "../i18n";
 
 export function ProxyPanel({
   state,
@@ -12,6 +13,7 @@ export function ProxyPanel({
   refresh: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const [status, setStatus] = useState<DaemonResult | null>(null);
   const [host, setHost] = useState(state.settings.proxy.host);
   const [port, setPort] = useState(String(state.settings.proxy.port));
@@ -29,13 +31,13 @@ export function ProxyPanel({
 
   return (
     <div>
-      <SectionTitle hint="routes by profile/model in the request body">Proxy</SectionTitle>
+      <SectionTitle hint={t("routes by profile/model in the request body")}>{t("Proxy")}</SectionTitle>
 
       <Card className="mb-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Badge tone={status?.running ? "green" : "zinc"}>
-              {status?.running ? "running" : "stopped"}
+              {status?.running ? t("running") : t("stopped")}
             </Badge>
             {status?.running && (
               <span className="text-sm text-zinc-400">
@@ -43,15 +45,15 @@ export function ProxyPanel({
               </span>
             )}
           </div>
-          <Button onClick={() => void loadStatus()}>Refresh</Button>
+          <Button onClick={() => void loadStatus()}>{t("Refresh")}</Button>
         </div>
         {status?.message && <div className="mt-2 text-xs text-zinc-500">{status.message}</div>}
 
         <div className="mt-4 grid gap-x-4 sm:grid-cols-2">
-          <Field label="Host">
+          <Field label={t("Proxy host")}>
             <Input value={host} onChange={(e) => setHost(e.target.value)} />
           </Field>
-          <Field label="Port">
+          <Field label={t("Proxy port")}>
             <Input value={port} onChange={(e) => setPort(e.target.value)} />
           </Field>
         </div>
@@ -62,19 +64,19 @@ export function ProxyPanel({
             onClick={() =>
               run(
                 () => api.proxyStart(host.trim(), parseInt(port, 10) || undefined),
-                "Proxy started",
+                t("Proxy started"),
                 loadStatus,
               )
             }
           >
-            Start
+            {t("Start")}
           </Button>
           <Button
             variant="danger"
             disabled={!status?.running}
-            onClick={() => run(() => api.proxyStop(), "Proxy stopped", loadStatus)}
+            onClick={() => run(() => api.proxyStop(), t("Proxy stopped"), loadStatus)}
           >
-            Stop
+            {t("Stop")}
           </Button>
         </div>
       </Card>
@@ -92,6 +94,7 @@ function FailoverEditor({
   refresh: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const [chain, setChain] = useState<string[]>(state.settings.proxy.failover ?? []);
 
   const nonProxy = Object.entries(state.profiles)
@@ -109,14 +112,14 @@ function FailoverEditor({
 
   return (
     <Card>
-      <div className="mb-1 text-sm font-semibold text-zinc-200">Failover chain</div>
+      <div className="mb-1 text-sm font-semibold text-zinc-200">{t("Failover chain")}</div>
       <div className="mb-3 text-xs text-zinc-500">
-        Same-model fallback order when the primary provider fails. Proxy profiles are excluded.
+        {t("Same-model fallback order when the primary provider fails. Proxy profiles are excluded.")}
       </div>
 
       <div className="space-y-1">
         {chain.length === 0 && (
-          <div className="text-sm text-zinc-500">No failover configured.</div>
+          <div className="text-sm text-zinc-500">{t("No failover configured.")}</div>
         )}
         {chain.map((name, i) => (
           <div
@@ -164,9 +167,9 @@ function FailoverEditor({
         )}
         <Button
           variant="primary"
-          onClick={() => run(() => api.setFailover(chain), "Failover saved", refresh)}
+          onClick={() => run(() => api.setFailover(chain), t("Failover saved"), refresh)}
         >
-          Save chain
+          {t("Save chain")}
         </Button>
       </div>
     </Card>

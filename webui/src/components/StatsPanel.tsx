@@ -5,15 +5,12 @@ import { Button, Card, Input, SectionTitle } from "./ui";
 import { formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
 import { computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { StatsRange } from "../lib/statsWindow";
+import { useI18n } from "../i18n";
 
-const PRESETS: { key: StatsRange; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "last24h", label: "24h" },
-  { key: "last7d", label: "7d" },
-  { key: "custom", label: "Custom" },
-];
+const PRESET_KEYS: StatsRange[] = ["today", "last24h", "last7d", "custom"];
 
 export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> }) {
+  const { t } = useI18n();
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [range, setRange] = useState<StatsRange>("today");
   const [customFrom, setCustomFrom] = useState("");
@@ -45,13 +42,13 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       const from = customFrom || todayString();
       const to = customTo || todayString();
       if (customFrom && customTo && to < from) {
-        setCustomError("End must be on or after start");
+        setCustomError(t("End must be on or after start"));
         return;
       }
       setCustomFrom(from);
       setCustomTo(to);
-      const { from: f, to: t } = computeStatsWindow("custom", from, to);
-      void load("custom", f, t);
+      const { from: f, to: toMs } = computeStatsWindow("custom", from, to);
+      void load("custom", f, toMs);
     } else {
       setCustomError(null);
       const { from, to } = computeStatsWindow(key, null, null);
@@ -70,22 +67,29 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         setCustomTo(value);
       }
       if (!from || !to) {
-        setCustomError("Select both start and end dates");
+        setCustomError(t("Select both start and end dates"));
       } else if (to < from) {
-        setCustomError("End must be on or after start");
+        setCustomError(t("End must be on or after start"));
       } else {
         setCustomError(null);
-        const { from: f, to: t } = computeStatsWindow("custom", from, to);
-        void load("custom", f, t);
+        const { from: f, to: toMs } = computeStatsWindow("custom", from, to);
+        void load("custom", f, toMs);
       }
     };
+
+  const PRESETS: { key: StatsRange; label: string }[] = [
+    { key: "today", label: t("Today") },
+    { key: "last24h", label: t("24h") },
+    { key: "last7d", label: t("7d") },
+    { key: "custom", label: t("Custom") },
+  ];
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
   const totals = stats?.totalTokens;
 
   return (
     <div>
-      <SectionTitle hint="proxy request usage">Stats</SectionTitle>
+      <SectionTitle hint={t("proxy request usage")}>{t("Stats")}</SectionTitle>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {PRESETS.map(({ key, label }) => (
@@ -109,58 +113,58 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       </div>
 
       <div className="mb-3 flex gap-2">
-        <Button onClick={() => select(range)}>Refresh</Button>
+        <Button onClick={() => select(range)}>{t("Refresh")}</Button>
         <a href={logsExportUrl("json")} className="inline-flex">
-          <Button>Export JSON</Button>
+          <Button>{t("Export JSON")}</Button>
         </a>
         <a href={logsExportUrl("csv")} className="inline-flex">
-          <Button>Export CSV</Button>
+          <Button>{t("Export CSV")}</Button>
         </a>
       </div>
 
       {!stats || stats.totalRequests === 0 ? (
         <Card>
           <div className="text-sm text-zinc-500">
-            No request data yet. Start the proxy and make some requests.
+            {t("No request data yet. Start the proxy and make some requests.")}
           </div>
         </Card>
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <Metric label="Total" value={stats.totalRequests} />
-            <Metric label="OK" value={stats.okRequests} tone="green" />
-            <Metric label="Failed" value={stats.failedRequests} tone="red" />
-            <Metric label="Success" value={stats.successRate} />
-            <Metric label="Cache 率" value={stats.cacheHitRate ?? "-"} />
+            <Metric label={t("Total")} value={stats.totalRequests} />
+            <Metric label={t("OK")} value={stats.okRequests} tone="green" />
+            <Metric label={t("Failed")} value={stats.failedRequests} tone="red" />
+            <Metric label={t("Success")} value={stats.successRate} />
+            <Metric label={t("Cache rate")} value={stats.cacheHitRate ?? "-"} />
           </div>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <Metric label="Input" value={formatTokenDimension(totals?.input)} />
-            <Metric label="Output" value={formatTokenDimension(totals?.output)} />
-            <Metric label="Cached" value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
+            <Metric label={t("Input")} value={formatTokenDimension(totals?.input)} />
+            <Metric label={t("Output")} value={formatTokenDimension(totals?.output)} />
+            <Metric label={t("Cached")} value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
             <Metric
-              label="Reasoning"
+              label={t("Reasoning")}
               value={formatTokenDimension(totals?.reasoning)}
               badge="⊆ Output"
             />
-            <Metric label="Total" value={formatTotalTokens(totals)} />
+            <Metric label={t("Total")} value={formatTotalTokens(totals)} />
           </div>
           {stats.avgLatencyMs != null && (
             <div className="mb-4 text-sm text-zinc-400">
-              Avg latency: <span className="text-zinc-200">{stats.avgLatencyMs} ms</span>
+              {t("Avg latency:")} <span className="text-zinc-200">{stats.avgLatencyMs} ms</span>
             </div>
           )}
 
           {byProvider.length > 0 && (
             <Card>
-              <div className="mb-2 text-sm font-semibold text-zinc-200">By provider</div>
+              <div className="mb-2 text-sm font-semibold text-zinc-200">{t("By provider")}</div>
               <table className="w-full text-sm">
                 <thead className="text-left text-xs text-zinc-500">
                   <tr>
-                    <th className="pb-1">Provider</th>
-                    <th className="pb-1 text-right">Total</th>
-                    <th className="pb-1 text-right">OK</th>
-                    <th className="pb-1 text-right">Rate</th>
-                    <th className="pb-1 text-right">Tokens</th>
+                    <th className="pb-1">{t("Provider")}</th>
+                    <th className="pb-1 text-right">{t("Total")}</th>
+                    <th className="pb-1 text-right">{t("OK")}</th>
+                    <th className="pb-1 text-right">{t("Rate")}</th>
+                    <th className="pb-1 text-right">{t("Tokens")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -185,7 +189,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
 
           {stats.byConversation?.length ? (
             <Card className="mt-4">
-              <div className="mb-2 text-sm font-semibold text-zinc-200">By conversation</div>
+              <div className="mb-2 text-sm font-semibold text-zinc-200">{t("By conversation")}</div>
               <div className="divide-y divide-white/5">
                 {stats.byConversation.map((c) => (
                   <div key={c.conversationId} className="py-1.5 text-sm">
@@ -193,15 +197,17 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       <span className="truncate text-zinc-200">
                         {shortConversationId(c.conversationId)}
                       </span>
-                      <span className="text-zinc-500">{c.requests} requests</span>
+                      <span className="text-zinc-500">
+                        {c.requests} {t("requests")}
+                      </span>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
-                      <span>Input {formatTokenDimension(c.inputTokens)}</span>
-                      <span>Output {formatTokenDimension(c.outputTokens)}</span>
-                      <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
-                      <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
-                      <span>Rate {c.cacheRate ?? "-"}</span>
-                      <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
+                      <span>{t("Input")} {formatTokenDimension(c.inputTokens)}</span>
+                      <span>{t("Output")} {formatTokenDimension(c.outputTokens)}</span>
+                      <span>{t("Cached")} {formatTokenDimension(c.cachedTokens)}</span>
+                      <span>{t("Reasoning")} {formatTokenDimension(c.reasoningTokens)}</span>
+                      <span>{t("Rate")} {c.cacheRate ?? "-"}</span>
+                      <span>{t("Total")} {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
                     </div>
                   </div>
                 ))}
@@ -211,21 +217,21 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
 
           {stats.recentRequests?.length ? (
             <Card className="mt-4">
-              <div className="mb-2 text-sm font-semibold text-zinc-200">Request details</div>
+              <div className="mb-2 text-sm font-semibold text-zinc-200">{t("Request details")}</div>
               <div className="overflow-x-auto">
-                <table aria-label="Request details" className="w-full text-sm">
+                <table aria-label={t("Request details")} className="w-full text-sm">
                   <thead className="text-left text-xs text-zinc-500">
                     <tr>
-                      <th className="pb-1 pr-2">Time</th>
-                      <th className="pb-1 pr-2">Provider</th>
-                      <th className="pb-1 pr-2">Model</th>
-                      <th className="pb-1 pr-2">Status</th>
-                      <th className="pb-1 pr-2 text-right">Input</th>
-                      <th className="pb-1 pr-2 text-right">Output</th>
-                      <th className="pb-1 pr-2 text-right">Cached</th>
-                      <th className="pb-1 pr-2 text-right">Reasoning</th>
-                      <th className="pb-1 pr-2 text-right">Rate</th>
-                      <th className="pb-1 text-right">Total</th>
+                      <th className="pb-1 pr-2">{t("Time")}</th>
+                      <th className="pb-1 pr-2">{t("Provider")}</th>
+                      <th className="pb-1 pr-2">{t("Model")}</th>
+                      <th className="pb-1 pr-2">{t("Status")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Input")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Output")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                      <th className="pb-1 text-right">{t("Total")}</th>
                     </tr>
                   </thead>
                   <tbody>

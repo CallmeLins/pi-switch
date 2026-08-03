@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { PackageEntry } from "../types";
 import { Button, Card, Input, SectionTitle, Switch, useAction } from "./ui";
+import { useI18n } from "../i18n";
 
 interface PackagesPanelProps {
   refresh: () => void;
@@ -24,6 +25,7 @@ function CapBadge({ label }: { label: string }) {
 }
 
 export function PackagesPanel({ refresh }: PackagesPanelProps) {
+  const { t } = useI18n();
   const [packages, setPackages] = useState<PackageEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -48,13 +50,13 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
 
   const handleAdd = async () => {
     if (!spec.trim()) {
-      alert("Package spec is required");
+      alert(t("Package spec is required"));
       return;
     }
 
     await run(
       () => api.addPackage(spec.trim()),
-      `Package '${spec.trim()}' installed`,
+      t("Package '{{spec}}' installed").replace("{{spec}}", spec.trim()),
       () => {
         setAdding(false);
         setSpec("");
@@ -67,7 +69,9 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   const handleToggle = async (pkg: PackageEntry) => {
     await run(
       () => api.togglePackage(pkg.id),
-      `Package '${pkg.name}' ${pkg.enabled ? "disabled" : "enabled"}`,
+      pkg.enabled
+        ? t("Package '{{name}}' disabled").replace("{{name}}", pkg.name)
+        : t("Package '{{name}}' enabled").replace("{{name}}", pkg.name),
       () => {
         loadPackages();
         refresh();
@@ -76,11 +80,11 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   };
 
   const handleDelete = async (pkg: PackageEntry) => {
-    if (!confirm(`Uninstall package '${pkg.name}'?`)) return;
+    if (!confirm(t("Uninstall package '{{name}}'?").replace("{{name}}", pkg.name))) return;
 
     await run(
       () => api.deletePackage(pkg.id),
-      `Package '${pkg.name}' deleted`,
+      t("Package '{{name}}' deleted").replace("{{name}}", pkg.name),
       () => {
         loadPackages();
         refresh();
@@ -91,7 +95,7 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   const handleImport = async () => {
     await run(
       () => api.importPackages(),
-      "Packages imported from Pi Agent",
+      t("Packages imported from Pi Agent"),
       () => {
         loadPackages();
         refresh();
@@ -102,8 +106,8 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   if (loading) {
     return (
       <div>
-        <SectionTitle>📦 Packages</SectionTitle>
-        <p style={{ color: "#999" }}>Loading...</p>
+        <SectionTitle>📦 {t("Packages")}</SectionTitle>
+        <p style={{ color: "#999" }}>{t("Loading…")}</p>
       </div>
     );
   }
@@ -111,34 +115,34 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
-        <SectionTitle>📦 Packages</SectionTitle>
+        <SectionTitle>📦 {t("Packages")}</SectionTitle>
         <div style={{ display: "flex", gap: "0.5rem" }}>
-          <Button onClick={handleImport}>📥 Import from Pi Agent</Button>
+          <Button onClick={handleImport}>📥 {t("Import from Pi Agent")}</Button>
           <Button onClick={() => setAdding(!adding)}>
-            {adding ? "Cancel" : "+ Add Package"}
+            {adding ? t("Cancel") : t("+ Add Package")}
           </Button>
         </div>
       </div>
 
       {adding && (
         <Card style={{ marginBottom: "1.5rem", padding: "1.5rem" }}>
-          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem" }}>Install Package</h3>
+          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem" }}>{t("Install Package")}</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             <div>
               <label style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem", color: "#666" }}>
-                Spec
+                {t("Spec")}
               </label>
               <Input
                 value={spec}
                 onChange={(e) => setSpec(e.target.value)}
-                placeholder="e.g., npm:foo@1.0.0, git:github.com/user/repo, or local path"
+                placeholder={t("e.g., npm:foo@1.0.0, git:github.com/user/repo, or local path")}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleAdd();
                 }}
               />
             </div>
             <Button onClick={handleAdd} style={{ marginTop: "0.5rem" }}>
-              Install
+              {t("Install")}
             </Button>
           </div>
         </Card>
@@ -146,9 +150,9 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
 
       {packages.length === 0 ? (
         <Card style={{ padding: "2rem", textAlign: "center", color: "#999" }}>
-          <p>No packages installed.</p>
+          <p>{t("No packages installed.")}</p>
           <p style={{ fontSize: "0.9rem", marginTop: "0.5rem" }}>
-            Click "Add Package" above or use CLI: <code>pi-switch package add &lt;id&gt; &lt;name&gt; &lt;version&gt;</code>
+            {t('Click "Add Package" above or use CLI: pi-switch package add <id> <name> <version>')}
           </p>
         </Card>
       ) : (
@@ -172,22 +176,22 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
                     </span>
                   </div>
                   <div style={{ fontSize: "0.85rem", color: "#999" }}>
-                    ID: <code style={{ background: "#f5f5f5", padding: "0.2rem 0.4rem", borderRadius: "3px" }}>{pkg.id}</code>
-                    {pkg.installedAt && ` • Installed: ${new Date(pkg.installedAt).toLocaleString()}`}
+                    {t("ID")}: <code style={{ background: "#f5f5f5", padding: "0.2rem 0.4rem", borderRadius: "3px" }}>{pkg.id}</code>
+                    {pkg.installedAt && ` • ${t("Installed:")} ${new Date(pkg.installedAt).toLocaleString()}`}
                   </div>
                   {(pkg.hasExtensions || pkg.hasSkills || pkg.hasPrompts || pkg.hasThemes) && (
                     <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
-                      {pkg.hasExtensions && <CapBadge label="extensions" />}
-                      {pkg.hasSkills && <CapBadge label="skills" />}
-                      {pkg.hasPrompts && <CapBadge label="prompts" />}
-                      {pkg.hasThemes && <CapBadge label="themes" />}
+                      {pkg.hasExtensions && <CapBadge label={t("extensions")} />}
+                      {pkg.hasSkills && <CapBadge label={t("skills")} />}
+                      {pkg.hasPrompts && <CapBadge label={t("prompts")} />}
+                      {pkg.hasThemes && <CapBadge label={t("themes")} />}
                     </div>
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <span style={{ fontSize: "0.9rem", color: "#666" }}>
-                      {pkg.enabled ? "Enabled" : "Disabled"}
+                      {pkg.enabled ? t("Enabled") : t("Disabled")}
                     </span>
                     <Switch checked={pkg.enabled} onChange={() => handleToggle(pkg)} />
                   </div>
@@ -199,7 +203,7 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
                       border: "1px solid #ff5555",
                     }}
                   >
-                    Uninstall
+                    {t("Uninstall")}
                   </Button>
                 </div>
               </div>

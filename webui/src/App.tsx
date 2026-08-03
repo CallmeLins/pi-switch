@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { AppState } from "./types";
 import { Button, ToastProvider, cx } from "./components/ui";
+import { LanguageProvider, useI18n } from "./i18n";
 import { HomePanel } from "./components/HomePanel";
 import { ProfilesPanel } from "./components/ProfilesPanel";
 import { ProxyPanel } from "./components/ProxyPanel";
@@ -32,24 +33,36 @@ export interface PanelProps {
 export default function App() {
   return (
     <ToastProvider>
-      <Shell />
+      <ShellWithLang />
     </ToastProvider>
   );
 }
 
-function Shell() {
+function ShellWithLang() {
+  const [configLang, setConfigLang] = useState<string | null>(null);
+  return (
+    <LanguageProvider configLang={configLang}>
+      <Shell onConfigLang={setConfigLang} />
+    </LanguageProvider>
+  );
+}
+
+function Shell({ onConfigLang }: { onConfigLang: (lang: string | null) => void }) {
   const [nav, setNav] = useState<NavKey>("home");
   const [state, setState] = useState<AppState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useI18n();
 
   const refresh = useCallback(async () => {
     try {
-      setState(await api.getState());
+      const next = await api.getState();
+      setState(next);
+      onConfigLang(next.settings?.language ?? null);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [onConfigLang]);
 
   useEffect(() => {
     void refresh();
@@ -66,7 +79,7 @@ function Shell() {
       <aside className="flex w-56 shrink-0 flex-col border-r border-white/10 bg-zinc-950/60">
         <div className="px-4 py-4">
           <div className="text-lg font-bold tracking-tight text-zinc-100">pi-switch</div>
-          <div className="text-[11px] text-zinc-500">provider control · web</div>
+          <div className="text-[11px] text-zinc-500">{t("provider control · web")}</div>
         </div>
         <nav className="flex-1 px-2">
           {NAV.map((item) => (
@@ -81,12 +94,12 @@ function Shell() {
               )}
             >
               <span className="text-base">{item.icon}</span>
-              {item.label}
+              {t(item.label)}
             </button>
           ))}
         </nav>
         <div className="px-4 py-3 text-[11px] text-zinc-600">
-          CLI · TUI · WebUI — same core
+          {t("CLI · TUI · WebUI — same core")}
         </div>
       </aside>
 
@@ -95,15 +108,15 @@ function Shell() {
         <div className="mx-auto max-w-5xl px-6 py-6">
           {error && (
             <div className="mb-4 rounded-lg border border-red-500/30 bg-red-950/40 px-4 py-3 text-sm text-red-200">
-              <div className="font-medium">Could not load config</div>
+              <div className="font-medium">{t("Could not load config")}</div>
               <div className="mt-1 text-red-300/80">{error}</div>
               <Button variant="primary" className="mt-3" onClick={() => void initConfig()}>
-                Initialize config
+                {t("Initialize config")}
               </Button>
             </div>
           )}
 
-          {!state && !error && <div className="text-zinc-500">Loading…</div>}
+          {!state && !error && <div className="text-zinc-500">{t("Loading…")}</div>}
 
           {state && (
             <>

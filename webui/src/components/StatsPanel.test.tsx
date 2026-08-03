@@ -148,7 +148,7 @@ describe("StatsPanel", () => {
 
     expect(await screen.findByText("363.5K")).toBeInTheDocument();
     expect(screen.getAllByText("Tokens").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Cache 率")).toBeInTheDocument();
+    expect(screen.getByText("Cache rate")).toBeInTheDocument();
     expect(screen.getByText("53.3%")).toBeInTheDocument();
 
     expect(screen.getByText("hyb")).toBeInTheDocument();

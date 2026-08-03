@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AppState, CcsProvider, ModelEntry, PresetInfo, ProviderProfile } from "../types";
 import { api } from "../api";
+import { useI18n } from "../i18n";
 import {
   Badge,
   Button,
@@ -40,6 +41,7 @@ export function ProfilesPanel({
   refresh: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const [editing, setEditing] = useState<{ name: string | null } | null>(null);
   const [models, setModels] = useState<string | null>(null); // profile name for models modal
   const [ccImport, setCcImport] = useState(false);
@@ -48,19 +50,21 @@ export function ProfilesPanel({
 
   return (
     <div>
-      <SectionTitle hint={`${entries.length} profile(s)`}>Profiles</SectionTitle>
+      <SectionTitle hint={`${entries.length} ${t("profile(s)")}`}>{t("Profiles")}</SectionTitle>
 
       <div className="mb-3 flex gap-2">
         <Button variant="primary" onClick={() => setEditing({ name: null })}>
-          + Add profile
+          {t("+ Add profile")}
         </Button>
-        <Button onClick={() => setCcImport(true)}>⇥ Import from cc-switch</Button>
+        <Button onClick={() => setCcImport(true)}>⇥ {t("Import from cc-switch")}</Button>
       </div>
 
       <div className="space-y-2">
         {entries.length === 0 && (
           <Card>
-            <div className="text-sm text-zinc-500">No profiles yet. Add one to get started.</div>
+            <div className="text-sm text-zinc-500">
+              {t("No profiles yet.")} {t('Add one with the "+ Add profile" button or import from cc-switch.')}
+            </div>
           </Card>
         )}
         {entries.map(([name, p]) => {
@@ -71,27 +75,27 @@ export function ProfilesPanel({
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="truncate font-medium text-zinc-100">{name}</span>
-                  {isCurrent && <Badge tone="indigo">current</Badge>}
-                  {p.proxy && <Badge tone="amber">proxy</Badge>}
+                  {isCurrent && <Badge tone="indigo">{t("current")}</Badge>}
+                  {p.proxy && <Badge tone="amber">{t("proxy")}</Badge>}
                   <Badge>{p.api || "?"}</Badge>
-                  {exposed > 0 && <Badge tone="green">{exposed} exposed</Badge>}
+                  {exposed > 0 && <Badge tone="green">{exposed} {t("exposed")}</Badge>}
                 </div>
                 <div className="mt-0.5 truncate text-xs text-zinc-500">
-                  {p.baseUrl || "no base url"} · {p.models?.length ?? 0} models
+                  {p.baseUrl || t("no base url")} · {p.models?.length ?? 0} {t("models")}
                 </div>
               </div>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                 {!isCurrent && (
                   <Button
                     onClick={() =>
-                      run(() => api.useProfile(name), `Switched to ${name}`, refresh)
+                      run(() => api.useProfile(name), `${t("Switched to")} ${name}`, refresh)
                     }
                   >
-                    Use
+                    {t("Use")}
                   </Button>
                 )}
-                <Button onClick={() => setModels(name)}>Models</Button>
-                <Button onClick={() => setEditing({ name })}>Edit</Button>
+                <Button onClick={() => setModels(name)}>{t("Models")}</Button>
+                <Button onClick={() => setEditing({ name })}>{t("Edit")}</Button>
                 <Button
                   onClick={() =>
                     run(
@@ -100,28 +104,31 @@ export function ProfilesPanel({
                         if (!r.success) throw new Error(r.message);
                         return r;
                       },
-                      `Test OK`,
+                      t("Test OK"),
                     )
                   }
                 >
-                  Test
+                  {t("Test")}
                 </Button>
                 <Button
                   onClick={() => {
-                    const to = prompt(`Duplicate '${name}' as:`, `${name}-copy`);
-                    if (to) run(() => api.duplicateProfile(name, to), "Duplicated", refresh);
+                    const to = prompt(
+                      `${t("Duplicate profile '{{name}}' as:").replace("{{name}}", name)}`,
+                      `${name}-copy`,
+                    );
+                    if (to) run(() => api.duplicateProfile(name, to), t("Duplicated"), refresh);
                   }}
                 >
-                  Copy
+                  {t("Copy")}
                 </Button>
                 <Button
                   variant="danger"
                   onClick={() => {
-                    if (confirm(`Delete profile '${name}'?`))
-                      run(() => api.deleteProfile(name), "Deleted", refresh);
+                    if (confirm(t("Delete profile '{{name}}'?").replace("{{name}}", name)))
+                      run(() => api.deleteProfile(name), t("Deleted"), refresh);
                   }}
                 >
-                  Delete
+                  {t("Delete")}
                 </Button>
               </div>
             </Card>
@@ -180,6 +187,7 @@ function ProfileForm({
   onSaved: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const existing = original ? state.profiles[original] : undefined;
   const presets = usePresets();
 
@@ -228,7 +236,7 @@ function ProfileForm({
 
   async function save() {
     const trimmed = name.trim();
-    if (!trimmed) throw new Error("name required");
+    if (!trimmed) throw new Error(t("name required"));
     const profile = build();
     if (original) {
       await api.updateProfile(trimmed, profile, original !== trimmed ? original : undefined);
@@ -238,14 +246,14 @@ function ProfileForm({
   }
 
   return (
-    <Modal title={original ? `Edit ${original}` : "Add profile"} onClose={onClose} wide>
+    <Modal title={original ? `${t("Edit")} ${original}` : t("Add profile")} onClose={onClose} wide>
       <div className="grid gap-x-4 sm:grid-cols-2">
-        <Field label="Name">
+        <Field label={t("Name")}>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-provider" />
         </Field>
-        <Field label="Preset (prefill)">
+        <Field label={t("Preset (prefill)")}>
           <Select value={preset} onChange={(e) => applyPreset(e.target.value)}>
-            <option value="">— none —</option>
+            <option value="">— {t("none")} —</option>
             {presets.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -253,7 +261,7 @@ function ProfileForm({
             ))}
           </Select>
         </Field>
-        <Field label="API type">
+        <Field label={t("API type")}>
           <Select value={apiType} onChange={(e) => setApiType(e.target.value)}>
             {API_TYPES.map((a) => (
               <option key={a} value={a}>
@@ -262,7 +270,7 @@ function ProfileForm({
             ))}
           </Select>
         </Field>
-        <Field label="Disguise (User-Agent)">
+        <Field label={t("Disguise (User-Agent)")}>
           <Select value={spoof} onChange={(e) => setSpoof(e.target.value)}>
             {SPOOFS.map((s) => (
               <option key={s.value} value={s.value}>
@@ -272,7 +280,7 @@ function ProfileForm({
           </Select>
         </Field>
         <div className="sm:col-span-2">
-          <Field label="Base URL">
+          <Field label={t("Base URL")}>
             <Input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -281,12 +289,12 @@ function ProfileForm({
           </Field>
         </div>
         <div className="sm:col-span-2">
-          <Field label="API key (supports $ENV_VAR)">
+          <Field label={t("API key (supports $ENV_VAR)")}>
             <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
           </Field>
         </div>
         <div className="sm:col-span-2">
-          <Field label="Model IDs (one per line)">
+          <Field label={t("Model IDs (one per line)")}>
             <Textarea
               rows={4}
               value={modelIds}
@@ -297,14 +305,14 @@ function ProfileForm({
         </div>
         <label className="mb-3 flex items-center gap-2 text-sm text-zinc-300 sm:col-span-2">
           <input type="checkbox" checked={proxy} onChange={(e) => setProxy(e.target.checked)} />
-          Mark as a proxy profile (excluded from failover, not exposed to pi)
+          {t("Mark as a proxy profile (excluded from failover, not exposed to pi)")}
         </label>
       </div>
 
       <div className="mt-2 flex justify-end gap-2">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" onClick={() => run(save, "Saved", onSaved)}>
-          Save
+        <Button onClick={onClose}>{t("Cancel")}</Button>
+        <Button variant="primary" onClick={() => run(save, t("Saved"), onSaved)}>
+          {t("Save")}
         </Button>
       </div>
     </Modal>
@@ -325,6 +333,7 @@ function ModelsModal({
   onSaved: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const [models, setModels] = useState<ModelEntry[]>(profile.models ?? []);
   const [exposed, setExposed] = useState<Set<string>>(
     new Set(profile.exposedModels ?? []),
@@ -366,7 +375,7 @@ function ModelsModal({
   }
 
   return (
-    <Modal title={`Models · ${name}`} onClose={onClose} wide>
+    <Modal title={`${t("Models")} · ${name}`} onClose={onClose} wide>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Input
           value={newId}
@@ -377,24 +386,24 @@ function ModelsModal({
               setNewId("");
             }
           }}
-          placeholder="add model id + Enter"
+          placeholder={t("add model id + Enter")}
           className="max-w-xs"
         />
         <Button
           onClick={() => run(fetchFromProvider, undefined)}
           disabled={fetching}
         >
-          {fetching ? "Fetching…" : "Fetch from provider"}
+          {fetching ? t("Fetching…") : t("Fetch from provider")}
         </Button>
         <span className="text-xs text-zinc-500">
-          Checked = exposed to pi as <code>{name}/&lt;id&gt;</code>
+          {t("Checked = exposed to pi as")} <code>{name}/&lt;id&gt;</code>
         </span>
       </div>
 
       <div className="max-h-80 space-y-1 overflow-y-auto rounded-lg border border-white/10 p-2">
         {models.length === 0 && (
           <div className="p-3 text-sm text-zinc-500">
-            No models. Add ids above or fetch from the provider.
+            {t("No models. Add ids above or fetch from the provider.")}
           </div>
         )}
         {models.map((m) => (
@@ -424,7 +433,7 @@ function ModelsModal({
                 });
               }}
             >
-              remove
+              {t("remove")}
             </button>
           </div>
         ))}
@@ -436,19 +445,19 @@ function ModelsModal({
             className="text-zinc-400 hover:text-zinc-200"
             onClick={() => setExposed(new Set(models.map((m) => m.id)))}
           >
-            expose all
+            {t("expose all")}
           </button>
           <button
             className="text-zinc-400 hover:text-zinc-200"
             onClick={() => setExposed(new Set())}
           >
-            expose none
+            {t("expose none")}
           </button>
         </div>
         <div className="flex gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => run(save, "Models saved", onSaved)}>
-            Save
+          <Button onClick={onClose}>{t("Cancel")}</Button>
+          <Button variant="primary" onClick={() => run(save, t("Models saved"), onSaved)}>
+            {t("Save")}
           </Button>
         </div>
       </div>
@@ -484,6 +493,7 @@ function CcsImportModal({
   onImported: () => Promise<void>;
 }) {
   const run = useAction();
+  const { t } = useI18n();
   const [providers, setProviders] = useState<CcsProvider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [path, setPath] = useState("");
@@ -519,10 +529,10 @@ function CcsImportModal({
     if (selections.length === 0) return;
     const data = await api.importCcs(selections, path || undefined);
     if (data.imported > 0) {
-      alert(`Imported ${data.imported} provider(s) from cc-switch`);
+      alert(t("Imported {{n}} provider(s) from cc-switch").replace("{{n}}", String(data.imported)));
       await onImported();
     } else {
-      alert("Nothing imported (already exist or skipped).");
+      alert(t("Nothing imported (already exist or skipped)."));
     }
   };
 
@@ -530,26 +540,26 @@ function CcsImportModal({
     ({ "anthropic-messages": "anthropic", "openai-responses": "openai", "google-generative-ai": "gemini" })[api] ?? api;
 
   return (
-    <Modal title="Import from cc-switch" onClose={onClose} wide>
+    <Modal title={t("Import from cc-switch")} onClose={onClose} wide>
       <div className="space-y-3">
         {error && (
           <div>
             <p style={{ color: "#ff5555", fontSize: "0.9rem" }}>{error}</p>
             <div className="flex gap-2 mt-2">
               <Input
-                placeholder="Path to cc-switch.db (optional)"
+                placeholder={t("Path to cc-switch.db (optional)")}
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
               />
-              <Button onClick={() => void load(path)}>Retry</Button>
+              <Button onClick={() => void load(path)}>{t("Retry")}</Button>
             </div>
           </div>
         )}
 
-        {providers === null && !error && <p style={{ color: "#999" }}>Loading…</p>}
+        {providers === null && !error && <p style={{ color: "#999" }}>{t("Loading…")}</p>}
 
         {providers && providers.length === 0 && (
-          <p style={{ color: "#999" }}>No importable providers found in cc-switch.</p>
+          <p style={{ color: "#999" }}>{t("No importable providers found in cc-switch.")}</p>
         )}
 
         {providers && providers.length > 0 && (
@@ -568,7 +578,7 @@ function CcsImportModal({
                 <span className="text-sm">
                   <strong>{p.name}</strong>{" "}
                   <Badge>{apiLabel(p.api)}</Badge>{" "}
-                  {p.exists && <Badge>exists</Badge>}
+                  {p.exists && <Badge>{t("exists")}</Badge>}
                   <br />
                   <span style={{ color: "#999" }}>{p.baseUrl}</span>
                   <br />
@@ -580,9 +590,9 @@ function CcsImportModal({
         )}
 
         <div className="flex gap-2 justify-end">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" disabled={!providers || selected.size === 0} onClick={() => void doImport()}>
-            Import selected
+            {t("Import selected")}
           </Button>
         </div>
       </div>
