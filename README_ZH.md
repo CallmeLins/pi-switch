@@ -66,7 +66,7 @@ npm install -g @cokefenta/pi-switch --build-from-source
 
 ```bash
 pi-switch tui          # 交互式 TUI（推荐）
-pi-switch webui start  # 浏览器界面 http://127.0.0.1:43110
+pi-switch webui start --daemon  # 浏览器界面 http://127.0.0.1:43110（后台守护进程）
 pi-switch doctor       # 运行环境诊断
 ```
 
@@ -96,8 +96,9 @@ pi-switch package toggle <id>                      # 启用/禁用包
 pi-switch package remove <id>                      # 删除包
 pi-switch package show <id>                        # 显示包详情
 
-# WebUI（浏览器配置）
-pi-switch webui start [--host <ip>] [--port <端口>] [--daemon]
+# WebUI（浏览器配置）——建议始终使用 --daemon 后台运行，
+# 这样可以用 `pi-switch webui stop` 停止
+pi-switch webui start --daemon [--host <ip>] [--port <端口>]
 pi-switch webui status
 pi-switch webui stop
 

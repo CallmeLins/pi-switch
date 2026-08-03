@@ -66,7 +66,7 @@ npm install -g @cokefenta/pi-switch --build-from-source
 
 ```bash
 pi-switch tui          # Interactive TUI (recommended)
-pi-switch webui start  # Browser UI at http://127.0.0.1:43110
+pi-switch webui start --daemon  # Browser UI at http://127.0.0.1:43110 (background daemon)
 pi-switch doctor       # Run environment diagnostics
 ```
 
@@ -97,8 +97,9 @@ pi-switch package toggle <id>                      # Enable/disable package
 pi-switch package remove <id>                      # Remove package
 pi-switch package show <id>                        # Show package details
 
-# WebUI (browser config)
-pi-switch webui start [--host <ip>] [--port <port>] [--daemon]
+# WebUI (browser config) — always use --daemon so it runs in the
+# background and can be stopped with `pi-switch webui stop`
+pi-switch webui start --daemon [--host <ip>] [--port <port>]
 pi-switch webui status
 pi-switch webui stop
 
