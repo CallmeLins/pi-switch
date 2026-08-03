@@ -1,15 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPanel } from "./StatsPanel";
-import type { ConversationStats, ConversationsPage, UsageStats } from "../types";
+import type { ConversationRequestsPage, ConversationStats, ConversationsPage, RecentRequest, UsageStats } from "../types";
 
 const statsMock = vi.fn();
 const convMock = vi.fn();
+const convReqMock = vi.fn();
 
 vi.mock("../api", () => ({
   api: {
     stats: (...args: unknown[]) => statsMock(...args),
     statsConversations: (...args: unknown[]) => convMock(...args),
+    conversationRequests: (...args: unknown[]) => convReqMock(...args),
   },
   logsExportUrl: (format: "json" | "csv") => `/api/logs/export?format=${format}`,
 }));
@@ -28,6 +30,11 @@ function fullTime(ts: string): string {
 function convPage(conversations: ConversationStats[] = []): ConversationsPage {
   return { conversations, total: conversations.length };
 }
+
+function reqPage(requests: RecentRequest[] = []): ConversationRequestsPage {
+  return { requests, total: requests.length };
+}
+
 
 function fullStats(): UsageStats {
   return {
@@ -107,6 +114,8 @@ describe("StatsPanel", () => {
     statsMock.mockReset();
     convMock.mockReset();
     convMock.mockResolvedValue(convPage());
+    convReqMock.mockReset();
+    convReqMock.mockResolvedValue(reqPage());
   });
 
   afterEach(() => {
@@ -286,7 +295,8 @@ describe("StatsPanel", () => {
 
     const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
     expect(within(rows[1]).getByText("$0.75")).toBeInTheDocument();
-    expect(within(rows[2]).getAllByText("-").length).toBe(7);
+    // 7 token columns + Session column render "-" for the bare row.
+    expect(within(rows[2]).getAllByText("-").length).toBe(8);
   });
 
   it("tolerates an old backend that omits the token fields", async () => {
@@ -493,8 +503,9 @@ describe("StatsPanel", () => {
     const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
     expect(within(rows[1]).getByText("200")).toBeInTheDocument();
     expect(within(rows[1]).getByText("72.1%")).toBeInTheDocument();
-    expect(within(rows[2]).getAllByText("-").length).toBe(7);
-    expect(within(rows[3]).getAllByText("-").length).toBe(7);
+    // 7 token columns + Session column render "-" for rows without an id.
+    expect(within(rows[2]).getAllByText("-").length).toBe(8);
+    expect(within(rows[3]).getAllByText("-").length).toBe(8);
   });
 
   it("does not render the request details card when recentRequests is empty or absent", async () => {
@@ -1282,5 +1293,137 @@ describe("StatsPanel", () => {
       ),
     );
     expect(screen.queryByText("End must be on or after start")).not.toBeInTheDocument();
+  });
+
+  it("shows the conversation id/name in each request-details row", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "m1",
+          ok: true,
+          status: 200,
+          error: null,
+          conversationId: "conv-a1b2c3d4e5f6g7h8i9",
+          conversationName: "My chat",
+        },
+        {
+          ts: "2026-08-02T10:01:00Z",
+          provider: "hyb",
+          model: "m2",
+          ok: true,
+          status: 200,
+          error: null,
+          conversationId: "conv-z9y8x7w6v5u4t3s2r1q0",
+        },
+        {
+          ts: "2026-08-02T10:02:00Z",
+          provider: "hyb",
+          model: "m3",
+          ok: true,
+          status: 200,
+          error: null,
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    const table = await screen.findByRole("table", { name: "Request details" });
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getByText("My chat")).toBeInTheDocument();
+    expect(within(rows[1]).queryByText("conv-a1b2c3d…")).not.toBeInTheDocument();
+    const short = within(rows[2]).getByText("conv-z9y8x7w…");
+    expect(short).toHaveAttribute("title", "conv-z9y8x7w6v5u4t3s2r1q0");
+    const bareCells = within(rows[3]).getAllByRole("cell");
+    expect(bareCells[1]).toHaveTextContent("-");
+  });
+
+  it("expands a conversation to load and show its requests, and collapses again", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([{ conversationId: "conv-a", requests: 2, inputTokens: 100, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T10:00:00Z" }]),
+    );
+    convReqMock.mockResolvedValue(
+      reqPage([
+        { ts: "2026-08-02T10:00:00Z", provider: "hyb", model: "m1", ok: true, status: 200, error: null, conversationId: "conv-a" },
+        { ts: "2026-08-02T10:00:01Z", provider: "hyb", model: "m2", ok: false, status: 429, error: "rate limited", conversationId: "conv-a" },
+      ]),
+    );
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    const table = await screen.findByRole("table", { name: "By conversation" });
+    fireEvent.click(screen.getByRole("button", { name: /Expand conversation conv-a/ }));
+    expect(convReqMock).toHaveBeenCalledWith("conv-a", 0, 50);
+    const sub = await screen.findByRole("table", { name: "Requests of conv-a" });
+    const subRows = within(sub).getAllByRole("row");
+    expect(within(subRows[1]).getByText("m1")).toBeInTheDocument();
+    expect(within(subRows[2]).getByText("429 rate limited")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand conversation conv-a/ }));
+    expect(screen.queryByRole("table", { name: "Requests of conv-a" })).not.toBeInTheDocument();
+  });
+
+  it("expands two conversations independently and paginates each sub-table", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([
+        { conversationId: "conv-a", requests: 3, inputTokens: 100, outputTokens: 10, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T10:00:00Z" },
+        { conversationId: "conv-b", requests: 2, inputTokens: 50, outputTokens: 5, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T10:01:00Z" },
+      ]),
+    );
+    const makeReq = (tag: string) =>
+      Array.from({ length: 50 }, (_, i) => ({
+        ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+        provider: "hyb",
+        model: `${tag}-${i}`,
+        ok: true,
+        status: 200,
+        error: null,
+        conversationId: tag,
+      }));
+    convReqMock
+      .mockResolvedValueOnce({ requests: makeReq("a"), total: 120 })
+      .mockResolvedValueOnce({ requests: makeReq("b"), total: 2 })
+      .mockResolvedValueOnce({ requests: makeReq("a2"), total: 120 });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    await screen.findByRole("table", { name: "By conversation" });
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand conversation conv-a/ }));
+    const aTable = await screen.findByRole("table", { name: "Requests of conv-a" });
+    expect(within(aTable).getByText("a-0")).toBeInTheDocument();
+    expect(screen.getByText("120 rows")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand conversation conv-b/ }));
+    const bTable = await screen.findByRole("table", { name: "Requests of conv-b" });
+    expect(within(bTable).getByText("b-0")).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Requests of conv-a" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next request page" }));
+    await waitFor(() => expect(convReqMock).toHaveBeenLastCalledWith("conv-a", 1, 50));
+    expect(await screen.findByText("a2-0")).toBeInTheDocument();
+    expect(within(screen.getByRole("table", { name: "Requests of conv-b" })).getByText("b-0")).toBeInTheDocument();
+  });
+
+  it("shows an error state when loading conversation requests fails", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    convMock.mockResolvedValue(
+      convPage([{ conversationId: "conv-a", requests: 1, inputTokens: 10, outputTokens: 1, cachedTokens: 0, reasoningTokens: 0, lastActive: "2026-08-02T10:00:00Z" }]),
+    );
+    convReqMock.mockRejectedValue(new Error("boom"));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    await screen.findByRole("table", { name: "By conversation" });
+    fireEvent.click(screen.getByRole("button", { name: /Expand conversation conv-a/ }));
+
+    expect(await screen.findByText("Failed to load conversation requests.")).toBeInTheDocument();
   });
 });
