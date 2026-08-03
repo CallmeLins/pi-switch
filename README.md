@@ -2,8 +2,8 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/user/pi-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-20260804.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -29,16 +29,16 @@ Manage provider profiles and run a local model-name routing gateway with failove
 
 ```bash
 # npm (recommended)
-npm install -g @cokefenta/pi-switch
+npm install -g @heihei0299/pi-switch
 
 # or via pi
-pi install npm:@cokefenta/pi-switch
+pi install npm:@heihei0299/pi-switch
 ```
 
 **Build from source** (requires Node.js >= 20, Rust 1.80+):
 
 ```bash
-git clone https://github.com/user/pi-switch.git
+git clone https://github.com/heihei0299/pi-switch.git
 cd pi-switch
 npm install
 npm run build:native
@@ -57,7 +57,7 @@ node bin/pi-switch.js tui
 **Troubleshooting GLIBC errors:**
 ```bash
 # If you see "GLIBC_X.XX not found", build from source:
-npm install -g @cokefenta/pi-switch --build-from-source
+npm install -g @heihei0299/pi-switch --build-from-source
 ```
 
 ---

@@ -2,8 +2,8 @@
 
 # pi-switch
 
-[![版本](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/user/pi-switch/releases)
-[![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/user/pi-switch/releases)
+[![版本](https://img.shields.io/badge/version-20260804.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -29,16 +29,16 @@
 
 ```bash
 # npm（推荐）
-npm install -g @cokefenta/pi-switch
+npm install -g @heihei0299/pi-switch
 
 # 或通过 pi 安装
-pi install npm:@cokefenta/pi-switch
+pi install npm:@heihei0299/pi-switch
 ```
 
 **从源码构建**（需要 Node.js >= 20, Rust 1.80+）：
 
 ```bash
-git clone https://github.com/user/pi-switch.git
+git clone https://github.com/heihei0299/pi-switch.git
 cd pi-switch
 npm install
 npm run build:native
@@ -57,7 +57,7 @@ node bin/pi-switch.js tui
 **GLIBC 错误排查：**
 ```bash
 # 如果看到 "GLIBC_X.XX not found" 错误，可从源码构建：
-npm install -g @cokefenta/pi-switch --build-from-source
+npm install -g @heihei0299/pi-switch --build-from-source
 ```
 
 ---
