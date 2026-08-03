@@ -206,7 +206,12 @@ async fn get_stats(Query(q): Query<HashMap<String, String>>) -> ApiJson {
         q.get("from").map(String::as_str),
         q.get("to").map(String::as_str),
     )?;
-    Ok(Json(service::stats_value(window)))
+    // Optional 0-based page / per-page limit for the recent-request details
+    // list; omitted values fall back to page 0 / limit 100 so old callers
+    // keep the previous behaviour.
+    let page = q.get("page").and_then(|s| s.parse::<usize>().ok());
+    let limit = q.get("limit").and_then(|s| s.parse::<usize>().ok());
+    Ok(Json(service::stats_value(window, page, limit)))
 }
 
 async fn get_proxy_status() -> ApiJson {
@@ -647,5 +652,20 @@ mod tests {
             let res = get(uri).await;
             assert_eq!(res.status(), StatusCode::OK, "{uri} should be 200");
         }
+    }
+
+    #[tokio::test]
+    async fn stats_response_includes_recent_request_total_field() {
+        let res = get("/api/stats?range=today&from=1785664800000&to=1785672000000&page=0&limit=50")
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let total = body.get("recentRequestTotal").expect("stats body must include recentRequestTotal");
+        assert!(total.is_u64() || total.is_i64(), "recentRequestTotal must be a number");
     }
 }

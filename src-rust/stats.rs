@@ -147,6 +147,8 @@ pub struct UsageStats {
     pub by_conversation: Vec<ConversationStats>,
     #[serde(rename = "recentRequests")]
     pub recent_requests: Vec<RecentRequest>,
+    #[serde(rename = "recentRequestTotal", default)]
+    pub recent_request_total: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -334,6 +336,22 @@ pub fn aggregate(
     now_ms: u64,
     window: Option<(u64, u64)>,
 ) -> UsageStats {
+    // Default view: first page, 100 rows (legacy behaviour).
+    aggregate_paged(entries, circuit, cooldown_ms, now_ms, window, 0, 100)
+}
+
+/// Aggregate request-log entries into usage stats, paging the recent-request
+/// details list. `page` is 0-based, `limit` is the per-page row count; the
+/// response always carries the full in-window row count as `recentRequestTotal`.
+pub fn aggregate_paged(
+    entries: &[RequestLogEntry],
+    circuit: &HashMap<String, CircuitBreakerEntry>,
+    cooldown_ms: u64,
+    now_ms: u64,
+    window: Option<(u64, u64)>,
+    page: usize,
+    limit: usize,
+) -> UsageStats {
     let circuit_breaker: HashMap<String, CircuitBreakerStatus> = circuit
         .iter()
         .map(|(name, entry)| {
@@ -361,6 +379,7 @@ pub fn aggregate(
         cost_unknown: 0,
         by_conversation: Vec::new(),
         recent_requests: Vec::new(),
+        recent_request_total: 0,
     };
 
     let mut total_ms: u64 = 0;
@@ -554,7 +573,15 @@ pub fn aggregate(
     stats
         .recent_requests
         .sort_by(|a, b| cmp_ts_desc(&a.ts, &b.ts));
-    stats.recent_requests.truncate(100);
+    let recent_request_total = stats.recent_requests.len();
+    let start = page.saturating_mul(limit);
+    stats.recent_requests = stats
+        .recent_requests
+        .into_iter()
+        .skip(start)
+        .take(limit)
+        .collect();
+    stats.recent_request_total = recent_request_total;
 
     stats
 }
@@ -595,8 +622,17 @@ pub fn parse_window_query(
 }
 
 pub fn get_stats(window: Option<(u64, u64)>) -> UsageStats {
-    let entries = parse_logs();
+    get_stats_paged(window, None, None)
+}
 
+/// Usage stats with paged recent-request details: `page` (0-based) and
+/// `limit` (rows per page) default to 0 and 100 when omitted.
+pub fn get_stats_paged(
+    window: Option<(u64, u64)>,
+    page: Option<usize>,
+    limit: Option<usize>,
+) -> UsageStats {
+    let entries = parse_logs();
     // Read circuit breaker state
     let circuit_entries = read_circuit_state();
     let cooldown_ms = 60_000; // Default 60 seconds
@@ -605,7 +641,7 @@ pub fn get_stats(window: Option<(u64, u64)>) -> UsageStats {
         .unwrap_or_default()
         .as_millis() as u64;
 
-    aggregate(&entries, &circuit_entries, cooldown_ms, now_ms, window)
+    aggregate_paged(&entries, &circuit_entries, cooldown_ms, now_ms, window, page.unwrap_or(0), limit.unwrap_or(100))
 }
 
 pub fn export_logs_json() -> crate::error::Result<String> {
@@ -1980,5 +2016,43 @@ mod tests {
     fn parse_window_query_rejects_inverted_window() {
         assert!(parse_window_query(Some("custom"), Some("2"), Some("1")).is_err());
         assert!(parse_window_query(Some("custom"), Some("5"), Some("5")).is_err());
+    }
+
+    #[test]
+    fn aggregate_paged_slices_recent_requests_and_reports_total() {
+        let entries: Vec<RequestLogEntry> = (0..250)
+            .map(|i| {
+                let ts = format!("2026-08-02T10:{:02}:{:02}Z", i / 60, i % 60);
+                entry(true, "hyb", "m1", 10, &ts)
+            })
+            .collect();
+        let circuit = HashMap::new();
+
+        let first = aggregate_paged(&entries, &circuit, 60_000, 0, None, 0, 50);
+        assert_eq!(first.recent_request_total, 250);
+        assert_eq!(first.recent_requests.len(), 50);
+        // Newest first: i=249 is the latest row.
+        assert_eq!(first.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:04:09Z"));
+
+        let last = aggregate_paged(&entries, &circuit, 60_000, 0, None, 4, 50);
+        assert_eq!(last.recent_requests.len(), 50);
+        assert_eq!(last.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:00:49Z"));
+
+        let beyond = aggregate_paged(&entries, &circuit, 60_000, 0, None, 5, 50);
+        assert_eq!(beyond.recent_requests.len(), 0);
+        assert_eq!(beyond.recent_request_total, 250);
+    }
+
+    #[test]
+    fn aggregate_defaults_to_first_hundred_recent_requests() {
+        let entries: Vec<RequestLogEntry> = (0..150)
+            .map(|i| {
+                let ts = format!("2026-08-02T10:{:02}:{:02}Z", i / 60, i % 60);
+                entry(true, "hyb", "m1", 10, &ts)
+            })
+            .collect();
+        let stats = aggregate(&entries, &HashMap::new(), 60_000, 0, None);
+        assert_eq!(stats.recent_request_total, 150);
+        assert_eq!(stats.recent_requests.len(), 100);
     }
 }
