@@ -394,6 +394,11 @@ pub(super) fn render_stats(frame: &mut Frame<'_>, app: &App, area: Rect) {
         i18n::stats_cache_hit_rate(),
         stats.cache_hit_rate.clone(),
     ));
+    overview_lines.push(label_line(
+        app,
+        i18n::stats_cost(),
+        format_cost(stats.total_cost),
+    ));
 
     let overview_block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -645,6 +650,27 @@ fn format_token_count(count: u64) -> String {
     format!("{scaled:.1}{}", UNITS[unit])
 }
 
+/// Cost display sharing the web UI rules: "$0.00" for explicit zero, four
+/// decimals (trailing zeros trimmed) under a dollar, two decimals up to
+/// $999.99, K/M suffixes beyond. `None` (unknown) renders "-".
+fn format_cost(cost: Option<f64>) -> String {
+    let Some(cost) = cost else {
+        return "-".to_string();
+    };
+    if cost == 0.0 {
+        return "$0.00".to_string();
+    }
+    if cost < 1.0 {
+        let fixed = format!("{cost:.4}");
+        let trimmed = fixed.trim_end_matches('0').trim_end_matches('.');
+        return format!("${trimmed}");
+    }
+    if cost < 1000.0 {
+        return format!("${cost:.2}");
+    }
+    format!("${}", format_token_count(cost as u64))
+}
+
 /// Value shown for the cumulative-token line of the stats view. Renders
 /// "-" when there is no token data at all, otherwise a readable
 /// "12.3K input / 678 output" summary. The input/output words are injected
@@ -662,7 +688,7 @@ fn token_summary(total: &TokenTotals, input_word: &str, output_word: &str) -> St
 
 #[cfg(test)]
 mod tests {
-    use super::{format_token_count, token_summary};
+    use super::{format_cost, format_token_count, token_summary};
     use crate::stats::TokenTotals;
 
     fn totals(input: u64, output: u64) -> TokenTotals {
@@ -731,8 +757,22 @@ mod tests {
             "1.2K 输入 / 567 输出"
         );
     }
-}
 
+    #[test]
+    fn format_cost_renders_adaptive_precision() {
+        assert_eq!(format_cost(None), "-");
+        assert_eq!(format_cost(Some(0.0)), "$0.00");
+        assert_eq!(format_cost(Some(0.0042)), "$0.0042");
+        assert_eq!(format_cost(Some(12.34)), "$12.34");
+        assert_eq!(format_cost(Some(1234.0)), "$1.2K");
+    }
+
+    #[test]
+    fn format_cost_trims_sub_dollar_trailing_zeros() {
+        assert_eq!(format_cost(Some(0.1)), "$0.1");
+        assert_eq!(format_cost(Some(0.00420)), "$0.0042");
+    }
+}
 pub(super) fn render_failover_editor(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let theme = &app.theme;
     let block = content_block(app, if i18n::is_zh() {

@@ -142,6 +142,41 @@ describe("StatsPanel", () => {
     expect(screen.queryByText(/By conversation/)).not.toBeInTheDocument();
   });
 
+  it("renders the total cost card with an unknown hint", async () => {
+    statsMock.mockResolvedValue({ ...fullStats(), totalCost: 12.34, costUnknown: 2 });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
+    expect(screen.getByText("Cost")).toBeInTheDocument();
+    expect(screen.getByText(/2 unknown/)).toBeInTheDocument();
+  });
+
+  it("renders a dash for the cost card when the total cost is unknown", async () => {
+    statsMock.mockResolvedValue({ ...fullStats(), totalCost: null, costUnknown: 10 });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("Cost")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+    expect(screen.getByText(/10 unknown/)).toBeInTheDocument();
+  });
+
+  it("keeps the cost card off the empty state", async () => {
+    statsMock.mockResolvedValue({
+      totalRequests: 0,
+      okRequests: 0,
+      failedRequests: 0,
+      successRate: "0%",
+      byProvider: {},
+      totalTokens: { input: 0, output: 0, total: 0 },
+      cacheHitRate: "-",
+      byConversation: [],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    expect(await screen.findByText(/No request data yet/)).toBeInTheDocument();
+    expect(screen.queryByText("Cost")).not.toBeInTheDocument();
+  });
+
+
   it("renders token cards, provider token column and conversation list with data", async () => {
     statsMock.mockResolvedValue(fullStats());
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
@@ -170,7 +205,76 @@ describe("StatsPanel", () => {
     expect(screen.getAllByText("4").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/By conversation/)).not.toBeInTheDocument();
   });
+  it("shows the cost per conversation and per request", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      totalCost: 0.75,
+      byConversation: [
+        {
+          conversationId: "conv-a",
+          requests: 2,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: "2026-08-02T10:00:00Z",
+          cacheRate: "0.0%",
+          cost: 0.75,
+        },
+        {
+          conversationId: "unlabeled",
+          requests: 1,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: null,
+          cacheRate: "-",
+          cost: null,
+        },
+      ],
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "m1",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 100,
+          completionTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 110,
+          cacheRate: "0.0%",
+          cost: 0.75,
+        },
+        {
+          ts: "2026-08-02T10:01:00Z",
+          provider: "hyb",
+          model: "m2",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: null,
+          completionTokens: null,
+          cachedTokens: null,
+          reasoningTokens: null,
+          totalTokens: null,
+          cacheRate: "-",
+          cost: null,
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
+    expect(await screen.findByText("Cost $0.75")).toBeInTheDocument();
+    expect(screen.getByText("Cost -")).toBeInTheDocument();
+
+    const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
+    expect(within(rows[1]).getByText("$0.75")).toBeInTheDocument();
+    expect(within(rows[2]).getAllByText("-").length).toBe(7);
+  });
   it("tolerates an old backend that omits the token fields", async () => {
     statsMock.mockResolvedValue({
       totalRequests: 2,
@@ -363,8 +467,8 @@ describe("StatsPanel", () => {
     const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
     expect(within(rows[1]).getByText("200")).toBeInTheDocument();
     expect(within(rows[1]).getByText("72.1%")).toBeInTheDocument();
-    expect(within(rows[2]).getAllByText("-").length).toBe(6);
-    expect(within(rows[3]).getAllByText("-").length).toBe(6);
+    expect(within(rows[2]).getAllByText("-").length).toBe(7);
+    expect(within(rows[3]).getAllByText("-").length).toBe(7);
   });
 
   it("shows input, output and cache rate per conversation alongside the existing dimensions", async () => {
@@ -620,5 +724,88 @@ describe("StatsPanel", () => {
     fireEvent.change(screen.getByLabelText("From"), { target: { value: "" } });
     expect(screen.getByText("Select both start and end dates")).toBeInTheDocument();
     expect(statsMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "" } });
+    expect(screen.getByText("Select both start and end dates")).toBeInTheDocument();
+    expect(statsMock).not.toHaveBeenCalled();
+  });
+
+  it("offers the four auto-refresh tiers with Off selected by default", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    const select = screen.getByLabelText(/Auto-refresh/) as HTMLSelectElement;
+    expect(select.value).toBe("off");
+    const labels = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+    expect(labels).toEqual(["Off", "5s", "30s", "5min"]);
+  });
+
+  it("auto-refreshes on the selected interval reusing the current window", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText(/Auto-refresh/), { target: { value: "5000" } });
+    statsMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statsMock).toHaveBeenLastCalledWith(
+      "today",
+      new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
+      expect.any(Number),
+    );
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(statsMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("stops polling when switched back to Off", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    vi.useFakeTimers();
+    const select = screen.getByLabelText(/Auto-refresh/);
+    fireEvent.change(select, { target: { value: "5000" } });
+    await vi.advanceTimersByTimeAsync(5000);
+    statsMock.mockClear();
+
+    fireEvent.change(select, { target: { value: "off" } });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(statsMock).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("keeps the current data when an auto-refresh fails", async () => {
+    statsMock.mockResolvedValueOnce(fullStats());
+    statsMock.mockRejectedValueOnce(new Error("boom"));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText(/Auto-refresh/), { target: { value: "5000" } });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(screen.getByText("363.5K")).toBeInTheDocument();
+    expect(screen.queryByText(/No request data yet/)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("clears the timer on unmount", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    const { unmount } = render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText(/Auto-refresh/), { target: { value: "5000" } });
+    statsMock.mockClear();
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(statsMock).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

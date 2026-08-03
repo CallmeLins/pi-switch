@@ -186,6 +186,7 @@ pub fn stats_retries_skipped() -> &'static str { t!("Retries / skipped", "重试
 pub fn stats_by_provider() -> &'static str { t!("  By provider", "  按供应商") }
 pub fn stats_by_model() -> &'static str { t!("  By model", "  按模型") }
 pub fn stats_tokens() -> &'static str { t!("Tokens", "Token 总量") }
+pub fn stats_cost() -> &'static str { t!("Cost", "消费") }
 pub fn stats_cache_hit_rate() -> &'static str { t!("Cache hit rate", "缓存命中率") }
 pub fn stats_input() -> &'static str { t!("input", "输入") }
 pub fn stats_output() -> &'static str { t!("output", "输出") }
