@@ -13,3 +13,12 @@ pi-session-*.html
 webui/node_modules/
 webui/dist/*
 !webui/dist/.gitkeep
+
+# agent tooling config & local caches
+.mcp.json
+opencode.jsonc
+.claude/
+.opencode/
+.codegraph/
+.cortexkit/
+.agents/
