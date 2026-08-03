@@ -985,13 +985,16 @@ fn conversation_id_of(headers: &HeaderMap, body: &Value) -> Option<String> {
 
 /// The conversation display name from the `x-conversation-name` request
 /// header. Header-only source (no body fallback); empty values are ignored.
-/// The name is a display attribute only — it never participates in
-/// conversation-boundary detection (ADR-0002).
+/// Control characters (tab/newline — legal tab may survive HTTP parsing) are
+/// collapsed to spaces so the name stays clean in logs/exports. The name is a
+/// display attribute only — it never participates in conversation-boundary
+/// detection (ADR-0002).
 fn conversation_name_of(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-conversation-name")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(|s| s.replace(['\r', '\n', '\t'], " "))
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
@@ -2048,6 +2051,28 @@ mod tests {
             None,
             "missing header -> None"
         );
+    }
+
+    #[test]
+    fn conversation_name_collapses_control_characters() {
+        // HTAB is legal in header values; it must not reach the log/display.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-name",
+            HeaderValue::from_bytes(b"my\tchat").unwrap(),
+        );
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("my chat".to_string())
+        );
+
+        // Values that are only whitespace/control characters resolve to None.
+        let mut blank = HeaderMap::new();
+        blank.insert(
+            "x-conversation-name",
+            HeaderValue::from_bytes(b" \t ").unwrap(),
+        );
+        assert_eq!(super::conversation_name_of(&blank), None);
     }
 
     #[test]

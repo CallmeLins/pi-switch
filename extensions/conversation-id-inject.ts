@@ -40,13 +40,93 @@ export type ProviderHeadersEvent = { headers: RequestHeaders };
  * concrete shape (not a generic) so the wiring stays trivially typed while
  * remaining decoupled from the full pi ExtensionContext.
  */
+/**
+ * The minimal session-manager surface this extension reads. Defined as a
+ * concrete shape (not a generic) so the wiring stays trivially typed while
+ * remaining decoupled from the full pi ExtensionContext.
+ */
 export type SessionIdProvider = {
   sessionManager: {
     getSessionId(): string | undefined;
     getSessionName(): string | undefined;
+    getEntries(): SessionEntry[];
   };
 };
 
+/**
+ * Loose shape of a session entry (pi's `AgentMessage`). Only the fields this
+ * extension reads are typed, so it stays decoupled from pi internals.
+ */
+export type SessionEntryContent = string | Array<{ type?: string; text?: string }>;
+export type SessionEntry = {
+  role?: string;
+  content?: SessionEntryContent;
+};
+
+export const TITLE_MAX_LEN = 60;
+
+/**
+ * Extract the text of a session entry's content: plain strings pass through;
+ * block arrays contribute every `text` block (image/thinking/toolCall blocks
+ * are ignored).
+ */
+function textOf(content: SessionEntryContent | undefined): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (b): b is { type: string; text: string } =>
+          b?.type === "text" && typeof b.text === "string",
+      )
+      .map((b) => b.text)
+      .join(" ");
+  }
+  return "";
+}
+
+/**
+ * Text of the first non-empty user message in a session, or `undefined` when
+ * there is none. The returned text is trimmed but not sanitized/truncated —
+ * callers decide how to present it.
+ */
+export function firstUserMessageText(entries: SessionEntry[]): string | undefined {
+  for (const entry of entries) {
+    if (entry?.role !== "user") {
+      continue;
+    }
+    const text = textOf(entry.content).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the conversation display name: an explicit non-blank name wins;
+ * otherwise fall back to the first user message as a readable title, with
+ * control characters collapsed to spaces and the result truncated to
+ * `TITLE_MAX_LEN`. Returns `undefined` when neither source yields text.
+ */
+export function resolveSessionName(
+  name: string | undefined,
+  entries: SessionEntry[],
+): string | undefined {
+  if (name != null && name.trim() !== "") {
+    return name;
+  }
+  const title = firstUserMessageText(entries);
+  if (!title) {
+    return undefined;
+  }
+  const sanitized = title.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.slice(0, TITLE_MAX_LEN);
+}
 export type SessionInfo = {
   id?: string;
   name?: string;
@@ -63,8 +143,9 @@ export function makeBeforeProviderHeadersHandler(
 ): (event: ProviderHeadersEvent, ctx: SessionIdProvider) => void {
   return (event, ctx) => {
     const { id, name } = getSession(ctx);
+    const sessionName = resolveSessionName(name, ctx.sessionManager.getEntries());
     Object.assign(event.headers, injectConversationId(event.headers, id));
-    Object.assign(event.headers, injectConversationName(event.headers, name));
+    Object.assign(event.headers, injectConversationName(event.headers, sessionName));
   };
 }
 
