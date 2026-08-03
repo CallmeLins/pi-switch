@@ -44,7 +44,7 @@ export function SettingsPanel({
               <option value="exclusive">exclusive</option>
             </Select>
           </Field>
-          <Field label="Language">
+          <Field label="Language (TUI only — WebUI is English)">
             <Select
               value={s.language ?? ""}
               onChange={(e) => set({ language: e.target.value || null })}

@@ -135,15 +135,16 @@ pub fn proxy_actions() -> [&'static str; 3] {
     ]
 }
 
-pub fn user_agent_presets() -> [&'static str; 3] {
-    ["Claude Code", "Codex", "Gemini"]
+pub fn user_agent_presets() -> [&'static str; 4] {
+    ["none", "Claude Code", "Codex", "Gemini"]
 }
 
 pub fn user_agent_preset_value(idx: usize) -> Option<&'static str> {
     match idx {
-        0 => Some("claude-code"),
-        1 => Some("codex"),
-        2 => Some("gemini"),
+        0 => None, // none: no disguise header
+        1 => Some("claude-code"),
+        2 => Some("codex"),
+        3 => Some("gemini"),
         _ => None,
     }
 }
@@ -160,11 +161,11 @@ fn stats_range_label(range: StatsRange) -> &'static str {
 
 impl App {
     pub fn new(data: UiData) -> Self {
-        // Detect User-Agent preset index
+        // Detect User-Agent preset index (0 = none)
         let user_agent_idx = match data.config.settings.proxy.user_agent.as_deref() {
-            Some("claude-code") => 0,
-            Some("codex") => 1,
-            Some("gemini") => 2,
+            Some("claude-code") => 1,
+            Some("codex") => 2,
+            Some("gemini") => 3,
             _ => 0,
         };
 

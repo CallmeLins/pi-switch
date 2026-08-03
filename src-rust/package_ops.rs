@@ -238,8 +238,8 @@ pub fn uninstall_package(id: &str) -> Result<Package> {
     // Sync to Pi Agent settings.json (stop pi from loading it)
     sync_packages_to_pi()?;
 
-    // Actually remove the installed files via `pi uninstall`
-    run_pi_uninstall(&pkg.spec)?;
+    // Best-effort file removal — see uninstall_and_remove comment.
+    let _ = run_pi_uninstall(&pkg.spec);
 
     Ok(pkg)
 }
@@ -343,8 +343,11 @@ pub fn uninstall_and_remove(id: &str) -> Result<()> {
         p.updated_at = Some(chrono::Utc::now().timestamp());
         db.update_package(&p)?;
         sync_packages_to_pi()?;
-        // Actually remove the installed files via `pi uninstall`
-        run_pi_uninstall(&pkg.spec)?;
+        // Best-effort file removal: settings.json is already synced so the
+        // package is unloaded from pi either way. A failure here (e.g. pi
+        // reports "no matching package") just means leftover files — the
+        // uninstall itself is still effective, so don't block on it.
+        let _ = run_pi_uninstall(&pkg.spec);
     }
 
     db.delete_package(id)?;
