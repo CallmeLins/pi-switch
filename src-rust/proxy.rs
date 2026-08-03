@@ -1564,6 +1564,10 @@ async fn forward_anthropic_with_failover(
 
 // ─── Request logging ──────────────────────────────────────
 
+/// Model unit prices are per 1M tokens (industry convention); the token
+/// product in `compute_cost` is scaled down by this factor.
+const COST_PER_MILLION_TOKENS: f64 = 1_000_000.0;
+
 /// Build the JSON object written to `requests.log` for one proxied request.
 /// Look up a model's unit prices in its provider profile (already parsed at
 /// the call site, so prices are frozen at request time). `None` (unknown
@@ -1581,7 +1585,8 @@ fn lookup_model_cost(
 
 /// Estimate the cost of a request from its token usage and the model's
 /// price; `cache_write` has no token data and never enters. Tiered pricing
-/// is handled through `ModelCost::tiers`.
+/// is handled through `ModelCost::tiers`. Unit prices are per 1M tokens
+/// (industry convention), so the token product is scaled down accordingly.
 fn compute_cost(usage: &crate::usage::UsageSummary, cost: &crate::config::ModelCost) -> f64 {
     // Pick the highest tier whose input threshold the request's prompt tokens
     // meet; fall back to the base prices otherwise.
@@ -1595,9 +1600,10 @@ fn compute_cost(usage: &crate::usage::UsageSummary, cost: &crate::config::ModelC
         None => (cost.input, cost.output, cost.cache_read),
     };
     let uncached = usage.prompt_tokens.saturating_sub(usage.cached_tokens) as f64;
-    uncached * input
+    (uncached * input
         + usage.cached_tokens as f64 * cache_read
-        + usage.completion_tokens as f64 * output
+        + usage.completion_tokens as f64 * output)
+        / COST_PER_MILLION_TOKENS
 }
 
 /// Build the JSON object written to `requests.log` for one proxied request.
@@ -2119,7 +2125,7 @@ mod tests {
             cost: Some(cost),
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
-        assert_eq!(entry["costTotal"], 250.0, "costTotal is written when price is known");
+        assert_eq!(entry["costTotal"], 0.00025, "costTotal is written with per-1M-token prices");
     }
 
     #[test]
@@ -2344,7 +2350,7 @@ mod tests {
             extra: Default::default(),
         };
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 250.0, "(200-120)*2 + 120*0.5 + 30*1");
+        assert_eq!(total, 0.00025, "(200-120)*2 + 120*0.5 + 30*1, per 1M tokens") ;
     }
     #[test]
     fn compute_cost_uses_tier_price_when_input_tokens_reach_threshold() {
@@ -2370,9 +2376,9 @@ mod tests {
             extra: Default::default(),
         };
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 85.0, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5");
+        assert_eq!(total, 0.000085, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens");
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 85.0, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5");
+        assert_eq!(total, 0.000085, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens");
     }
 
     #[test]
