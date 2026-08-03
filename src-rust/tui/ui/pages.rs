@@ -945,7 +945,13 @@ mod tests {
     #[test]
     fn token_summary_renders_input_and_output() {
         assert_eq!(
-            token_summary(&totals(12_345, 678), "input", "output", "cached", "reasoning"),
+            token_summary(
+                &totals(12_345, 678),
+                "input",
+                "output",
+                "cached",
+                "reasoning"
+            ),
             "12.3K input / 678 output · 0 cached / 0 reasoning"
         );
     }

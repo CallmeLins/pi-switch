@@ -1275,9 +1275,8 @@ mod tests {
 
     #[test]
     fn parse_entries_reads_reasoning_tokens_field() {
-        let text = concat!(
-            "{\"ok\":true,\"provider\":\"hyb\",\"promptTokens\":100,\"completionTokens\":50,\"cachedTokens\":40,\"reasoningTokens\":20}\n",
-        );
+        let text =
+            "{\"ok\":true,\"provider\":\"hyb\",\"promptTokens\":100,\"completionTokens\":50,\"cachedTokens\":40,\"reasoningTokens\":20}\n";
         let entries = parse_entries(text);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].reasoning_tokens, Some(20));
