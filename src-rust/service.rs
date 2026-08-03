@@ -181,6 +181,6 @@ pub fn run_doctor() -> Vec<DoctorCheck> {
 // ─── Stats ────────────────────────────────────────────────
 
 /// Usage stats as JSON (request counts, per-provider/model breakdown, circuit state).
-pub fn stats_value() -> Value {
-    serde_json::to_value(crate::stats::get_stats()).unwrap_or_else(|_| json!({}))
+pub fn stats_value(window: Option<(u64, u64)>) -> Value {
+    serde_json::to_value(crate::stats::get_stats(window)).unwrap_or_else(|_| json!({}))
 }

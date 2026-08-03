@@ -1,5 +1,6 @@
 //! Token usage extraction: pure functions that turn upstream responses into a
-//! normalized `UsageSummary` (prompt / completion / cached input tokens).
+//! normalized `UsageSummary` (prompt / completion / cached input / reasoning
+//! output tokens).
 //!
 //! No filesystem or network access — everything is a function of the JSON or
 //! SSE text fed in, so it is unit-testable in isolation.
@@ -8,17 +9,23 @@
 ///
 /// `cached_tokens` is the count of *cache-hit* input tokens only (the
 /// "cached input ÷ total input" cache-rate denominator never includes output).
+/// `reasoning_tokens` is the *subset of output tokens* spent on model thinking;
+/// totals never add it on top of `completion_tokens`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageSummary {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub cached_tokens: u64,
+    pub reasoning_tokens: u64,
 }
 
 /// Extract a `UsageSummary` from a complete response JSON.
 ///
-/// Cache fields are probed in order Anthropic > OpenAI standard > DeepSeek
-/// variant, taking the first that exists. Returns `None` when the response
+/// Cache fields are probed in order Anthropic > OpenAI standard > Responses >
+/// DeepSeek variant, taking the first that exists. Reasoning is probed as
+/// `completion_tokens_details.reasoning_tokens` (Chat Completions / DeepSeek)
+/// first, then `output_tokens_details.reasoning_tokens` (Responses API), and
+/// defaults to 0 when absent (e.g. Anthropic). Returns `None` when the response
 /// carries no usage object at all.
 pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
     let usage = value.get("usage")?;
@@ -39,7 +46,20 @@ pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
         })
         .or_else(|| {
             usage
-                .get("prompt_cache_hit_tokens")
+                .get("input_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(serde_json::Value::as_u64)
+        })
+        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(serde_json::Value::as_u64))
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(|d| d.get("reasoning_tokens"))
                 .and_then(serde_json::Value::as_u64)
         })
         .unwrap_or(0);
@@ -47,6 +67,7 @@ pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
         prompt_tokens: first_u64(&["input_tokens", "prompt_tokens"]),
         completion_tokens: first_u64(&["output_tokens", "completion_tokens"]),
         cached_tokens,
+        reasoning_tokens,
     })
 }
 
@@ -160,6 +181,7 @@ impl SseUsageParser {
                 prompt_tokens,
                 completion_tokens,
                 cached_tokens: self.anthropic_cached.unwrap_or(0),
+                reasoning_tokens: 0,
             }),
             _ => None,
         }
@@ -254,6 +276,81 @@ mod tests {
     }
 
     #[test]
+    fn extract_usage_reads_reasoning_from_chat_completions_details() {
+        let chat = json!({
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 30,
+                "prompt_tokens_details": { "cached_tokens": 120 },
+                "completion_tokens_details": { "reasoning_tokens": 20 },
+            },
+        });
+        let deepseek = json!({
+            "usage": {
+                "prompt_tokens": 300,
+                "completion_tokens": 40,
+                "prompt_cache_hit_tokens": 150,
+                "completion_tokens_details": { "reasoning_tokens": 25 },
+            },
+        });
+
+        let c = extract_usage(&chat).expect("chat completions style");
+        assert_eq!(
+            (c.prompt_tokens, c.completion_tokens, c.cached_tokens, c.reasoning_tokens),
+            (200, 30, 120, 20)
+        );
+
+        let d = extract_usage(&deepseek).expect("deepseek style");
+        assert_eq!(
+            (d.prompt_tokens, d.completion_tokens, d.cached_tokens, d.reasoning_tokens),
+            (300, 40, 150, 25)
+        );
+    }
+
+    #[test]
+    fn extract_usage_reads_reasoning_and_cached_from_responses_details() {
+        let responses = json!({
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_tokens_details": { "cached_tokens": 40 },
+                "output_tokens_details": { "reasoning_tokens": 15 },
+            },
+        });
+
+        let r = extract_usage(&responses).expect("responses style");
+        assert_eq!(
+            (r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.reasoning_tokens),
+            (100, 50, 40, 15)
+        );
+    }
+
+    #[test]
+    fn extract_usage_defaults_reasoning_to_zero_when_absent() {
+        let anthropic = json!({
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 40,
+            },
+        });
+        let plain_chat = json!({
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 30,
+                "prompt_tokens_details": { "cached_tokens": 120 },
+            },
+        });
+
+        let a = extract_usage(&anthropic).expect("anthropic style");
+        assert_eq!(a.reasoning_tokens, 0, "anthropic reports no reasoning");
+
+        let p = extract_usage(&plain_chat).expect("chat without details");
+        assert_eq!(p.reasoning_tokens, 0, "missing details default to zero");
+    }
+
+    #[test]
     fn extract_usage_handles_missing_or_malformed_usage() {
         assert_eq!(extract_usage(&json!({ "content": "no usage here" })), None);
         assert_eq!(extract_usage(&json!({ "usage": null })), None);
@@ -289,6 +386,7 @@ mod tests {
                 prompt_tokens: 200,
                 completion_tokens: 30,
                 cached_tokens: 120,
+                reasoning_tokens: 0,
             })
         );
     }
@@ -319,6 +417,27 @@ mod tests {
                 prompt_tokens: 100,
                 completion_tokens: 10,
                 cached_tokens: 50,
+                reasoning_tokens: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn sse_parser_extracts_reasoning_from_openai_usage_frame() {
+        let stream = concat!(
+            "data: {\"id\":\"chatcmpl-4\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-4\",\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":30,\"prompt_tokens_details\":{\"cached_tokens\":120},\"completion_tokens_details\":{\"reasoning_tokens\":20}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut parser = SseUsageParser::new();
+        parser.push(stream.as_bytes());
+        assert_eq!(
+            parser.finish(),
+            Some(UsageSummary {
+                prompt_tokens: 200,
+                completion_tokens: 30,
+                cached_tokens: 120,
+                reasoning_tokens: 20,
             })
         );
     }
@@ -354,6 +473,7 @@ mod tests {
                 prompt_tokens: 25,
                 completion_tokens: 13,
                 cached_tokens: 40,
+                reasoning_tokens: 0,
             })
         );
     }
@@ -396,6 +516,7 @@ mod tests {
                 prompt_tokens: 25,
                 completion_tokens: 13,
                 cached_tokens: 55,
+                reasoning_tokens: 0,
             })
         );
     }
@@ -411,6 +532,7 @@ mod tests {
             prompt_tokens: 200,
             completion_tokens: 30,
             cached_tokens: 120,
+            reasoning_tokens: 0,
         });
 
         let mut one_byte_at_a_time = SseUsageParser::new();
@@ -462,6 +584,7 @@ mod tests {
                 prompt_tokens: 200,
                 completion_tokens: 30,
                 cached_tokens: 120,
+                reasoning_tokens: 0,
             })
         );
     }
@@ -484,6 +607,7 @@ mod tests {
                 prompt_tokens: 25,
                 completion_tokens: 0,
                 cached_tokens: 40,
+                reasoning_tokens: 0,
             })
         );
     }

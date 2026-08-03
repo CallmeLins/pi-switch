@@ -1,31 +1,115 @@
-import { useEffect, useState } from "react";
-import type { AppState, UsageStats } from "../types";
+import { useEffect, useRef, useState } from "react";
+import type { AppState, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
-import { Button, Card, SectionTitle } from "./ui";
-import { formatTokenCount, formatTotalTokens, shortConversationId } from "../lib/format";
+import { Button, Card, Input, SectionTitle } from "./ui";
+import { formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
+import { computeStatsWindow, todayString } from "../lib/statsWindow";
+import type { StatsRange } from "../lib/statsWindow";
+
+const PRESETS: { key: StatsRange; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "last24h", label: "24h" },
+  { key: "last7d", label: "7d" },
+  { key: "custom", label: "Custom" },
+];
 
 export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> }) {
   const [stats, setStats] = useState<UsageStats | null>(null);
+  const [range, setRange] = useState<StatsRange>("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [customError, setCustomError] = useState<string | null>(null);
 
-  const load = async () => {
+  const seq = useRef(0);
+  const load = async (range: StatsRange, from: number, to: number) => {
+    const id = ++seq.current;
     try {
-      setStats(await api.stats());
+      const next = await api.stats(range, from, to);
+      if (id === seq.current) {
+        setStats(next);
+      }
     } catch {
-      setStats(null);
+      if (id === seq.current) {
+        setStats(null);
+      }
     }
   };
   useEffect(() => {
-    void load();
+    const { from, to } = computeStatsWindow("today", null, null);
+    void load("today", from, to);
   }, []);
 
+  const select = (key: StatsRange) => {
+    setRange(key);
+    if (key === "custom") {
+      const from = customFrom || todayString();
+      const to = customTo || todayString();
+      if (customFrom && customTo && to < from) {
+        setCustomError("End must be on or after start");
+        return;
+      }
+      setCustomFrom(from);
+      setCustomTo(to);
+      const { from: f, to: t } = computeStatsWindow("custom", from, to);
+      void load("custom", f, t);
+    } else {
+      setCustomError(null);
+      const { from, to } = computeStatsWindow(key, null, null);
+      void load(key, from, to);
+    }
+  };
+
+  const onCustomDate =
+    (which: "from" | "to") => (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value;
+      const from = which === "from" ? value : customFrom;
+      const to = which === "to" ? value : customTo;
+      if (which === "from") {
+        setCustomFrom(value);
+      } else {
+        setCustomTo(value);
+      }
+      if (!from || !to) {
+        setCustomError("Select both start and end dates");
+      } else if (to < from) {
+        setCustomError("End must be on or after start");
+      } else {
+        setCustomError(null);
+        const { from: f, to: t } = computeStatsWindow("custom", from, to);
+        void load("custom", f, t);
+      }
+    };
+
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
+  const totals = stats?.totalTokens;
 
   return (
     <div>
       <SectionTitle hint="proxy request usage">Stats</SectionTitle>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {PRESETS.map(({ key, label }) => (
+          <Button
+            key={key}
+            variant={range === key ? "primary" : "subtle"}
+            aria-pressed={range === key}
+            onClick={() => select(key)}
+          >
+            {label}
+          </Button>
+        ))}
+        {range === "custom" && (
+          <span className="flex items-center gap-2">
+            <Input type="date" aria-label="From" value={customFrom} onChange={onCustomDate("from")} />
+            <span className="text-xs text-zinc-500">→</span>
+            <Input type="date" aria-label="To" value={customTo} onChange={onCustomDate("to")} />
+            {customError && <span className="text-xs text-red-300">{customError}</span>}
+          </span>
+        )}
+      </div>
+
       <div className="mb-3 flex gap-2">
-        <Button onClick={() => void load()}>Refresh</Button>
+        <Button onClick={() => select(range)}>Refresh</Button>
         <a href={logsExportUrl("json")} className="inline-flex">
           <Button>Export JSON</Button>
         </a>
@@ -42,13 +126,23 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         </Card>
       ) : (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
             <Metric label="Total" value={stats.totalRequests} />
             <Metric label="OK" value={stats.okRequests} tone="green" />
             <Metric label="Failed" value={stats.failedRequests} tone="red" />
             <Metric label="Success" value={stats.successRate} />
-            <Metric label="Tokens" value={formatTotalTokens(stats.totalTokens)} />
             <Metric label="Cache 率" value={stats.cacheHitRate ?? "-"} />
+          </div>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+            <Metric label="Input" value={formatTokenDimension(totals?.input)} />
+            <Metric label="Output" value={formatTokenDimension(totals?.output)} />
+            <Metric label="Cached" value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
+            <Metric
+              label="Reasoning"
+              value={formatTokenDimension(totals?.reasoning)}
+              badge="⊆ Output"
+            />
+            <Metric label="Total" value={formatTotalTokens(totals)} />
           </div>
           {stats.avgLatencyMs != null && (
             <div className="mb-4 text-sm text-zinc-400">
@@ -94,19 +188,82 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
               <div className="mb-2 text-sm font-semibold text-zinc-200">By conversation</div>
               <div className="divide-y divide-white/5">
                 {stats.byConversation.map((c) => (
-                  <div
-                    key={c.conversationId}
-                    className="flex items-center justify-between gap-3 py-1.5 text-sm"
-                  >
-                    <span className="truncate text-zinc-200">
-                      {shortConversationId(c.conversationId)}
-                    </span>
-                    <span className="text-zinc-500">{c.requests} requests</span>
-                    <span className="text-zinc-400">
-                      {formatTokenCount(c.inputTokens + c.outputTokens)}
-                    </span>
+                  <div key={c.conversationId} className="py-1.5 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate text-zinc-200">
+                        {shortConversationId(c.conversationId)}
+                      </span>
+                      <span className="text-zinc-500">{c.requests} requests</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
+                      <span>Input {formatTokenDimension(c.inputTokens)}</span>
+                      <span>Output {formatTokenDimension(c.outputTokens)}</span>
+                      <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
+                      <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
+                      <span>Rate {c.cacheRate ?? "-"}</span>
+                      <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
+                    </div>
                   </div>
                 ))}
+              </div>
+            </Card>
+          ) : null}
+
+          {stats.recentRequests?.length ? (
+            <Card className="mt-4">
+              <div className="mb-2 text-sm font-semibold text-zinc-200">Request details</div>
+              <div className="overflow-x-auto">
+                <table aria-label="Request details" className="w-full text-sm">
+                  <thead className="text-left text-xs text-zinc-500">
+                    <tr>
+                      <th className="pb-1 pr-2">Time</th>
+                      <th className="pb-1 pr-2">Provider</th>
+                      <th className="pb-1 pr-2">Model</th>
+                      <th className="pb-1 pr-2">Status</th>
+                      <th className="pb-1 pr-2 text-right">Input</th>
+                      <th className="pb-1 pr-2 text-right">Output</th>
+                      <th className="pb-1 pr-2 text-right">Cached</th>
+                      <th className="pb-1 pr-2 text-right">Reasoning</th>
+                      <th className="pb-1 pr-2 text-right">Rate</th>
+                      <th className="pb-1 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.recentRequests.map((r, i) => {
+                      const status = formatRequestStatus(r);
+                      const tokenCols = [
+                        ["Input", formatRequestToken(r.promptTokens)],
+                        ["Output", formatRequestToken(r.completionTokens)],
+                        ["Cached", formatRequestToken(r.cachedTokens)],
+                        ["Reasoning", formatRequestToken(r.reasoningTokens)],
+                        ["Rate", r.cacheRate ?? "-"],
+                        ["Total", formatRequestToken(r.totalTokens)],
+                      ] as const;
+                      return (
+                        <tr
+                          key={`${r.ts ?? ""}-${r.model ?? ""}-${i}`}
+                          className="border-t border-white/5"
+                        >
+                          <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
+                            {formatRequestTime(r.ts)}
+                          </td>
+                          <td className="py-1 pr-2 text-zinc-300">{r.provider ?? "-"}</td>
+                          <td className="py-1 pr-2 text-zinc-300">{r.model ?? "-"}</td>
+                          <td className="py-1 pr-2 text-zinc-400">
+                            <span className="block max-w-[14rem] truncate" title={status}>
+                              {status}
+                            </span>
+                          </td>
+                          {tokenCols.map(([label, value]) => (
+                            <td key={label} className="py-1 pr-2 text-right text-zinc-400">
+                              {value}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Card>
           ) : null}
@@ -120,16 +277,21 @@ function Metric({
   label,
   value,
   tone = "zinc",
+  badge,
 }: {
   label: string;
   value: string | number;
   tone?: "zinc" | "green" | "red";
+  badge?: string;
 }) {
   const color =
     tone === "green" ? "text-emerald-300" : tone === "red" ? "text-red-300" : "text-zinc-100";
   return (
     <Card className="py-3">
-      <div className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-zinc-500">
+        {label}
+        {badge && <span className="ml-1 text-[9px] normal-case text-zinc-600">{badge}</span>}
+      </div>
       <div className={"mt-1 text-xl font-semibold " + color}>{value}</div>
     </Card>
   );
@@ -140,4 +302,12 @@ function formatProviderTokens(tokens: number): string {
     return "-";
   }
   return formatTokenCount(tokens);
+}
+
+function formatRequestStatus(r: RecentRequest): string {
+  if (r.ok) {
+    return r.status != null ? String(r.status) : "ok";
+  }
+  const parts = [r.status != null ? String(r.status) : null, r.error ?? null].filter(Boolean);
+  return parts.join(" ") || "failed";
 }

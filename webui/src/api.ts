@@ -11,6 +11,7 @@ import type {
   UsageStats,
   ValidationIssue,
 } from "./types";
+import type { StatsRange } from "./lib/statsWindow";
 
 // Single point of coupling to the backend. Every call maps to one REST route in
 // src-rust/web.rs, which in turn delegates to the shared ops/service layer.
@@ -39,7 +40,8 @@ export const api = {
   doctor: () => req<DoctorCheck[]>("GET", "/doctor"),
   validate: () => req<ValidationIssue[]>("GET", "/config/validate"),
   backups: () => req<string[]>("GET", "/backups"),
-  stats: () => req<UsageStats>("GET", "/stats"),
+  stats: (range: StatsRange, from: number, to: number) =>
+    req<UsageStats>("GET", `/stats?range=${range}&from=${from}&to=${to}`),
   proxyStatus: () => req<DaemonResult>("GET", "/proxy/status"),
   webuiInfo: () => req<{ authRequired: boolean }>("GET", "/webui/info"),
 

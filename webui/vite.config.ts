@@ -25,5 +25,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
+    env: {
+      // Fixed timezone so DST-aware window tests are deterministic.
+      TZ: "America/New_York",
+    },
   },
 });

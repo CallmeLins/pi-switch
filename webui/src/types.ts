@@ -1,5 +1,6 @@
-// Type mirror of the Rust config structs in `src-rust/config.rs`.
-// That file is the source of truth — keep these in sync when it changes.
+// Type mirror of the Rust config and stats structs in `src-rust/`.
+// `src-rust/config.rs` and `src-rust/stats.rs` are the source of truth —
+// keep these in sync when they change.
 // (Future option noted in WEBUI_GUIDE.md: auto-generate via typeshare/ts-rs.)
 
 export interface ModelCost {
@@ -129,6 +130,8 @@ export interface TokenTotals {
   input: number;
   output: number;
   total: number;
+  cached: number;
+  reasoning: number;
 }
 
 export interface ProviderStats {
@@ -142,6 +145,7 @@ export interface ProviderStats {
   promptTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  reasoningTokens: number;
 }
 
 export interface ConversationStats {
@@ -149,7 +153,25 @@ export interface ConversationStats {
   requests: number;
   inputTokens: number;
   outputTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
   lastActive?: string;
+  cacheRate?: string;
+}
+
+export interface RecentRequest {
+  ts?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  ok?: boolean | null;
+  status?: number | null;
+  error?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  cachedTokens?: number | null;
+  reasoningTokens?: number | null;
+  totalTokens?: number | null;
+  cacheRate?: string;
 }
 
 export interface UsageStats {
@@ -163,6 +185,7 @@ export interface UsageStats {
   totalTokens?: TokenTotals;
   cacheHitRate?: string;
   byConversation?: ConversationStats[];
+  recentRequests?: RecentRequest[];
   [key: string]: unknown;
 }
 

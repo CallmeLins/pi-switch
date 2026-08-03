@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatTokenCount, formatTotalTokens, shortConversationId } from "./format";
+import {
+  formatRequestTime,
+  formatRequestToken,
+  formatTokenCount,
+  formatTokenDimension,
+  formatTotalTokens,
+  shortConversationId,
+} from "./format";
 import type { TokenTotals } from "../types";
 
 describe("formatTokenCount", () => {
@@ -30,17 +37,75 @@ describe("formatTokenCount", () => {
 
 describe("formatTotalTokens", () => {
   it("renders cumulative input+output readably", () => {
-    const totals: TokenTotals = { input: 12_300_000, output: 45_678, total: 12_345_678 };
+    const totals: TokenTotals = {
+      input: 12_300_000,
+      output: 45_678,
+      total: 12_345_678,
+      cached: 1_000_000,
+      reasoning: 10_000,
+    };
     expect(formatTotalTokens(totals)).toBe("12.3M");
   });
 
   it("renders a dash when there is no token data at all", () => {
-    const totals: TokenTotals = { input: 0, output: 0, total: 0 };
+    const totals: TokenTotals = { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 };
     expect(formatTotalTokens(totals)).toBe("-");
   });
 
   it("renders a dash when the old backend omits the field", () => {
     expect(formatTotalTokens(undefined)).toBe("-");
+  });
+});
+
+describe("formatTokenDimension", () => {
+  it("renders a count readably with the same suffixes as totals", () => {
+    expect(formatTokenDimension(999)).toBe("999");
+    expect(formatTokenDimension(12_345)).toBe("12.3K");
+    expect(formatTokenDimension(12_345_678)).toBe("12.3M");
+  });
+
+  it("renders a dash when the dimension is zero", () => {
+    expect(formatTokenDimension(0)).toBe("-");
+  });
+
+  it("renders a dash when the dimension is missing", () => {
+    expect(formatTokenDimension(undefined)).toBe("-");
+  });
+});
+
+describe("formatRequestToken", () => {
+  it("renders a count readably with the same suffixes as totals", () => {
+    expect(formatRequestToken(999)).toBe("999");
+    expect(formatRequestToken(12_345)).toBe("12.3K");
+    expect(formatRequestToken(0)).toBe("0");
+  });
+
+  it("renders a dash only when the token count is missing", () => {
+    expect(formatRequestToken(null)).toBe("-");
+    expect(formatRequestToken(undefined)).toBe("-");
+  });
+});
+
+describe("formatRequestTime", () => {
+  it("renders a dash when the timestamp is missing", () => {
+    expect(formatRequestTime(undefined)).toBe("-");
+    expect(formatRequestTime(null)).toBe("-");
+  });
+
+  it("renders a dash for an unparseable timestamp", () => {
+    expect(formatRequestTime("not-a-date")).toBe("-");
+  });
+
+  it("formats a valid timestamp as local HH:MM:SS", () => {
+    const ts = "2026-08-02T10:00:00Z";
+    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    expect(formatRequestTime(ts)).toBe(expected);
+  });
+
+  it("keeps the seconds component", () => {
+    const ts = "2026-08-02T10:04:07Z";
+    const expected = new Date(ts).toLocaleTimeString("en-GB", { hour12: false });
+    expect(formatRequestTime(ts)).toBe(expected);
   });
 });
 

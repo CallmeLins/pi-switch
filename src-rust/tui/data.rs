@@ -142,7 +142,7 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
 impl UiData {
     pub fn load() -> Self {
         let config = load_config().unwrap_or_default();
-        let stats = get_stats();
+        let stats = get_stats(None);
         let profiles = profile_rows(&config, &stats);
         let packages = crate::package_ops::list_packages().unwrap_or_default();
         Self {
