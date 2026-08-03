@@ -26,6 +26,9 @@ pub struct RequestLogEntry {
     pub reasoning_tokens: Option<u64>,
     #[serde(rename = "conversationId", default)]
     pub conversation_id: Option<String>,
+    /// Conversation display name (header-only, ADR-0002 display attribute).
+    #[serde(rename = "conversationName", default)]
+    pub conversation_name: Option<String>,
     #[serde(rename = "costTotal", default)]
     pub cost_total: Option<f64>,
 }
@@ -65,6 +68,10 @@ pub struct TokenTotals {
 pub struct ConversationStats {
     #[serde(rename = "conversationId")]
     pub conversation_id: String,
+    /// Display name of the newest named row in the window; `None` when no
+    /// row carries a name. Display attribute only — never a grouping key
+    /// (ADR-0002).
+    pub name: Option<String>,
     pub requests: u64,
     #[serde(rename = "inputTokens")]
     pub input_tokens: u64,
@@ -406,6 +413,7 @@ pub fn aggregate(
             .to_string();
         let conv = conversations.entry(key.clone()).or_insert_with(|| ConversationStats {
             conversation_id: key.clone(),
+            name: None,
             requests: 0,
             input_tokens: 0,
             output_tokens: 0,
@@ -416,6 +424,11 @@ pub fn aggregate(
             cost: None,
         });
         conv.requests += 1;
+        // Name: newest named row in the window wins (log order is
+        // chronological). Never a grouping key — ADR-0002.
+        if let Some(name) = entry.conversation_name.as_deref().filter(|s| !s.is_empty()) {
+            conv.name = Some(name.to_string());
+        }
         if let Some(ts) = entry.ts.as_deref() {
             if conv.last_active.as_deref().is_none_or(|last| ts > last) {
                 conv.last_active = Some(ts.to_string());
@@ -672,6 +685,7 @@ mod tests {
             cached_tokens: None,
             reasoning_tokens: None,
             conversation_id: None,
+            conversation_name: None,
             cost_total: None,
         }
     }
@@ -835,6 +849,70 @@ mod tests {
         let with_cost = r#"{"ok":true,"costTotal":0.25}"#;
         let parsed: RequestLogEntry = serde_json::from_str(with_cost).unwrap();
         assert_eq!(parsed.cost_total, Some(0.25));
+    }
+
+    #[test]
+    fn request_log_entry_deserializes_legacy_rows_without_conversation_name() {
+        let legacy = r#"{"ts":"2026-08-02T10:00:00Z","ok":true,"provider":"hyb","model":"m1","conversationId":"conv-1"}"#;
+        let parsed: RequestLogEntry = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.conversation_name, None, "old rows parse with no name");
+
+        let named = r#"{"ok":true,"conversationName":"my-chat"}"#;
+        let parsed: RequestLogEntry = serde_json::from_str(named).unwrap();
+        assert_eq!(parsed.conversation_name.as_deref(), Some("my-chat"));
+    }
+
+    #[test]
+    fn aggregate_conversation_name_comes_from_newest_named_row() {
+        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        old.conversation_id = Some("conv-a".into());
+        old.conversation_name = Some("old-name".into());
+        let mut mid = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        mid.conversation_id = Some("conv-a".into());
+        mid.conversation_name = Some("new-name".into());
+        let mut latest = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+        latest.conversation_id = Some("conv-a".into());
+
+        let stats = aggregate(&[old, mid, latest], &HashMap::new(), 60_000, 0, None);
+        let conv_a = stats
+            .by_conversation
+            .iter()
+            .find(|c| c.conversation_id == "conv-a")
+            .unwrap();
+        assert_eq!(conv_a.name.as_deref(), Some("new-name"), "newest named row wins");
+
+        let mut unnamed = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"), 100, 10, 0);
+        unnamed.conversation_id = Some("conv-b".into());
+        let stats = aggregate(&[unnamed], &HashMap::new(), 60_000, 0, None);
+        let conv_b = stats
+            .by_conversation
+            .iter()
+            .find(|c| c.conversation_id == "conv-b")
+            .unwrap();
+        assert_eq!(conv_b.name, None, "no named rows -> null");
+    }
+
+    #[test]
+    fn aggregate_conversation_grouping_ignores_names() {
+        let mut a1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        a1.conversation_id = Some("conv-a".into());
+        a1.conversation_name = Some("shared-name".into());
+        let mut a2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        a2.conversation_id = Some("conv-a".into());
+        a2.conversation_name = Some("renamed".into());
+        let mut b = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+        b.conversation_id = Some("conv-b".into());
+        b.conversation_name = Some("shared-name".into());
+
+        let stats = aggregate(&[a1, a2, b], &HashMap::new(), 60_000, 0, None);
+        assert_eq!(stats.by_conversation.len(), 2, "name never merges or splits groups");
+        let conv_a = stats
+            .by_conversation
+            .iter()
+            .find(|c| c.conversation_id == "conv-a")
+            .unwrap();
+        assert_eq!(conv_a.requests, 2, "same id stays one group");
+        assert_eq!(conv_a.name.as_deref(), Some("renamed"));
     }
 
     #[test]

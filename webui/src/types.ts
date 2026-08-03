@@ -150,6 +150,7 @@ export interface ProviderStats {
 
 export interface ConversationStats {
   conversationId: string;
+  name?: string;
   requests: number;
   inputTokens: number;
   outputTokens: number;

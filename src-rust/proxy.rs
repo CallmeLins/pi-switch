@@ -989,6 +989,18 @@ fn conversation_id_of(headers: &HeaderMap, body: &Value) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// The conversation display name from the `x-conversation-name` request
+/// header. Header-only source (no body fallback); empty values are ignored.
+/// The name is a display attribute only — it never participates in
+/// conversation-boundary detection (ADR-0002).
+fn conversation_name_of(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-conversation-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 // ─── Response passthrough (streaming + header preservation) ─
 
 /// Wrap an upstream response stream: copy every chunk into an `SseUsageParser`
@@ -1081,6 +1093,9 @@ struct StreamLogFields {
     upstream_url: Option<String>,
     model: Option<String>,
     conversation_id: Option<String>,
+    /// Conversation display name (header-only; never part of boundary
+    /// detection, ADR-0002). Display attribute only.
+    conversation_name: Option<String>,
     /// The model's unit prices at request time (per-request config reload);
     /// `None` means the model has no configured price → cost is unknown.
     cost: Option<crate::config::ModelCost>,
@@ -1094,6 +1109,7 @@ impl StreamLogFields {
         upstream_url: &str,
         model: Option<&str>,
         conversation_id: Option<&str>,
+        conversation_name: Option<&str>,
     ) -> Self {
         Self {
             provider: provider.to_string(),
@@ -1103,6 +1119,7 @@ impl StreamLogFields {
             upstream_url: Some(upstream_url.to_string()),
             model: model.map(|s| s.to_string()),
             conversation_id: conversation_id.map(|s| s.to_string()),
+            conversation_name: conversation_name.map(|s| s.to_string()),
             cost: None,
         }
     }
@@ -1152,9 +1169,10 @@ async fn forward_with_failover(
     body: &Value,
     real_model: &str,
     target_path: &str,
-    _headers: &HeaderMap,
+    headers: &HeaderMap,
     conversation_id: Option<&str>,
 ) -> Result<Response> {
+    let conversation_name = conversation_name_of(headers);
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
     let global_spoof = config.settings.proxy.user_agent.as_deref();
@@ -1189,6 +1207,7 @@ async fn forward_with_failover(
                 None,
                 None,
                 conversation_id,
+                conversation_name.as_deref(),
                 None,
             )
             .await;
@@ -1208,6 +1227,7 @@ async fn forward_with_failover(
                     None,
                     None,
                     conversation_id,
+                    conversation_name.as_deref(),
                     None,
                 )
                 .await;
@@ -1268,6 +1288,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             usage,
                             conversation_id,
+                            conversation_name.as_deref(),
                             lookup_model_cost(&profile, real_model),
                         )
                         .await;
@@ -1291,6 +1312,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            conversation_name.as_deref(),
                             None,
                         )
                         .await;
@@ -1308,6 +1330,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            conversation_name.as_deref(),
                             None,
                         )
                         .await;
@@ -1329,6 +1352,7 @@ async fn forward_with_failover(
                         body.get("model").and_then(|v| v.as_str()),
                         None,
                         conversation_id,
+                        conversation_name.as_deref(),
                         None,
                     )
                     .await;
@@ -1365,6 +1389,7 @@ async fn forward_with_failover(
                             &url,
                             body.get("model").and_then(|v| v.as_str()),
                             conversation_id,
+                            conversation_name.as_deref(),
                         );
                         fields.cost = lookup_model_cost(&profile, real_model);
                         return Ok(stream_response(r, Some(fields)));
@@ -1387,6 +1412,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            conversation_name.as_deref(),
                             None,
                         )
                         .await;
@@ -1404,6 +1430,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            conversation_name.as_deref(),
                             None,
                         )
                         .await;
@@ -1422,6 +1449,7 @@ async fn forward_with_failover(
                         body.get("model").and_then(|v| v.as_str()),
                         None,
                         conversation_id,
+                        conversation_name.as_deref(),
                         None,
                     )
                     .await;
@@ -1440,9 +1468,10 @@ async fn forward_anthropic_with_failover(
     candidates: &[String],
     body: &Value,
     real_model: &str,
-    _headers: &HeaderMap,
+    headers: &HeaderMap,
     conversation_id: Option<&str>,
 ) -> Result<Response> {
+    let conversation_name = conversation_name_of(headers);
     let circuit_settings = &config.settings.proxy.circuit_breaker;
     let mut circuit_state = read_circuit_state().await;
     let global_spoof = config.settings.proxy.user_agent.as_deref();
@@ -1517,6 +1546,7 @@ async fn forward_anthropic_with_failover(
                         &url,
                         body.get("model").and_then(|v| v.as_str()),
                         conversation_id,
+                        conversation_name.as_deref(),
                     );
                     fields.cost = lookup_model_cost(&profile, real_model);
                     return Ok(stream_response(r, Some(fields)));
@@ -1531,6 +1561,7 @@ async fn forward_anthropic_with_failover(
                     body.get("model").and_then(|v| v.as_str()),
                     None,
                     conversation_id,
+                    conversation_name.as_deref(),
                     None,
                 )
                 .await;
@@ -1629,6 +1660,7 @@ fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageS
         "cachedTokens": usage.map(|u| u.cached_tokens),
         "reasoningTokens": usage.map(|u| u.reasoning_tokens),
         "conversationId": fields.conversation_id,
+        "conversationName": fields.conversation_name,
         "costTotal": cost_total,
     })
 }
@@ -1665,6 +1697,7 @@ async fn log_request(
     model: Option<&str>,
     usage: Option<crate::usage::UsageSummary>,
     conversation_id: Option<&str>,
+    conversation_name: Option<&str>,
     cost: Option<crate::config::ModelCost>,
 ) {
     let fields = StreamLogFields {
@@ -1675,6 +1708,7 @@ async fn log_request(
         upstream_url: upstream_url.map(|s| s.to_string()),
         model: model.map(|s| s.to_string()),
         conversation_id: conversation_id.map(|s| s.to_string()),
+        conversation_name: conversation_name.map(|s| s.to_string()),
         cost,
     };
     let entry = build_log_entry(&fields, usage.as_ref());
@@ -1997,6 +2031,46 @@ mod tests {
     }
 
     #[test]
+    fn conversation_name_reads_non_empty_header_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-name", HeaderValue::from_static("my-chat"));
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("my-chat".to_string())
+        );
+
+        let mut empty = HeaderMap::new();
+        empty.insert("x-conversation-name", HeaderValue::from_static(""));
+        assert_eq!(
+            super::conversation_name_of(&empty),
+            None,
+            "empty value ignored"
+        );
+
+        let absent = HeaderMap::new();
+        assert_eq!(
+            super::conversation_name_of(&absent),
+            None,
+            "missing header -> None"
+        );
+    }
+
+    #[test]
+    fn conversation_name_does_not_touch_conversation_id_detection() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-name", HeaderValue::from_static("my-chat"));
+        headers.insert("x-conversation-id", HeaderValue::from_static("conv-1"));
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("my-chat".to_string())
+        );
+        assert_eq!(
+            super::conversation_id_of(&headers, &serde_json::json!({})),
+            Some("conv-1".to_string())
+        );
+    }
+
+    #[test]
     fn conversation_id_returns_none_when_unavailable_or_malformed() {
         let headers = HeaderMap::new();
 
@@ -2036,6 +2110,7 @@ mod tests {
             upstream_url: Some("http://upstream/chat/completions".to_string()),
             model: Some("gpt-5.4".to_string()),
             conversation_id: Some("conv-1".to_string()),
+            conversation_name: None,
             cost: None,
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
@@ -2053,6 +2128,30 @@ mod tests {
     }
 
     #[test]
+    fn log_entry_includes_conversation_name_when_present() {
+        let fields = super::StreamLogFields {
+            provider: "hyb".to_string(),
+            ok: true,
+            error: None,
+            status: Some(200),
+            upstream_url: Some("http://upstream/chat/completions".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            conversation_id: Some("conv-1".to_string()),
+            conversation_name: Some("my-chat".to_string()),
+            cost: None,
+        };
+        let entry = super::build_log_entry(&fields, None);
+        assert_eq!(entry["conversationName"], "my-chat");
+
+        let unnamed = super::StreamLogFields {
+            conversation_name: None,
+            ..fields
+        };
+        let entry = super::build_log_entry(&unnamed, None);
+        assert_eq!(entry["conversationName"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn log_entry_leaves_token_fields_null_without_usage() {
         let fields = super::StreamLogFields {
             provider: "hyb".to_string(),
@@ -2062,6 +2161,7 @@ mod tests {
             upstream_url: None,
             model: None,
             conversation_id: None,
+            conversation_name: None,
             cost: None,
         };
         let entry = super::build_log_entry(&fields, None);
@@ -2088,6 +2188,7 @@ mod tests {
             "http://upstream",
             Some("gpt-5.4"),
             Some("conv-1"),
+            None,
         );
         let entry = super::build_log_entry(&fields, Some(&usage));
         let parsed: crate::stats::RequestLogEntry = serde_json::from_value(entry).unwrap();
@@ -2122,6 +2223,7 @@ mod tests {
             upstream_url: Some("http://upstream/chat/completions".to_string()),
             model: Some("gpt-5.4".to_string()),
             conversation_id: Some("conv-1".to_string()),
+            conversation_name: None,
             cost: Some(cost),
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
@@ -2144,6 +2246,7 @@ mod tests {
             upstream_url: None,
             model: Some("gpt-5.4".to_string()),
             conversation_id: None,
+            conversation_name: None,
             cost: None,
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
