@@ -972,15 +972,15 @@ fn filter_private_params(value: Value) -> Value {
 // ─── Conversation id ───────────────────────────────────────
 
 /// The client-supplied conversation identifier for a request: the
-/// `x-conversation-id` request header wins, the body `conversation_id`
-/// field is the fallback. Empty or non-string values are ignored.
+/// `x-conversation-id` request header wins, then `x-opencode-session`
+/// (sent by pi/open-code clients), and the body `conversation_id`
+/// field is the last fallback. Empty or non-string values are ignored.
 fn conversation_id_of(headers: &HeaderMap, body: &Value) -> Option<String> {
-    if let Some(value) = headers
-        .get("x-conversation-id")
-        .and_then(|v| v.to_str().ok())
-    {
-        if !value.is_empty() {
-            return Some(value.to_string());
+    for name in ["x-conversation-id", "x-opencode-session"] {
+        if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
         }
     }
     body.get("conversation_id")
@@ -1940,6 +1940,35 @@ mod tests {
         assert_eq!(
             super::conversation_id_of(&headers, &body),
             Some("conv-header".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_id_falls_back_to_opencode_session_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-opencode-session",
+            HeaderValue::from_static("019fc02b-session"),
+        );
+        let body = serde_json::json!({ "conversation_id": "conv-body" });
+        assert_eq!(
+            super::conversation_id_of(&headers, &body),
+            Some("019fc02b-session".to_string())
+        );
+
+        let mut both = HeaderMap::new();
+        both.insert(
+            "x-conversation-id",
+            HeaderValue::from_static("conv-header"),
+        );
+        both.insert(
+            "x-opencode-session",
+            HeaderValue::from_static("019fc02b-session"),
+        );
+        assert_eq!(
+            super::conversation_id_of(&both, &body),
+            Some("conv-header".to_string()),
+            "x-conversation-id still wins over x-opencode-session"
         );
     }
 

@@ -38,7 +38,7 @@
     "build:native:debug": "napi build --platform",
     "dev:webui": "npm --prefix webui run dev",
     "doctor": "node ./bin/pi-switch.js doctor",
-    "test": "node --test"
+    "test": "node --test \"extensions/**/*.test.ts\""
   },
   "keywords": [
     "pi",
@@ -48,12 +48,13 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/index.ts",
+      "./extensions/conversation-id-inject.ts"
     ]
   },
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=23.6"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.7.1"
