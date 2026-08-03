@@ -191,6 +191,7 @@ describe("StatsPanel", () => {
     expect(screen.getAllByText("13.5K").length).toBeGreaterThanOrEqual(1);
 
     expect(screen.getByText("By conversation")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
     expect(screen.getByText("conv-a1b2c3d…")).toBeInTheDocument();
     expect(screen.getByText("unlabeled")).toBeInTheDocument();
     expect(screen.getByText("3 requests")).toBeInTheDocument();
@@ -268,7 +269,9 @@ describe("StatsPanel", () => {
     });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
-    expect(await screen.findByText("Cost $0.75")).toBeInTheDocument();
+    await screen.findByText("363.5K");
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(screen.getByText("Cost $0.75")).toBeInTheDocument();
     expect(screen.getByText("Cost -")).toBeInTheDocument();
 
     const rows = within(screen.getByRole("table", { name: "Request details" })).getAllByRole("row");
@@ -320,8 +323,10 @@ describe("StatsPanel", () => {
   it("shows cache, reasoning and total columns per conversation", async () => {
     statsMock.mockResolvedValue(fullStats());
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
 
-    expect(await screen.findByText("Cached 200.0K")).toBeInTheDocument();
+    expect(screen.getByText("Cached 200.0K")).toBeInTheDocument();
     expect(screen.getByText("Reasoning 20.0K")).toBeInTheDocument();
     expect(screen.getByText("Total 350.0K")).toBeInTheDocument();
     expect(screen.getByText("Total 13.5K")).toBeInTheDocument();
@@ -356,6 +361,7 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect((await screen.findAllByText("1.5K")).length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
     expect(screen.getByText("Cached -")).toBeInTheDocument();
     expect(screen.getByText("Reasoning -")).toBeInTheDocument();
     expect(screen.getByText("Total 1.5K")).toBeInTheDocument();
@@ -509,7 +515,9 @@ describe("StatsPanel", () => {
     });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
-    expect(await screen.findByText("Input 312.3K")).toBeInTheDocument();
+    await screen.findByText("363.5K");
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(screen.getByText("Input 312.3K")).toBeInTheDocument();
     expect(screen.getByText("Output 51.2K")).toBeInTheDocument();
     expect(screen.getByText("Rate 64.1%")).toBeInTheDocument();
     expect(screen.getByText("Input 13.5K")).toBeInTheDocument();
@@ -535,6 +543,87 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
     await screen.findByText("363.5K");
     expect(screen.queryByText("Request details")).not.toBeInTheDocument();
+  });
+
+  it("renders request details above the conversation list", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "m1",
+          ok: true,
+          status: 200,
+          error: null,
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("Request details");
+
+    const details = screen.getByText("Request details");
+    const conv = screen.getByText("By conversation");
+    expect(details.compareDocumentPosition(conv) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("collapses conversations by default and toggles on header click", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+
+    expect(screen.queryByText("unlabeled")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /By conversation/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(screen.getByText("unlabeled")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /By conversation/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    expect(screen.queryByText("unlabeled")).not.toBeInTheDocument();
+  });
+
+  it("shows the conversation name and falls back to the truncated id", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      byConversation: [
+        {
+          conversationId: "conv-a1b2c3d4e5f6g7h8i9",
+          name: "My chat",
+          requests: 3,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: "2026-08-02T10:00:00Z",
+        },
+        {
+          conversationId: "conv-z9y8x7w6v5u4t3s2r1q0",
+          requests: 5,
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          lastActive: "2026-08-02T10:01:00Z",
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+
+    expect(screen.getByText("My chat")).toBeInTheDocument();
+    expect(screen.queryByText("conv-a1b2c3d…")).not.toBeInTheDocument();
+    const unnamed = screen.getByText("conv-z9y8x7w…");
+    expect(unnamed).toHaveAttribute("title", "conv-z9y8x7w6v5u4t3s2r1q0");
   });
 
   it("renders the four window presets with today selected by default", async () => {

@@ -28,6 +28,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
   const [customTo, setCustomTo] = useState("");
   const [customError, setCustomError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState<number | null>(null);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
 
   const seq = useRef(0);
   const load = useCallback(
@@ -235,33 +236,6 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
             </Card>
           )}
 
-          {stats.byConversation?.length ? (
-            <Card className="mt-4">
-              <div className="mb-2 text-sm font-semibold text-zinc-200">By conversation</div>
-              <div className="divide-y divide-white/5">
-                {stats.byConversation.map((c) => (
-                  <div key={c.conversationId} className="py-1.5 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="truncate text-zinc-200">
-                        {shortConversationId(c.conversationId)}
-                      </span>
-                      <span className="text-zinc-500">{c.requests} requests</span>
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
-                      <span>Input {formatTokenDimension(c.inputTokens)}</span>
-                      <span>Output {formatTokenDimension(c.outputTokens)}</span>
-                      <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
-                      <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
-                      <span>Rate {c.cacheRate ?? "-"}</span>
-                      <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
-                      <span>Cost {formatCost(c.cost)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          ) : null}
-
           {stats.recentRequests?.length ? (
             <Card className="mt-4">
               <div className="mb-2 text-sm font-semibold text-zinc-200">Request details</div>
@@ -320,6 +294,43 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   </tbody>
                 </table>
               </div>
+            </Card>
+          ) : null}
+
+          {stats.byConversation?.length ? (
+            <Card className="mt-4">
+              <button
+                type="button"
+                aria-expanded={conversationsOpen}
+                onClick={() => setConversationsOpen((v) => !v)}
+                className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
+              >
+                <span>By conversation</span>
+                <span className="text-zinc-500">{conversationsOpen ? "▾" : "▸"}</span>
+              </button>
+              {conversationsOpen && (
+                <div className="divide-y divide-white/5">
+                  {stats.byConversation.map((c) => (
+                    <div key={c.conversationId} className="py-1.5 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-zinc-200" title={c.conversationId}>
+                          {c.name || shortConversationId(c.conversationId)}
+                        </span>
+                        <span className="text-zinc-500">{c.requests} requests</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-400">
+                        <span>Input {formatTokenDimension(c.inputTokens)}</span>
+                        <span>Output {formatTokenDimension(c.outputTokens)}</span>
+                        <span>Cached {formatTokenDimension(c.cachedTokens)}</span>
+                        <span>Reasoning {formatTokenDimension(c.reasoningTokens)}</span>
+                        <span>Rate {c.cacheRate ?? "-"}</span>
+                        <span>Total {formatTokenDimension(c.inputTokens + c.outputTokens)}</span>
+                        <span>Cost {formatCost(c.cost)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Card>
           ) : null}
         </>

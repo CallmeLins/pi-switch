@@ -17,6 +17,22 @@ export function injectConversationId(
   return { ...headers, "x-conversation-id": sessionId };
 }
 
+/**
+ * Pure injection logic for the conversation display name: return a new
+ * headers object with `x-conversation-name` set to the current session
+ * name, overriding any existing value. Blank names are not injected. The
+ * caller's headers object is never mutated.
+ */
+export function injectConversationName(
+  headers: RequestHeaders,
+  sessionName: string | undefined,
+): RequestHeaders {
+  if (sessionName == null || sessionName.trim() === "") {
+    return { ...headers };
+  }
+  return { ...headers, "x-conversation-name": sessionName };
+}
+
 export type ProviderHeadersEvent = { headers: RequestHeaders };
 
 /**
@@ -25,26 +41,39 @@ export type ProviderHeadersEvent = { headers: RequestHeaders };
  * remaining decoupled from the full pi ExtensionContext.
  */
 export type SessionIdProvider = {
-  sessionManager: { getSessionId(): string | undefined };
+  sessionManager: {
+    getSessionId(): string | undefined;
+    getSessionName(): string | undefined;
+  };
+};
+
+export type SessionInfo = {
+  id?: string;
+  name?: string;
 };
 
 /**
  * Build the `before_provider_headers` handler: it merges the injected headers
  * back into the event's headers in place (pi's contract for this hook) while
- * the pure function stays non-mutating. The session-id provider is injected
+ * the pure functions stay non-mutating. The session-info provider is injected
  * so the handler is testable without a live pi session.
  */
 export function makeBeforeProviderHeadersHandler(
-  getSessionId: (ctx: SessionIdProvider) => string | undefined,
+  getSession: (ctx: SessionIdProvider) => SessionInfo,
 ): (event: ProviderHeadersEvent, ctx: SessionIdProvider) => void {
   return (event, ctx) => {
-    Object.assign(event.headers, injectConversationId(event.headers, getSessionId(ctx)));
+    const { id, name } = getSession(ctx);
+    Object.assign(event.headers, injectConversationId(event.headers, id));
+    Object.assign(event.headers, injectConversationName(event.headers, name));
   };
 }
 
 export default function conversationIdInjectExtension(pi: ExtensionAPI): void {
   pi.on(
     "before_provider_headers",
-    makeBeforeProviderHeadersHandler((ctx) => ctx.sessionManager.getSessionId()),
+    makeBeforeProviderHeadersHandler((ctx) => ({
+      id: ctx.sessionManager.getSessionId(),
+      name: ctx.sessionManager.getSessionName(),
+    })),
   );
 }
