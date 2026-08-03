@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — 对话标识注入纯函数与单元测试
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] pi 启动后扩展被加载（扩展登记生效），provider 请求携带 `x-conversation-id` = 当前 Session UUID
 - [ ] 经 pi-switch 本地代理的会话中，统计的 byConversation 出现 UUID 标识的对话，而非全部归入 unlabeled
@@ -12,3 +12,13 @@
 - [ ] `/new` 开启新对话时标识更换，新请求归入新对话
 - [ ] 无有效 Session UUID 的场景（如内存会话）不注入垃圾头，请求行为不受影响
 - [ ] 人工端到端验收：真实对话产生请求后，`/piswitch stats` 可见对应 UUID 对话及其 token 统计
+
+## 实施总结
+- 提交：`b1f6748` — feat(extensions): inject session conversation id into provider requests
+- 实现的 seams：S4 `makeBeforeProviderHeadersHandler`（sessionId 来源接入 `before_provider_headers`，注入回 event.headers）；S5 扩展登记（package.json `pi.extensions` 追加 `./extensions/conversation-id-inject.ts`）
+- 测试结果：`npm test` 5/5 全绿（含接线 handler 两用例）；cargo test 129 全绿（含 `conversation_id_falls_back_to_opencode_session_header`）；webui vitest 61 全绿
+- typecheck：通过（webui tsc 0 错误；cargo check 通过）
+- 遗留 / 后续建议：
+  - **人工端到端验收未执行**（需真实 pi 会话 + pi-switch 代理）：pi 启动后扩展加载、byConversation 出现 UUID、`/resume` 保持同一标识、`/new` 更换、无 UUID 场景不注入。checklist 端到端项保持未勾选
+  - 随行同步：ADR-0002 与 README（EN/ZH）已更新为三源识别（`x-conversation-id` → `x-opencode-session` → body `conversation_id`）
+  - 无关噪音（webui/package-lock.json、webui/dist/.gitkeep）保持工作区悬置未提交
