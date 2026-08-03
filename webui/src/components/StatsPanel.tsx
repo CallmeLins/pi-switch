@@ -13,6 +13,8 @@ const PRESETS: { key: StatsRange; label: string }[] = [
   { key: "custom", label: "Custom" },
 ];
 
+const PAGE_SIZES = [50, 100, 200, 500];
+
 // Auto-refresh tiers in milliseconds; `null` means polling is off.
 const REFRESH_TIERS: { label: string; ms: number | null }[] = [
   { label: "Off", ms: null },
@@ -29,14 +31,35 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
   const [customError, setCustomError] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState<number | null>(null);
   const [conversationsOpen, setConversationsOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
 
   const seq = useRef(0);
   const load = useCallback(
-    async (range: StatsRange, from: number, to: number, keepOnError = false) => {
+    async (
+      range: StatsRange,
+      from: number,
+      to: number,
+      page: number,
+      pageSize: number,
+      keepOnError = false,
+    ) => {
       const id = ++seq.current;
       try {
-        const next = await api.stats(range, from, to);
+        const next = await api.stats(range, from, to, page, pageSize);
         if (id === seq.current) {
+          const lastPage =
+            next.recentRequestTotal != null && next.recentRequestTotal > 0
+              ? Math.ceil(next.recentRequestTotal / pageSize) - 1
+              : 0;
+          if (page > lastPage) {
+            // The rolling window shrank the page count while we were on a later
+            // page: clamp to the last valid page and re-request (guarded so a
+            // clamped page can never re-trigger the clamp).
+            setPage(lastPage);
+            void load(range, from, to, lastPage, pageSize, keepOnError);
+            return;
+          }
           setStats(next);
         }
       } catch {
@@ -51,8 +74,17 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
 
   useEffect(() => {
     const { from, to } = computeStatsWindow("today", null, null);
-    void load("today", from, to);
+    void load("today", from, to, 0, 50);
   }, [load]);
+
+  // Current window bounds for the active range; custom falls back to today.
+  const windowBounds = useCallback(
+    () =>
+      range === "custom"
+        ? computeStatsWindow("custom", customFrom || todayString(), customTo || todayString())
+        : computeStatsWindow(range, null, null),
+    [range, customFrom, customTo],
+  );
 
   // Poll the current window on the selected interval; switching tiers resets
   // the timer (the effect re-runs) and switching back to Off stops it.
@@ -61,15 +93,12 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       return;
     }
     const id = setInterval(() => {
-      const { from, to } =
-        range === "custom"
-          ? computeStatsWindow("custom", customFrom || todayString(), customTo || todayString())
-          : computeStatsWindow(range, null, null);
-      void load(range, from, to, true);
+      const { from, to } = windowBounds();
+      void load(range, from, to, page, pageSize, true);
     }, refreshMs);
     return () => clearInterval(id);
-  }, [refreshMs, range, customFrom, customTo, load]);
-  const select = (key: StatsRange) => {
+  }, [refreshMs, range, customFrom, customTo, page, pageSize, load, windowBounds]);
+  const select = (key: StatsRange, keepPage = false) => {
     setRange(key);
     if (key === "custom") {
       const from = customFrom || todayString();
@@ -80,12 +109,16 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       }
       setCustomFrom(from);
       setCustomTo(to);
+      setPage(0);
       const { from: f, to: t } = computeStatsWindow("custom", from, to);
-      void load("custom", f, t);
+      void load("custom", f, t, 0, pageSize);
     } else {
       setCustomError(null);
       const { from, to } = computeStatsWindow(key, null, null);
-      void load(key, from, to);
+      if (!keepPage) {
+        setPage(0);
+      }
+      void load(key, from, to, keepPage ? page : 0, pageSize);
     }
   };
 
@@ -105,13 +138,21 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         setCustomError("End must be on or after start");
       } else {
         setCustomError(null);
+        setPage(0);
         const { from: f, to: t } = computeStatsWindow("custom", from, to);
-        void load("custom", f, t);
+        void load("custom", f, t, 0, pageSize);
       }
     };
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
   const totals = stats?.totalTokens;
+  const totalRows = stats?.recentRequestTotal;
+  const totalPages = totalRows != null && totalRows > 0 ? Math.ceil(totalRows / pageSize) : 0;
+  const goPage = (nextPage: number) => {
+    setPage(nextPage);
+    const { from, to } = windowBounds();
+    void load(range, from, to, nextPage, pageSize);
+  };
 
   return (
     <div>
@@ -139,7 +180,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Button onClick={() => select(range)}>Refresh</Button>
+        <Button onClick={() => select(range, true)}>Refresh</Button>
         <label className="flex items-center gap-1 text-xs text-zinc-500">
           Auto-refresh
           <select
@@ -294,6 +335,66 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   </tbody>
                 </table>
               </div>
+              {totalRows != null && totalRows > 0 && (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+                  <span>{totalRows} rows</span>
+                  {totalPages > 1 && (
+                    <span className="flex items-center gap-1">
+                      <Button
+                        aria-label="Previous page"
+                        disabled={page === 0}
+                        onClick={() => goPage(page - 1)}
+                      >
+                        ‹
+                      </Button>
+                      {pageNumbers(page, totalPages).map((n, i) =>
+                        n === "…" ? (
+                          <span key={`gap-${i}`} className="px-1 text-zinc-600">
+                            …
+                          </span>
+                        ) : (
+                          <Button
+                            key={n}
+                            variant={n - 1 === page ? "primary" : "subtle"}
+                            aria-pressed={n - 1 === page}
+                            onClick={() => goPage(n - 1)}
+                          >
+                            {n}
+                          </Button>
+                        ),
+                      )}
+                      <Button
+                        aria-label="Next page"
+                        disabled={page >= totalPages - 1}
+                        onClick={() => goPage(page + 1)}
+                      >
+                        ›
+                      </Button>
+                    </span>
+                  )}
+                  <label className="flex items-center gap-1 text-zinc-500">
+                    Rows per page
+                    <select
+                      aria-label="Rows per page"
+                      value={pageSize}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        setPageSize(next);
+                        setPage(0);
+                        const { from, to } = windowBounds();
+                        void load(range, from, to, 0, next);
+                      }}
+                      className="rounded border border-white/10 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200"
+                    >
+                      {PAGE_SIZES.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
             </Card>
           ) : null}
 
@@ -368,6 +469,26 @@ function formatProviderTokens(tokens: number): string {
     return "-";
   }
   return formatTokenCount(tokens);
+}
+
+function pageNumbers(current: number, total: number): (number | "…")[] {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const wanted = new Set(
+    [1, total, current, current + 1, current + 2].map((p) => Math.min(Math.max(p, 1), total)),
+  );
+  const sorted = [...wanted].sort((a, b) => a - b);
+  const out: (number | "…")[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (p - prev > 1) {
+      out.push("…");
+    }
+    out.push(p);
+    prev = p;
+  }
+  return out;
 }
 
 function formatRequestStatus(r: RecentRequest): string {

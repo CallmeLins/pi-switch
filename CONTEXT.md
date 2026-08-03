@@ -34,3 +34,7 @@ _Avoid_: unknown、无会话
 **请求日志（Request Log）**：
 `requests.log`，每行一个 JSON 的追加式文件，记录每次代理请求的元数据（时间、成败、provider、model、延迟、token 使用量、消费、会话标识）。
 _Avoid_: 日志文件、usage log
+
+**请求明细（Request Details）**：
+Stats 页中按时间倒序逐条展示请求日志记录的表格区块，分页浏览，可覆盖窗口内全部历史。
+_Avoid_: 请求记录、明细表、recent requests

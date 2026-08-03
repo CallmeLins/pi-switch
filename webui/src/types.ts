@@ -191,6 +191,7 @@ export interface UsageStats {
   costUnknown?: number;
   byConversation?: ConversationStats[];
   recentRequests?: RecentRequest[];
+  recentRequestTotal?: number;
   [key: string]: unknown;
 }
 

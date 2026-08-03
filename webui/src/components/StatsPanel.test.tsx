@@ -672,6 +672,8 @@ describe("StatsPanel", () => {
       "today",
       new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
       FIXED_NOW,
+      0,
+      50,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "24h" }));
@@ -680,6 +682,8 @@ describe("StatsPanel", () => {
         "last24h",
         FIXED_NOW - 24 * 3600 * 1000,
         FIXED_NOW,
+        0,
+        50,
       ),
     );
 
@@ -689,6 +693,8 @@ describe("StatsPanel", () => {
         "last7d",
         FIXED_NOW - 7 * 24 * 3600 * 1000,
         FIXED_NOW,
+        0,
+        50,
       ),
     );
   });
@@ -705,6 +711,8 @@ describe("StatsPanel", () => {
         "custom",
         new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
         new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
       ),
     );
 
@@ -716,6 +724,8 @@ describe("StatsPanel", () => {
         "custom",
         new Date(2026, 7, 1, 0, 0, 0, 0).getTime(),
         new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
       ),
     );
 
@@ -727,6 +737,8 @@ describe("StatsPanel", () => {
         "custom",
         new Date(2026, 7, 1, 0, 0, 0, 0).getTime(),
         new Date(2026, 7, 5, 0, 0, 0, 0).getTime(),
+        0,
+        50,
       ),
     );
   });
@@ -768,6 +780,8 @@ describe("StatsPanel", () => {
       "custom",
       new Date(2026, 7, 5, 0, 0, 0, 0).getTime(),
       new Date(2026, 7, 7, 0, 0, 0, 0).getTime(),
+      0,
+      50,
     );
     expect(screen.queryByText("End must be on or after start")).not.toBeInTheDocument();
   });
@@ -844,6 +858,8 @@ describe("StatsPanel", () => {
       "today",
       new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
       expect.any(Number),
+      0,
+      50,
     );
 
     await vi.advanceTimersByTimeAsync(5000);
@@ -896,5 +912,219 @@ describe("StatsPanel", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(statsMock).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it("renders pagination controls with total count, page buttons and boundary disabling", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => ({
+      ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+      provider: "hyb",
+      model: "m1",
+      ok: true,
+      status: 200,
+      error: null,
+    }));
+    statsMock.mockResolvedValue({ ...fullStats(), recentRequestTotal: 250, recentRequests: rows });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("Request details")).toBeInTheDocument();
+    expect(screen.getByText("250 rows")).toBeInTheDocument();
+    for (const n of ["1", "2", "3", "4", "5"]) {
+      expect(screen.getByRole("button", { name: n })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("button", { name: "1" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next page" })).toBeEnabled();
+  });
+
+  it("requests the selected page via next and page buttons, keeping aggregate cards", async () => {
+    const makeRows = (model: string) =>
+      Array.from({ length: 50 }, (_, i) => ({
+        ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+        provider: "hyb",
+        model: `${model}-${i}`,
+        ok: true,
+        status: 200,
+        error: null,
+      }));
+    statsMock
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows("m-p0") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows("m-p1") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows("m-p4") });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("m-p0-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 0, 50);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(await screen.findByText("m-p1-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 1, 50);
+
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(await screen.findByText("m-p4-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 4, 50);
+
+    expect(screen.getByText("363.5K")).toBeInTheDocument();
+  });
+
+  it("switches rows per page, resetting to page 1 and re-requesting with the new limit", async () => {
+    const makeRows = (n: number, tag: string) =>
+      Array.from({ length: n }, (_, i) => ({
+        ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+        provider: "hyb",
+        model: `${tag}-${i}`,
+        ok: true,
+        status: 200,
+        error: null,
+      }));
+    statsMock
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows(50, "a") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows(50, "b") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows(100, "c") });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("a-0")).toBeInTheDocument();
+    expect(screen.getByLabelText("Rows per page")).toHaveValue("50");
+
+    fireEvent.click(screen.getByRole("button", { name: "3" }));
+    expect(await screen.findByText("b-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 2, 50);
+
+    fireEvent.change(screen.getByLabelText("Rows per page"), { target: { value: "100" } });
+    await waitFor(() =>
+      expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 0, 100),
+    );
+    expect(await screen.findByText("c-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "3" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "4" })).not.toBeInTheDocument();
+  });
+
+  it("resets to page 1 when switching stats windows (preset and custom date change)", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    const makeRows = (tag: string) =>
+      Array.from({ length: 50 }, (_, i) => ({
+        ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+        provider: "hyb",
+        model: `${tag}-${i}`,
+        ok: true,
+        status: 200,
+        error: null,
+      }));
+    const paged = (tag: string) => ({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows(tag) });
+    statsMock
+      .mockResolvedValueOnce(paged("a"))
+      .mockResolvedValueOnce(paged("b"))
+      .mockResolvedValueOnce(paged("c"))
+      .mockResolvedValueOnce(paged("d"))
+      .mockResolvedValueOnce(paged("e"));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("a-0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "3" }));
+    expect(await screen.findByText("b-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 2, 50);
+
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+    await waitFor(() =>
+      expect(statsMock).toHaveBeenLastCalledWith(
+        "last24h",
+        FIXED_NOW - 24 * 3600 * 1000,
+        FIXED_NOW,
+        0,
+        50,
+      ),
+    );
+    expect(await screen.findByText("c-0")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    await waitFor(() =>
+      expect(statsMock).toHaveBeenLastCalledWith(
+        "custom",
+        new Date(2026, 7, 2, 0, 0, 0, 0).getTime(),
+        new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
+      ),
+    );
+    expect(await screen.findByText("d-0")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-08-01" } });
+    await waitFor(() =>
+      expect(statsMock).toHaveBeenLastCalledWith(
+        "custom",
+        new Date(2026, 7, 1, 0, 0, 0, 0).getTime(),
+        new Date(2026, 7, 3, 0, 0, 0, 0).getTime(),
+        0,
+        50,
+      ),
+    );
+    expect(await screen.findByText("e-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("falls back to the last valid page when the total shrinks after refresh", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(FIXED_NOW);
+    const makeRows = (tag: string) =>
+      Array.from({ length: 50 }, (_, i) => ({
+        ts: `2026-08-02T10:00:${String(i).padStart(2, "0")}Z`,
+        provider: "hyb",
+        model: `${tag}-${i}`,
+        ok: true,
+        status: 200,
+        error: null,
+      }));
+    statsMock
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows("a") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 250, recentRequests: makeRows("b") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 120, recentRequests: makeRows("c") })
+      .mockResolvedValueOnce({ ...fullStats(), recentRequestTotal: 120, recentRequests: makeRows("d") });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+
+    expect(await screen.findByText("a-0")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    expect(await screen.findByText("b-0")).toBeInTheDocument();
+    expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 4, 50);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() =>
+      expect(statsMock).toHaveBeenLastCalledWith("today", expect.any(Number), expect.any(Number), 2, 50),
+    );
+    expect(await screen.findByText("d-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "4" })).not.toBeInTheDocument();
+  });
+
+  it("does not render pagination controls on empty windows or when detail totals are absent", async () => {
+    statsMock.mockResolvedValue({
+      totalRequests: 0,
+      okRequests: 0,
+      failedRequests: 0,
+      successRate: "0%",
+      byProvider: {},
+      totalTokens: { input: 0, output: 0, total: 0 },
+      cacheHitRate: "-",
+      byConversation: [],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText(/No request data yet/);
+    expect(screen.queryByText(/rows/)).not.toBeInTheDocument();
+
+    cleanup();
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "m1",
+          ok: true,
+          status: 200,
+          error: null,
+        },
+      ],
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("Request details");
+    expect(screen.queryByText(/rows/)).not.toBeInTheDocument();
   });
 });

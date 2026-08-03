@@ -40,8 +40,11 @@ export const api = {
   doctor: () => req<DoctorCheck[]>("GET", "/doctor"),
   validate: () => req<ValidationIssue[]>("GET", "/config/validate"),
   backups: () => req<string[]>("GET", "/backups"),
-  stats: (range: StatsRange, from: number, to: number) =>
-    req<UsageStats>("GET", `/stats?range=${range}&from=${from}&to=${to}`),
+  stats: (range: StatsRange, from: number, to: number, page = 0, limit = 50) =>
+    req<UsageStats>(
+      "GET",
+      `/stats?range=${range}&from=${from}&to=${to}&page=${page}&limit=${limit}`
+    ),
   proxyStatus: () => req<DaemonResult>("GET", "/proxy/status"),
   webuiInfo: () => req<{ authRequired: boolean }>("GET", "/webui/info"),
 
