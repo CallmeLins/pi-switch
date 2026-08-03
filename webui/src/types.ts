@@ -200,3 +200,20 @@ export interface PackageEntry {
   hasPrompts?: boolean;
   hasThemes?: boolean;
 }
+
+export interface CcsProvider {
+  id: string;
+  name: string;
+  appType: string;
+  api: string;
+  baseUrl: string;
+  apiKey: string;
+  models: string[];
+  exists: boolean;
+}
+
+export interface CcsImportResult {
+  name: string;
+  imported: boolean;
+  message: string;
+}

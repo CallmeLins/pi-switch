@@ -90,6 +90,9 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/packages/import", post(post_package_import))
         .route("/packages/:id", get(get_package).delete(delete_package))
         .route("/packages/:id/toggle", post(post_package_toggle))
+        // cc-switch import
+        .route("/ccswitch/providers", get(get_ccswitch_providers))
+        .route("/ccswitch/import", post(post_ccswitch_import))
         // profile mutations
         .route("/init", post(post_init))
         .route("/profiles", post(post_profile))
@@ -293,6 +296,46 @@ async fn post_package_import() -> ApiJson {
         "ok": true,
         "count": imported.len(),
         "message": format!("Imported {} packages from Pi Agent", imported.len())
+    })))
+}
+
+// ─── cc-switch import ─────────────────────────────────────
+
+async fn get_ccswitch_providers(Query(q): Query<HashMap<String, String>>) -> ApiJson {
+    let path = q.get("path").cloned();
+    let providers = crate::ccswitch::list_ccswitch_providers(path.as_deref())?;
+    Ok(Json(json!({ "providers": providers })))
+}
+
+#[derive(Deserialize)]
+struct CcsImportBody {
+    selections: Vec<CcsImportSel>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CcsImportSel {
+    id: String,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn post_ccswitch_import(Json(body): Json<CcsImportBody>) -> ApiJson {
+    let selections: Vec<crate::ccswitch::CcsImportSelection> = body
+        .selections
+        .into_iter()
+        .map(|s| crate::ccswitch::CcsImportSelection {
+            id: s.id,
+            force: s.force,
+        })
+        .collect();
+    let results = crate::ccswitch::import_ccswitch_providers(&selections, body.path.as_deref())?;
+    let imported = results.iter().filter(|r| r.imported).count();
+    Ok(Json(json!({
+        "ok": true,
+        "imported": imported,
+        "results": results,
     })))
 }
 

@@ -8,6 +8,7 @@ pub enum Route {
     FetchModels(String),  // Fetch & select models for provider
     ExposeModels(String), // Select which models to expose to pi
     Packages,             // Package management
+    CcSwitchImport,       // Import providers from cc-switch
     Proxy,
     Stats,
     Backups,

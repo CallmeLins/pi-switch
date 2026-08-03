@@ -49,6 +49,7 @@ rand = "0.8"
 
 # database
 rusqlite = { version = "0.32", features = ["bundled"] }
+toml = "0.8"
 
 # utilities
 chrono = { version = "0.4", features = ["serde"] }

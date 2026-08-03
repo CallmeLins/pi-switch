@@ -350,6 +350,97 @@ pub(super) fn render_proxy(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
+pub(super) fn render_ccswitch_import(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let theme = &app.theme;
+    let block = content_block(
+        app,
+        if i18n::is_zh() {
+            "从 cc-switch 导入 Provider"
+        } else {
+            "Import Providers from cc-switch"
+        },
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+    render_key_bar_center(
+        frame,
+        theme,
+        chunks[0],
+        &[
+            ("↑↓", i18n::key_move()),
+            ("Space", if i18n::is_zh() { "勾选" } else { "Toggle" }),
+            ("Enter/s", i18n::key_save()),
+            ("Esc", i18n::key_back()),
+        ],
+    );
+
+    if let Some(err) = &app.ccswitch_error {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                err.clone(),
+                Style::default().fg(theme.err),
+            )))
+            .wrap(Wrap { trim: false }),
+            chunks[1],
+        );
+        return;
+    }
+
+    if app.ccswitch_list.is_empty() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                if i18n::is_zh() {
+                    "cc-switch 中没有可导入的 provider"
+                } else {
+                    "No importable providers in cc-switch"
+                },
+                Style::default().fg(theme.dim),
+            ))),
+            chunks[1],
+        );
+        return;
+    }
+
+    let items: Vec<ListItem<'_>> = app
+        .ccswitch_list
+        .iter()
+        .map(|(p, selected)| {
+            let checkbox = if *selected { "[✓]" } else { "[ ]" };
+            let exists_tag = if p.exists { " (已存在)" } else { "" };
+            let api_label = match p.api.as_str() {
+                "anthropic-messages" => "anthropic",
+                "openai-responses" => "openai",
+                "google-generative-ai" => "gemini",
+                _ => p.api.as_str(),
+            };
+            let models = p.models.join(", ");
+            let text = format!(
+                "  {} {} [{}{}] {}  ·  {}",
+                checkbox,
+                p.name,
+                api_label,
+                exists_tag,
+                if models.is_empty() { "-" } else { &models },
+                p.base_url,
+            );
+            ListItem::new(text)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
+
+    let mut state = ListState::default();
+    state.select(Some(app.ccswitch_idx));
+    frame.render_stateful_widget(list, chunks[1], &mut state);
+}
+
 pub(super) fn render_packages(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let theme = &app.theme;
     let block = content_block(app, "Packages");

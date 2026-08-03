@@ -53,6 +53,10 @@ export const {
   listPackageSources,
   addPackageSource,
   deletePackageSource,
+  // cc-switch import
+  defaultCcsSwitchDbPath,
+  listCcsSwitchProviders,
+  importCcsSwitchProviders,
 } = native;
 
 export default native;
