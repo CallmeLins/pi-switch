@@ -1,6 +1,6 @@
 use crate::database::Database;
 use crate::error::{AppError, Result};
-use crate::package::{Package, PackageSource};
+use crate::package::{Package, PackageSource, PackageType};
 use std::path::PathBuf;
 
 /// Run `pi uninstall <spec>` to actually remove the installed package files
@@ -37,6 +37,97 @@ fn run_pi_uninstall(spec: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Run `pi install <spec>` to actually download the package files into
+/// `~/.pi/agent/npm/node_modules/` (npm) or `~/.pi/agent/git/` (git).
+fn run_pi_install(spec: &str) -> Result<()> {
+    let output = {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", "pi", "install", spec])
+                .output()
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("pi")
+                .args(["install", spec])
+                .output()
+        }
+    }
+    .map_err(|e| AppError::Message(format!("Failed to run `pi install {}`: {}", spec, e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Message(format!(
+            "`pi install {}` failed: {}",
+            spec,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Directory where an installed package lives on disk.
+/// npm → `~/.pi/agent/npm/node_modules/<name>`, git → `~/.pi/agent/git/<name>`,
+/// local → the spec path itself.
+fn installed_pkg_dir(pkg: &Package) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    match pkg.pkg_type {
+        PackageType::Npm => Some(
+            home.join(".pi")
+                .join("agent")
+                .join("npm")
+                .join("node_modules")
+                .join(&pkg.name),
+        ),
+        PackageType::Git => Some(home.join(".pi").join("agent").join("git").join(&pkg.name)),
+        PackageType::Local => Some(PathBuf::from(&pkg.spec)),
+    }
+}
+
+/// Detect package capabilities from the installed `package.json` `pi` manifest
+/// or conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
+fn detect_capabilities(pkg: &Package) -> (bool, bool, bool, bool) {
+    let Some(dir) = installed_pkg_dir(pkg) else {
+        return (false, false, false, false);
+    };
+
+    let mut caps = (false, false, false, false);
+    let manifest = dir.join("package.json");
+    if let Ok(text) = std::fs::read_to_string(&manifest) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(pi) = value.get("pi") {
+                caps.0 = pi
+                    .get("extensions")
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+                caps.1 = pi
+                    .get("skills")
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+                caps.2 = pi
+                    .get("prompts")
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+                caps.3 = pi
+                    .get("themes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
+            }
+        }
+    }
+    // Fallback: conventional directory auto-discovery.
+    caps.0 = caps.0 || dir.join("extensions").is_dir();
+    caps.1 = caps.1 || dir.join("skills").is_dir();
+    caps.2 = caps.2 || dir.join("prompts").is_dir();
+    caps.3 = caps.3 || dir.join("themes").is_dir();
+    caps
 }
 
 /// Initialize package management (create database if not exists)
@@ -83,7 +174,8 @@ pub fn add_package(spec: &str) -> Result<Package> {
     Ok(pkg)
 }
 
-/// Install a package (mark as installed and sync to Pi Agent)
+/// Install a package (actually run `pi install`, mark as installed, detect
+/// capabilities, and sync to Pi Agent settings.json)
 pub fn install_package(id: &str) -> Result<Package> {
     let db = Database::open()?;
 
@@ -97,6 +189,16 @@ pub fn install_package(id: &str) -> Result<Package> {
             id
         )));
     }
+
+    // Actually download the package files via `pi install`
+    run_pi_install(&pkg.spec)?;
+
+    // Detect capabilities from the installed package.json / directories
+    let (has_extensions, has_skills, has_prompts, has_themes) = detect_capabilities(&pkg);
+    pkg.has_extensions = has_extensions;
+    pkg.has_skills = has_skills;
+    pkg.has_prompts = has_prompts;
+    pkg.has_themes = has_themes;
 
     // Mark as installed
     pkg.installed = true;
@@ -308,6 +410,27 @@ pub fn import_from_pi() -> Result<Vec<Package>> {
         .as_array()
         .ok_or_else(|| AppError::InvalidInput("No packages field in settings.json".to_string()))?;
 
+    // Collect the set of ids currently enabled in pi's settings.
+    let mut active_ids = std::collections::HashSet::new();
+    for spec_value in specs {
+        if let Some(spec) = spec_value.as_str() {
+            if let Ok(pkg) = Package::from_spec(spec) {
+                active_ids.insert(pkg.id);
+            }
+        }
+    }
+
+    // Mark db records that pi no longer has (e.g. uninstalled via `pi uninstall`)
+    // as not installed so UI counts match reality.
+    for existing in db.list_packages()? {
+        if existing.installed && !active_ids.contains(&existing.id) {
+            let mut stale = existing;
+            stale.installed = false;
+            stale.updated_at = Some(chrono::Utc::now().timestamp());
+            db.update_package(&stale)?;
+        }
+    }
+
     let mut imported = Vec::new();
     let now = chrono::Utc::now().timestamp();
 
@@ -318,6 +441,13 @@ pub fn import_from_pi() -> Result<Vec<Package>> {
 
         // Check if already exists
         let mut pkg = Package::from_spec(spec)?;
+
+        // Detect capabilities from the already-installed package.json
+        let (has_extensions, has_skills, has_prompts, has_themes) = detect_capabilities(&pkg);
+        pkg.has_extensions = has_extensions;
+        pkg.has_skills = has_skills;
+        pkg.has_prompts = has_prompts;
+        pkg.has_themes = has_themes;
 
         if db.get_package(&pkg.id)?.is_none() {
             // New package
@@ -334,6 +464,10 @@ pub fn import_from_pi() -> Result<Vec<Package>> {
             existing.installed = true;
             existing.enabled = true;
             existing.updated_at = Some(now);
+            existing.has_extensions = pkg.has_extensions;
+            existing.has_skills = pkg.has_skills;
+            existing.has_prompts = pkg.has_prompts;
+            existing.has_themes = pkg.has_themes;
 
             db.update_package(&existing)?;
             imported.push(existing);

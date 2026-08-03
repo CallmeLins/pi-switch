@@ -42,9 +42,9 @@ Usage:
   pi-switch provider expose <name> <model-id>...       # Expose models to pi agent
   pi-switch package list                               # List all packages
   pi-switch package show <id>                          # Show package details
-  pi-switch package add <spec>                         # Add package (npm:name@version | git:url)
-  pi-switch package install <id>                       # Install and sync to Pi Agent
-  pi-switch package uninstall <id>                     # Uninstall package
+  pi-switch package add <spec>                         # Add package record (npm:name@version | git:url)
+  pi-switch package install <id>                       # Install (runs pi install) and sync to Pi Agent
+  pi-switch package uninstall <id>                     # Uninstall (runs pi uninstall) and remove files
   pi-switch package enable <id>                        # Enable package
   pi-switch package disable <id>                       # Disable package
   pi-switch package delete <id>                        # Delete package from database

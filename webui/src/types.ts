@@ -195,4 +195,8 @@ export interface PackageEntry {
   version: string;
   enabled: boolean;
   installedAt?: string;
+  hasExtensions?: boolean;
+  hasSkills?: boolean;
+  hasPrompts?: boolean;
+  hasThemes?: boolean;
 }

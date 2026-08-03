@@ -7,11 +7,27 @@ interface PackagesPanelProps {
   refresh: () => void;
 }
 
+function CapBadge({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        fontSize: "0.75rem",
+        color: "#3B82F6",
+        background: "#DBEAFE",
+        padding: "0.15rem 0.5rem",
+        borderRadius: "999px",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 export function PackagesPanel({ refresh }: PackagesPanelProps) {
   const [packages, setPackages] = useState<PackageEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [formData, setFormData] = useState({ id: "", name: "", version: "" });
+  const [spec, setSpec] = useState("");
   const run = useAction();
 
   const loadPackages = async () => {
@@ -31,17 +47,17 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   }, []);
 
   const handleAdd = async () => {
-    if (!formData.id || !formData.name || !formData.version) {
-      alert("All fields are required");
+    if (!spec.trim()) {
+      alert("Package spec is required");
       return;
     }
 
     await run(
-      () => api.addPackage(formData.id, formData.name, formData.version),
-      `Package '${formData.name}' added`,
+      () => api.addPackage(spec.trim()),
+      `Package '${spec.trim()}' installed`,
       () => {
         setAdding(false);
-        setFormData({ id: "", name: "", version: "" });
+        setSpec("");
         loadPackages();
         refresh();
       }
@@ -60,7 +76,7 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
   };
 
   const handleDelete = async (pkg: PackageEntry) => {
-    if (!confirm(`Delete package '${pkg.name}'?`)) return;
+    if (!confirm(`Uninstall package '${pkg.name}'?`)) return;
 
     await run(
       () => api.deletePackage(pkg.id),
@@ -106,40 +122,23 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
 
       {adding && (
         <Card style={{ marginBottom: "1.5rem", padding: "1.5rem" }}>
-          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem" }}>Add New Package</h3>
+          <h3 style={{ margin: "0 0 1rem 0", fontSize: "1.1rem" }}>Install Package</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
             <div>
               <label style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem", color: "#666" }}>
-                Package ID
+                Spec
               </label>
               <Input
-                value={formData.id}
-                onChange={(e) => setFormData({ ...formData, id: e.target.value })}
-                placeholder="e.g., my-plugin"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem", color: "#666" }}>
-                Name
-              </label>
-              <Input
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="e.g., My Plugin"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9rem", color: "#666" }}>
-                Version
-              </label>
-              <Input
-                value={formData.version}
-                onChange={(e) => setFormData({ ...formData, version: e.target.value })}
-                placeholder="e.g., 1.0.0"
+                value={spec}
+                onChange={(e) => setSpec(e.target.value)}
+                placeholder="e.g., npm:foo@1.0.0, git:github.com/user/repo, or local path"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAdd();
+                }}
               />
             </div>
             <Button onClick={handleAdd} style={{ marginTop: "0.5rem" }}>
-              Add Package
+              Install
             </Button>
           </div>
         </Card>
@@ -176,6 +175,14 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
                     ID: <code style={{ background: "#f5f5f5", padding: "0.2rem 0.4rem", borderRadius: "3px" }}>{pkg.id}</code>
                     {pkg.installedAt && ` • Installed: ${new Date(pkg.installedAt).toLocaleString()}`}
                   </div>
+                  {(pkg.hasExtensions || pkg.hasSkills || pkg.hasPrompts || pkg.hasThemes) && (
+                    <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
+                      {pkg.hasExtensions && <CapBadge label="extensions" />}
+                      {pkg.hasSkills && <CapBadge label="skills" />}
+                      {pkg.hasPrompts && <CapBadge label="prompts" />}
+                      {pkg.hasThemes && <CapBadge label="themes" />}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -192,7 +199,7 @@ export function PackagesPanel({ refresh }: PackagesPanelProps) {
                       border: "1px solid #ff5555",
                     }}
                   >
-                    Delete
+                    Uninstall
                   </Button>
                 </div>
               </div>

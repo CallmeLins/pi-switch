@@ -263,16 +263,14 @@ async fn get_package(Path(id): Path<String>) -> ApiJson {
 
 #[derive(Deserialize)]
 struct PackageBody {
-    id: String,
-    version: String,
+    spec: String,
 }
 
 async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {
-    // WebUI adds npm packages: add the db record, then install it so the
-    // package actually appears in the installed list (UI shows installed only).
-    let spec = format!("npm:{}@{}", body.id, body.version);
-    crate::package_ops::add_package(&spec)?;
-    let pkg = crate::package_ops::install_package(&spec)?;
+    // WebUI adds by full spec (e.g. npm:foo@1.0.0): add the db record, then
+    // install it so the package actually appears in the installed list.
+    crate::package_ops::add_package(&body.spec)?;
+    let pkg = crate::package_ops::install_package(&body.spec)?;
     Ok(Json(
         json!({ "ok": true, "package": pkg.name, "installed": true }),
     ))
