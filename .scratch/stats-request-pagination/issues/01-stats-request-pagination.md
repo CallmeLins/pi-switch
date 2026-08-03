@@ -20,3 +20,8 @@
 - 测试结果：webui vitest 70 passed（StatsPanel.test.tsx 38）｜Rust cargo test 136 passed
 - typecheck：通过（`tsc --noEmit`）
 - 遗留 / 后续建议：`.scratch/cost-stats/issues/06-request-details-collapse-pagination.md` 在本会话期间丢失（未跟踪、无 git 痕迹），其规格已由本 spec（`.scratch/stats-request-pagination/spec.md`）完整承接；后端默认 limit=100 与 webui 默认 50 的不一致保留（webui 总是显式传 limit）
+
+## 后续备注（2026-08-04 部署验证）
+- 部署后 UI 未出现分页控件（diagnosing-bugs 定位）：根因是后端分页实现（`recentRequestTotal` / `aggregate_paged` / `/api/stats` page-limit 解析）仅存在于**未提交的工作区改动**中，会话期间被外部 git 操作清除——git 历史从未包含该代码，rebuild 的 .node 无此字段，webui 的 `totalRows` 恒为 undefined。
+- 已重新实现后端分页并提交 `157c254`：`UsageStats.recentRequestTotal`（窗口内全量行数）、`aggregate` 委托 `aggregate_paged`（默认 page 0/limit 100 保持旧行为）、`get_stats_paged`、`/api/stats` 解析 page/limit、service 透传 + 3 个新 Rust 测试（分页切片/默认 100/路由字段）。
+- 验证：本地 native `recentRequestTotal=1589`；webui API `page=0&limit=50` → 50 条 + total=1591，page=31 → 41 条（末页），越界 → 0 条，limit=500 → 500 条。Rust 139 passed。
