@@ -1081,6 +1081,9 @@ struct StreamLogFields {
     upstream_url: Option<String>,
     model: Option<String>,
     conversation_id: Option<String>,
+    /// The model's unit prices at request time (per-request config reload);
+    /// `None` means the model has no configured price → cost is unknown.
+    cost: Option<crate::config::ModelCost>,
 }
 
 impl StreamLogFields {
@@ -1100,6 +1103,7 @@ impl StreamLogFields {
             upstream_url: Some(upstream_url.to_string()),
             model: model.map(|s| s.to_string()),
             conversation_id: conversation_id.map(|s| s.to_string()),
+            cost: None,
         }
     }
 }
@@ -1185,6 +1189,7 @@ async fn forward_with_failover(
                 None,
                 None,
                 conversation_id,
+                None,
             )
             .await;
             continue;
@@ -1203,6 +1208,7 @@ async fn forward_with_failover(
                     None,
                     None,
                     conversation_id,
+                    None,
                 )
                 .await;
                 continue;
@@ -1262,6 +1268,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             usage,
                             conversation_id,
+                            lookup_model_cost(&profile, real_model),
                         )
                         .await;
                         return Ok(Json(openai_data).into_response());
@@ -1284,6 +1291,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            None,
                         )
                         .await;
                         circuit_state = read_circuit_state().await;
@@ -1300,6 +1308,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            None,
                         )
                         .await;
                         return Ok(Response::builder()
@@ -1320,6 +1329,7 @@ async fn forward_with_failover(
                         body.get("model").and_then(|v| v.as_str()),
                         None,
                         conversation_id,
+                        None,
                     )
                     .await;
                     circuit_state = read_circuit_state().await;
@@ -1349,13 +1359,14 @@ async fn forward_with_failover(
                         // Stream straight through (preserves Content-Type + enables SSE).
                         // The response stream is teed into the usage parser; the log line
                         // (with token usage + conversation id) is written when it ends.
-                        let fields = StreamLogFields::for_success(
+                        let mut fields = StreamLogFields::for_success(
                             name,
                             status.as_u16(),
                             &url,
                             body.get("model").and_then(|v| v.as_str()),
                             conversation_id,
                         );
+                        fields.cost = lookup_model_cost(&profile, real_model);
                         return Ok(stream_response(r, Some(fields)));
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
@@ -1376,6 +1387,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            None,
                         )
                         .await;
                         circuit_state = read_circuit_state().await;
@@ -1392,6 +1404,7 @@ async fn forward_with_failover(
                             body.get("model").and_then(|v| v.as_str()),
                             None,
                             conversation_id,
+                            None,
                         )
                         .await;
                         return Ok(stream_response(r, None));
@@ -1409,6 +1422,7 @@ async fn forward_with_failover(
                         body.get("model").and_then(|v| v.as_str()),
                         None,
                         conversation_id,
+                        None,
                     )
                     .await;
                     circuit_state = read_circuit_state().await;
@@ -1497,13 +1511,14 @@ async fn forward_anthropic_with_failover(
                     // Anthropic → Anthropic passthrough: stream through, preserve
                     // headers. The stream is teed into the usage parser; the log line
                     // (with token usage + conversation id) is written when it ends.
-                    let fields = StreamLogFields::for_success(
+                    let mut fields = StreamLogFields::for_success(
                         name,
                         status.as_u16(),
                         &url,
                         body.get("model").and_then(|v| v.as_str()),
                         conversation_id,
                     );
+                    fields.cost = lookup_model_cost(&profile, real_model);
                     return Ok(stream_response(r, Some(fields)));
                 }
                 log_request(
@@ -1516,6 +1531,7 @@ async fn forward_anthropic_with_failover(
                     body.get("model").and_then(|v| v.as_str()),
                     None,
                     conversation_id,
+                    None,
                 )
                 .await;
                 // Non-retryable error: pass the upstream response through unchanged.
@@ -1549,9 +1565,51 @@ async fn forward_anthropic_with_failover(
 // ─── Request logging ──────────────────────────────────────
 
 /// Build the JSON object written to `requests.log` for one proxied request.
+/// Look up a model's unit prices in its provider profile (already parsed at
+/// the call site, so prices are frozen at request time). `None` (unknown
+/// model or no `cost` configured) means the request's cost is unknown.
+fn lookup_model_cost(
+    profile: &ProviderProfile,
+    model: &str,
+) -> Option<crate::config::ModelCost> {
+    profile
+        .models
+        .iter()
+        .find(|m| m.id == model)
+        .and_then(|m| m.cost.clone())
+}
+
+/// Estimate the cost of a request from its token usage and the model's
+/// price; `cache_write` has no token data and never enters. Tiered pricing
+/// is handled through `ModelCost::tiers`.
+fn compute_cost(usage: &crate::usage::UsageSummary, cost: &crate::config::ModelCost) -> f64 {
+    // Pick the highest tier whose input threshold the request's prompt tokens
+    // meet; fall back to the base prices otherwise.
+    let tier = cost
+        .tiers
+        .iter()
+        .filter(|t| usage.prompt_tokens as f64 >= t.input_tokens_above)
+        .max_by(|a, b| a.input_tokens_above.total_cmp(&b.input_tokens_above));
+    let (input, output, cache_read) = match tier {
+        Some(t) => (t.input, t.output, t.cache_read),
+        None => (cost.input, cost.output, cost.cache_read),
+    };
+    let uncached = usage.prompt_tokens.saturating_sub(usage.cached_tokens) as f64;
+    uncached * input
+        + usage.cached_tokens as f64 * cache_read
+        + usage.completion_tokens as f64 * output
+}
+
+/// Build the JSON object written to `requests.log` for one proxied request.
 /// Token usage is optional: rows without it (old requests, unavailable usage)
 /// get null fields, keeping the format backwards compatible.
 fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageSummary>) -> Value {
+    // Cost is the usage priced at the model's request-time unit prices;
+    // missing price or missing usage both mean the cost is unknown (null).
+    let cost_total = match (usage, &fields.cost) {
+        (Some(u), Some(cost)) => Some(compute_cost(u, cost)),
+        _ => None,
+    };
     json!({
         "ts": Utc::now().to_rfc3339(),
         "ok": fields.ok,
@@ -1565,6 +1623,7 @@ fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageS
         "cachedTokens": usage.map(|u| u.cached_tokens),
         "reasoningTokens": usage.map(|u| u.reasoning_tokens),
         "conversationId": fields.conversation_id,
+        "costTotal": cost_total,
     })
 }
 
@@ -1600,6 +1659,7 @@ async fn log_request(
     model: Option<&str>,
     usage: Option<crate::usage::UsageSummary>,
     conversation_id: Option<&str>,
+    cost: Option<crate::config::ModelCost>,
 ) {
     let fields = StreamLogFields {
         provider: provider.to_string(),
@@ -1609,6 +1669,7 @@ async fn log_request(
         upstream_url: upstream_url.map(|s| s.to_string()),
         model: model.map(|s| s.to_string()),
         conversation_id: conversation_id.map(|s| s.to_string()),
+        cost,
     };
     let entry = build_log_entry(&fields, usage.as_ref());
     append_log_line(&entry);
@@ -1940,6 +2001,7 @@ mod tests {
             upstream_url: Some("http://upstream/chat/completions".to_string()),
             model: Some("gpt-5.4".to_string()),
             conversation_id: Some("conv-1".to_string()),
+            cost: None,
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
         assert!(entry.get("ts").and_then(|v| v.as_str()).is_some());
@@ -1965,6 +2027,7 @@ mod tests {
             upstream_url: None,
             model: None,
             conversation_id: None,
+            cost: None,
         };
         let entry = super::build_log_entry(&fields, None);
         assert_eq!(entry["ok"], false);
@@ -2000,12 +2063,76 @@ mod tests {
         assert_eq!(parsed.conversation_id.as_deref(), Some("conv-1"));
     }
 
-    type TeeSlot = (
+    #[test]
+    fn log_entry_writes_cost_total_when_model_has_price() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 200,
+            completion_tokens: 30,
+            cached_tokens: 120,
+            reasoning_tokens: 20,
+        };
+        let cost = crate::config::ModelCost {
+            input: 2.0,
+            output: 1.0,
+            cache_read: 0.5,
+            cache_write: 0.0,
+            tiers: vec![],
+            extra: Default::default(),
+        };
+        let fields = super::StreamLogFields {
+            provider: "hyb".to_string(),
+            ok: true,
+            error: None,
+            status: Some(200),
+            upstream_url: Some("http://upstream/chat/completions".to_string()),
+            model: Some("gpt-5.4".to_string()),
+            conversation_id: Some("conv-1".to_string()),
+            cost: Some(cost),
+        };
+        let entry = super::build_log_entry(&fields, Some(&usage));
+        assert_eq!(entry["costTotal"], 250.0, "costTotal is written when price is known");
+    }
+
+    #[test]
+    fn log_entry_leaves_cost_total_null_without_price_or_usage() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 200,
+            completion_tokens: 30,
+            cached_tokens: 120,
+            reasoning_tokens: 20,
+        };
+        let fields = super::StreamLogFields {
+            provider: "hyb".to_string(),
+            ok: true,
+            error: None,
+            status: Some(200),
+            upstream_url: None,
+            model: Some("gpt-5.4".to_string()),
+            conversation_id: None,
+            cost: None,
+        };
+        let entry = super::build_log_entry(&fields, Some(&usage));
+        assert_eq!(entry["costTotal"], serde_json::Value::Null, "no price means unknown cost");
+
+        let fields_with_price = super::StreamLogFields {
+            cost: Some(crate::config::ModelCost {
+                input: 2.0,
+                output: 1.0,
+                cache_read: 0.5,
+                cache_write: 0.0,
+                tiers: vec![],
+                extra: Default::default(),
+            }),
+            ..fields
+        };
+        let entry = super::build_log_entry(&fields_with_price, None);
+        assert_eq!(entry["costTotal"], serde_json::Value::Null, "no usage means unknown cost");
+    }
+
+    fn tee_slot() -> (
         std::sync::Arc<std::sync::Mutex<Option<Option<crate::usage::UsageSummary>>>>,
         Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
-    );
-
-    fn tee_slot() -> TeeSlot {
+    ) {
         let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
         let handle = slot.clone();
         let cb: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send> =
@@ -2170,5 +2297,75 @@ mod tests {
 
         drop(tee);
         assert_eq!(*slot.lock().unwrap(), Some(None));
+    }
+    #[test]
+    fn compute_cost_converts_cached_subset_at_cache_read_price() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 200,
+            completion_tokens: 30,
+            cached_tokens: 120,
+            reasoning_tokens: 20,
+        };
+        let cost = crate::config::ModelCost {
+            input: 2.0,
+            output: 1.0,
+            cache_read: 0.5,
+            cache_write: 0.0,
+            tiers: vec![],
+            extra: Default::default(),
+        };
+        let total = super::compute_cost(&usage, &cost);
+        assert_eq!(total, 250.0, "(200-120)*2 + 120*0.5 + 30*1");
+    }
+    #[test]
+    fn compute_cost_uses_tier_price_when_input_tokens_reach_threshold() {
+        let usage = crate::usage::UsageSummary {
+            prompt_tokens: 200,
+            completion_tokens: 30,
+            cached_tokens: 120,
+            reasoning_tokens: 20,
+        };
+        let cost = crate::config::ModelCost {
+            input: 1.0,
+            output: 1.0,
+            cache_read: 0.5,
+            cache_write: 0.0,
+            tiers: vec![crate::config::ModelCostTier {
+                input_tokens_above: 100.0,
+                input: 0.5,
+                output: 0.5,
+                cache_read: 0.25,
+                cache_write: 0.0,
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        };
+        let total = super::compute_cost(&usage, &cost);
+        assert_eq!(total, 85.0, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5");
+        let total = super::compute_cost(&usage, &cost);
+        assert_eq!(total, 85.0, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5");
+    }
+
+    #[test]
+    fn lookup_model_cost_returns_price_only_when_model_has_cost() {
+        let profile: crate::config::ProviderProfile = serde_json::from_value(
+            serde_json::json!({
+                "models": [
+                    { "id": "gpt-5.4", "cost": { "input": 2.0, "output": 1.0, "cacheRead": 0.5, "cacheWrite": 0.0 } },
+                    { "id": "free-model" }
+                ]
+            }),
+        )
+        .unwrap();
+        let priced = super::lookup_model_cost(&profile, "gpt-5.4");
+        assert_eq!(priced.as_ref().map(|m| m.input), Some(2.0));
+        assert!(
+            super::lookup_model_cost(&profile, "free-model").is_none(),
+            "no cost config means unknown"
+        );
+        assert!(
+            super::lookup_model_cost(&profile, "missing").is_none(),
+            "unknown model means unknown"
+        );
     }
 }
