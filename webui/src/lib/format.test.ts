@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatCost,
   formatRequestTime,
   formatRequestToken,
   formatTokenCount,
@@ -125,5 +126,31 @@ describe("shortConversationId", () => {
   it("keeps ids at the boundary length as-is", () => {
     expect(shortConversationId("0123456789abcdef")).toBe("0123456789abcdef");
     expect(shortConversationId("0123456789abcdef1")).toBe("0123456789ab…");
+  });
+});
+
+describe("formatCost", () => {
+  it("renders a dash when the cost is missing", () => {
+    expect(formatCost(null)).toBe("-");
+    expect(formatCost(undefined)).toBe("-");
+  });
+
+  it("renders explicit zero as $0.00", () => {
+    expect(formatCost(0)).toBe("$0.00");
+  });
+
+  it("renders sub-dollar amounts with four decimal places", () => {
+    expect(formatCost(0.0042)).toBe("$0.0042");
+    expect(formatCost(0.1)).toBe("$0.1");
+  });
+
+  it("renders dollar amounts with two decimals", () => {
+    expect(formatCost(1)).toBe("$1.00");
+    expect(formatCost(12.34)).toBe("$12.34");
+  });
+
+  it("renders large amounts with K/M suffixes", () => {
+    expect(formatCost(1234)).toBe("$1.2K");
+    expect(formatCost(12_345_678)).toBe("$12.3M");
   });
 });

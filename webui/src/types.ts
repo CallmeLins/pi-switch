@@ -157,6 +157,7 @@ export interface ConversationStats {
   reasoningTokens: number;
   lastActive?: string;
   cacheRate?: string;
+  cost?: number | null;
 }
 
 export interface RecentRequest {
@@ -172,6 +173,7 @@ export interface RecentRequest {
   reasoningTokens?: number | null;
   totalTokens?: number | null;
   cacheRate?: string;
+  cost?: number | null;
 }
 
 export interface UsageStats {
@@ -184,6 +186,8 @@ export interface UsageStats {
   byModel?: Record<string, { total: number; ok: number; failed: number }>;
   totalTokens?: TokenTotals;
   cacheHitRate?: string;
+  totalCost?: number | null;
+  costUnknown?: number;
   byConversation?: ConversationStats[];
   recentRequests?: RecentRequest[];
   [key: string]: unknown;

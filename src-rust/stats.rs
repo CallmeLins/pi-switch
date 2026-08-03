@@ -26,6 +26,8 @@ pub struct RequestLogEntry {
     pub reasoning_tokens: Option<u64>,
     #[serde(rename = "conversationId", default)]
     pub conversation_id: Option<String>,
+    #[serde(rename = "costTotal", default)]
+    pub cost_total: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +78,8 @@ pub struct ConversationStats {
     pub last_active: Option<String>,
     #[serde(rename = "cacheRate")]
     pub cache_rate: String,
+    #[serde(rename = "cost", default)]
+    pub cost: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +102,8 @@ pub struct RecentRequest {
     pub total_tokens: Option<u64>,
     #[serde(rename = "cacheRate")]
     pub cache_rate: String,
+    #[serde(rename = "cost", default)]
+    pub cost: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,6 +132,10 @@ pub struct UsageStats {
     pub total_tokens: TokenTotals,
     #[serde(rename = "cacheHitRate")]
     pub cache_hit_rate: String,
+    #[serde(rename = "totalCost", default)]
+    pub total_cost: Option<f64>,
+    #[serde(rename = "costUnknown", default)]
+    pub cost_unknown: u64,
     #[serde(rename = "byConversation")]
     pub by_conversation: Vec<ConversationStats>,
     #[serde(rename = "recentRequests")]
@@ -340,6 +350,8 @@ pub fn aggregate(
         circuit_breaker,
         total_tokens: TokenTotals { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 },
         cache_hit_rate: "-".into(),
+        total_cost: None,
+        cost_unknown: 0,
         by_conversation: Vec::new(),
         recent_requests: Vec::new(),
     };
@@ -350,6 +362,8 @@ pub fn aggregate(
     let mut total_output: u64 = 0;
     let mut total_cached: u64 = 0;
     let mut total_reasoning: u64 = 0;
+    let mut total_cost: Option<f64> = None;
+    let mut cost_unknown: u64 = 0;
     let mut conversations: HashMap<String, ConversationStats> = HashMap::new();
 
     for entry in entries {
@@ -373,6 +387,13 @@ pub fn aggregate(
             total_output += u.completion;
             total_cached += u.cached;
             total_reasoning += u.reasoning;
+            // Cost follows the same scope as token usage: only successful,
+            // non-retried rows with usage contribute. Rows without a price are
+            // counted as unknown so the UI can hint at incomplete data.
+            match entry.cost_total {
+                Some(c) => total_cost = Some(total_cost.unwrap_or(0.0) + c),
+                None => cost_unknown += 1,
+            }
         }
 
         // Per conversation: every row counts toward requests/last-active;
@@ -392,6 +413,7 @@ pub fn aggregate(
             reasoning_tokens: 0,
             last_active: None,
             cache_rate: "-".into(),
+            cost: None,
         });
         conv.requests += 1;
         if let Some(ts) = entry.ts.as_deref() {
@@ -404,6 +426,9 @@ pub fn aggregate(
             conv.output_tokens += u.completion;
             conv.cached_tokens += u.cached;
             conv.reasoning_tokens += u.reasoning;
+            if let Some(c) = entry.cost_total {
+                conv.cost = Some(conv.cost.unwrap_or(0.0) + c);
+            }
         }
 
         // Per provider
@@ -467,6 +492,7 @@ pub fn aggregate(
             reasoning_tokens: None,
             total_tokens: None,
             cache_rate: "-".into(),
+            cost: entry.cost_total,
         };
         if let Some(u) = &usage {
             detail.prompt_tokens = Some(u.prompt);
@@ -496,6 +522,8 @@ pub fn aggregate(
         cached: total_cached,
         reasoning: total_reasoning,
     };
+    stats.total_cost = total_cost;
+    stats.cost_unknown = cost_unknown;
     stats.cache_hit_rate = if total_cached == 0 {
         "-".into()
     } else {
@@ -575,12 +603,12 @@ pub fn export_logs_json() -> crate::error::Result<String> {
 
 fn csv_of(entries: &[RequestLogEntry]) -> String {
     let mut csv = String::from(
-        "timestamp,ok,provider,model,status,latency_ms,error,retry,skipped,converted,upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId\n",
+        "timestamp,ok,provider,model,status,latency_ms,error,retry,skipped,converted,upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId,costTotal\n",
     );
 
     for entry in entries {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             entry.ts.as_deref().unwrap_or(""),
             entry
                 .ok
@@ -611,6 +639,7 @@ fn csv_of(entries: &[RequestLogEntry]) -> String {
             entry.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
             entry.reasoning_tokens.map(|t| t.to_string()).unwrap_or_default(),
             entry.conversation_id.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
+            entry.cost_total.map(|c| c.to_string()).unwrap_or_default(),
         ));
     }
 
@@ -643,6 +672,7 @@ mod tests {
             cached_tokens: None,
             reasoning_tokens: None,
             conversation_id: None,
+            cost_total: None,
         }
     }
 
@@ -676,6 +706,75 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_sums_known_cost_and_counts_unknown_rows() {
+        let mut known1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        known1.cost_total = Some(0.25);
+        let mut known2 = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
+        known2.cost_total = Some(0.5);
+        let unknown = with_usage(entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"), 300, 30, 0);
+
+        // Failed and retried rows are outside the token/cost scope: their cost
+        // (even when present) must not leak into totals.
+        let mut failed = entry(false, "hyb", "m1", 40, "2026-08-02T10:00:03Z");
+        failed.cost_total = Some(9.9);
+        let mut retry = with_usage(entry(true, "hyb", "m1", 50, "2026-08-02T10:00:04Z"), 100, 10, 0);
+        retry.retry = Some(true);
+        retry.cost_total = Some(9.9);
+
+        let stats = aggregate(
+            &[known1, known2, unknown, failed, retry],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        assert_eq!(stats.total_cost, Some(0.75));
+        assert_eq!(stats.cost_unknown, 1);
+    }
+
+    #[test]
+    fn aggregate_total_cost_is_none_when_no_known_cost_rows() {
+        let stats = aggregate(
+            &[with_usage(entry(true, "hyb", "m3", 10, "2026-08-02T10:00:00Z"), 100, 10, 0)],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        assert_eq!(stats.total_cost, None, "all-unknown window shows no total");
+        assert_eq!(stats.cost_unknown, 1);
+    }
+
+    #[test]
+    fn aggregate_conversation_cost_sums_known_rows_and_stays_none_when_all_unknown() {
+        let mut priced1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        priced1.conversation_id = Some("conv-a".into());
+        priced1.cost_total = Some(0.25);
+        let mut priced2 = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
+        priced2.conversation_id = Some("conv-a".into());
+        priced2.cost_total = Some(0.5);
+        let mut unknown = with_usage(entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"), 300, 30, 0);
+        unknown.conversation_id = Some("conv-b".into());
+
+        let stats = aggregate(
+            &[priced1, priced2, unknown],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        let by_id = |id: &str| {
+            stats
+                .by_conversation
+                .iter()
+                .find(|c| c.conversation_id == id)
+                .unwrap()
+        };
+        assert_eq!(by_id("conv-a").cost, Some(0.75), "conversation sums its known rows");
+        assert_eq!(by_id("conv-b").cost, None, "all-unknown conversation shows no cost");
+    }
+
+    #[test]
     fn aggregate_single_success_entry_counts_everywhere() {
         let stats = aggregate(
             &[entry(true, "hyb", "gpt-5.4", 100, "2026-08-02T10:00:00Z")],
@@ -696,6 +795,72 @@ mod tests {
         assert_eq!(ps.last_used.as_deref(), Some("2026-08-02T10:00:00Z"));
         let ms = &stats.by_model["gpt-5.4"];
         assert_eq!((ms.total, ms.ok), (1, 1));
+        let ms = &stats.by_model["gpt-5.4"];
+        assert_eq!((ms.total, ms.ok), (1, 1));
+    }
+
+    #[test]
+    fn aggregate_recent_requests_carry_cost_or_none() {
+        let mut priced = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        priced.cost_total = Some(0.25);
+        let unknown = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
+
+        let stats = aggregate(
+            &[priced, unknown],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        let by_ts = |ts: &str| {
+            stats
+                .recent_requests
+                .iter()
+                .find(|r| r.ts.as_deref() == Some(ts))
+                .unwrap()
+        };
+        assert_eq!(by_ts("2026-08-02T10:00:00Z").cost, Some(0.25));
+        assert_eq!(by_ts("2026-08-02T10:00:01Z").cost, None, "unknown row shows no cost");
+    }
+
+    #[test]
+    fn request_log_entry_deserializes_legacy_rows_without_cost_total() {
+        let legacy = r#"{"ts":"2026-08-02T10:00:00Z","ok":true,"provider":"hyb","model":"m1","promptTokens":100,"completionTokens":10}"#;
+        let parsed: RequestLogEntry = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.cost_total, None, "old rows parse with unknown cost");
+
+        let with_cost = r#"{"ok":true,"costTotal":0.25}"#;
+        let parsed: RequestLogEntry = serde_json::from_str(with_cost).unwrap();
+        assert_eq!(parsed.cost_total, Some(0.25));
+        let with_cost = r#"{"ok":true,"costTotal":0.25}"#;
+        let parsed: RequestLogEntry = serde_json::from_str(with_cost).unwrap();
+        assert_eq!(parsed.cost_total, Some(0.25));
+    }
+
+    #[test]
+    fn csv_of_includes_cost_total_column() {
+        let mut priced = entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z");
+        priced.cost_total = Some(0.25);
+        let legacy = entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z");
+
+        let csv = csv_of(&[priced, legacy]);
+        let header = csv.lines().next().unwrap();
+        assert!(header.ends_with("costTotal"), "header has costTotal column");
+        let rows: Vec<&str> = csv.lines().skip(1).collect();
+        assert_eq!(rows[0].split(',').last(), Some("0.25"), "known cost exported");
+        assert_eq!(rows[1].split(',').last(), Some(""), "legacy row exports empty cost");
+    }
+
+    #[test]
+    fn export_logs_json_serializes_cost_total() {
+        let mut priced = entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z");
+        priced.cost_total = Some(0.25);
+        let json = serde_json::to_value(&[priced]).unwrap();
+        assert_eq!(json[0]["costTotal"], 0.25);
+
+        let legacy = entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z");
+        let json = serde_json::to_value(&[legacy]).unwrap();
+        assert_eq!(json[0]["costTotal"], serde_json::Value::Null, "legacy row has null cost");
     }
 
     #[test]
@@ -1221,12 +1386,12 @@ mod tests {
         let header = lines.next().unwrap();
         assert!(
             header.ends_with(
-                "upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId"
+                "upstream_url,promptTokens,completionTokens,cachedTokens,reasoningTokens,conversationId,costTotal"
             ),
             "header: {header}"
         );
         let row = lines.next().unwrap();
-        assert!(row.ends_with(",100,50,40,20,conv-9"), "row: {row}");
+        assert!(row.ends_with(",100,50,40,20,conv-9,"), "row: {row}");
         assert!(lines.next().is_none(), "exactly one data row");
     }
 
@@ -1236,9 +1401,8 @@ mod tests {
         e.conversation_id = Some("a,b\nc".into());
         let csv = csv_of(&[e]);
         let row = csv.lines().nth(1).unwrap();
-        assert!(row.ends_with(",,,,a;b c"), "got: {row}");
+        assert!(row.ends_with(",,,,a;b c,"), "got: {row}");
     }
-
     #[test]
     fn json_export_serializes_token_and_conversation_fields() {
         let mut e = with_reasoning(with_usage(entry(true, "hyb", "gpt-5.4", 12, "t"), 100, 50, 40), 20);

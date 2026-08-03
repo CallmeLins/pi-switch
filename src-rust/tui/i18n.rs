@@ -336,6 +336,10 @@ pub fn stats_range_7d() -> &'static str {
     t!("7d", "7天")
 }
 
+pub fn stats_cost() -> &'static str {
+    t!("Cost", "消费")
+}
+
 // ─── Backups labels ──────────────────────────────────────
 
 pub fn backups_empty() -> &'static str {

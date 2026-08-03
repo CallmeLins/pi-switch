@@ -43,6 +43,24 @@ export function formatRequestToken(count: number | null | undefined): string {
   return formatTokenCount(count);
 }
 
+export function formatCost(value: number | null | undefined): string {
+  if (value == null) {
+    return "-";
+  }
+  if (value === 0) {
+    return "$0.00";
+  }
+  if (value < 1) {
+    // Sub-dollar amounts keep four decimal places, trailing zeros trimmed.
+    return `$${value.toFixed(4).replace(/\.?0+$/, "")}`;
+  }
+  if (value < 1000) {
+    return `$${value.toFixed(2)}`;
+  }
+  // Large amounts reuse the token K/M/B/T suffix scaling.
+  return `$${formatTokenCount(value)}`;
+}
+
 export function formatRequestTime(ts?: string | null): string {
   if (!ts) {
     return "-";
