@@ -9,7 +9,7 @@ pi-switch 是 pi 客户端（Perplexity 的模型客户端）的轻量 profile �
 _Avoid_: 用量、消耗、费用
 
 **消费（Cost）**：
-由 token 使用量乘以模型单价折算的估算费用。单价来自 profile 模型配置（input/output/cacheRead/cacheWrite，可分级），在请求完成时定格并写入请求日志；模型未配置单价时该请求的消费记为 unknown。
+由 token 使用量乘以模型单价折算的估算费用。单价按**每 1M tokens** 计（行业惯例，如 `input: 2.0` 表示 $2 / 1M tokens），来自 profile 模型配置（input/output/cacheRead/cacheWrite，可分级），在请求完成时定格并写入请求日志；模型未配置单价时该请求的消费记为 unknown。
 _Avoid_: 费用、花费、金额、账单
 **推理 token（Reasoning Tokens）**：
 输出 token 中用于模型推理思考的部分，取自 `completion_tokens_details.reasoning_tokens`（Chat Completions / DeepSeek）或 `output_tokens_details.reasoning_tokens`（Responses）；是输出 token 的子集，总数不重复累加。上游不报告的（如 Anthropic）记 0。
