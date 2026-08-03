@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { AppState, ConversationsPage, RecentRequest, UsageStats } from "../types";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import type { AppState, ConversationRequestsPage, ConversationStats, ConversationsPage, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
 import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
@@ -49,6 +49,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
   const [convPage, setConvPage] = useState(0);
   const [convPageSize, setConvPageSize] = useState(50);
   const [convData, setConvData] = useState<ConversationsPage | null>(null);
+  const [expandedConvs, setExpandedConvs] = useState<Set<string>>(new Set());
   const seq = useRef(0);
   const load = useCallback(
     async (
@@ -283,6 +284,17 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
     const { from, to } = convWindowBounds();
     void loadConversations(convRange, from, to, nextPage, convPageSize);
   };
+  const toggleConv = (id: string) => {
+    setExpandedConvs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   return (
     <div>
@@ -425,6 +437,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   <thead className="text-left text-xs text-zinc-500">
                     <tr>
                       <th className="pb-1 pr-2">Time</th>
+                      <th className="pb-1 pr-2">Session</th>
                       <th className="pb-1 pr-2">Provider</th>
                       <th className="pb-1 pr-2">Model</th>
                       <th className="pb-1 pr-2">Status</th>
@@ -438,40 +451,9 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                     </tr>
                   </thead>
                   <tbody>
-                    {stats.recentRequests.map((r, i) => {
-                      const status = formatRequestStatus(r);
-                      const tokenCols = [
-                        ["Input", formatRequestToken(r.promptTokens)],
-                        ["Output", formatRequestToken(r.completionTokens)],
-                        ["Cached", formatRequestToken(r.cachedTokens)],
-                        ["Reasoning", formatRequestToken(r.reasoningTokens)],
-                        ["Rate", r.cacheRate ?? "-"],
-                        ["Total", formatRequestToken(r.totalTokens)],
-                        ["Cost", formatCost(r.cost)],
-                      ] as const;
-                      return (
-                        <tr
-                          key={`${r.ts ?? ""}-${r.model ?? ""}-${i}`}
-                          className="border-t border-white/5"
-                        >
-                          <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
-                            {formatRequestTime(r.ts)}
-                          </td>
-                          <td className="py-1 pr-2 text-zinc-300">{r.provider ?? "-"}</td>
-                          <td className="py-1 pr-2 text-zinc-300">{r.model ?? "-"}</td>
-                          <td className="py-1 pr-2 text-zinc-400">
-                            <span className="block max-w-[14rem] truncate" title={status}>
-                              {status}
-                            </span>
-                          </td>
-                          {tokenCols.map(([label, value]) => (
-                            <td key={label} className="py-1 pr-2 text-right text-zinc-400">
-                              {value}
-                            </td>
-                          ))}
-                        </tr>
-                      );
-                    })}
+                    {stats.recentRequests.map((r, i) => (
+                      <RequestRow key={`${r.ts ?? ""}-${r.model ?? ""}-${i}`} r={r} i={i} />
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -580,6 +562,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       <table aria-label="By conversation" className="w-full text-sm">
                         <thead className="text-left text-xs text-zinc-500">
                           <tr>
+                            <th className="pb-1 pr-2"></th>
                             <th className="pb-1 pr-2">Time</th>
                             <th className="pb-1 pr-2">Session</th>
                             <th className="pb-1 pr-2 text-right">Requests</th>
@@ -594,34 +577,54 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                         </thead>
                         <tbody>
                           {convData.conversations.map((c) => (
-                            <tr key={c.conversationId} className="border-t border-white/5">
-                              <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
-                                {formatRequestTime(c.lastActive)}
-                              </td>
-                              <td className="py-1 pr-2 text-zinc-300">
-                                <span className="block max-w-[14rem] truncate" title={c.conversationId}>
-                                  {c.name || shortConversationId(c.conversationId)}
-                                </span>
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">{c.requests}</td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">
-                                {formatRequestToken(c.inputTokens)}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">
-                                {formatRequestToken(c.outputTokens)}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">
-                                {formatRequestToken(c.cachedTokens)}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">
-                                {formatRequestToken(c.reasoningTokens)}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">{c.cacheRate ?? "-"}</td>
-                              <td className="py-1 pr-2 text-right text-zinc-400">
-                                {formatRequestToken(c.inputTokens + c.outputTokens)}
-                              </td>
-                              <td className="py-1 text-right text-zinc-400">{formatCost(c.cost)}</td>
-                            </tr>
+                            <Fragment key={c.conversationId}>
+                              <tr className="border-t border-white/5">
+                                <td className="py-1 pr-2">
+                                  <button
+                                    type="button"
+                                    aria-expanded={expandedConvs.has(c.conversationId)}
+                                    aria-label={`Expand conversation ${c.conversationId}`}
+                                    onClick={() => toggleConv(c.conversationId)}
+                                    className="text-zinc-500 hover:text-zinc-200"
+                                  >
+                                    {expandedConvs.has(c.conversationId) ? "▾" : "▸"}
+                                  </button>
+                                </td>
+                                <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
+                                  {formatRequestTime(c.lastActive)}
+                                </td>
+                                <td className="py-1 pr-2 text-zinc-300">
+                                  <span className="block max-w-[14rem] truncate" title={c.conversationId}>
+                                    {c.name || shortConversationId(c.conversationId)}
+                                  </span>
+                                </td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">{c.requests}</td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">
+                                  {formatRequestToken(c.inputTokens)}
+                                </td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">
+                                  {formatRequestToken(c.outputTokens)}
+                                </td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">
+                                  {formatRequestToken(c.cachedTokens)}
+                                </td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">
+                                  {formatRequestToken(c.reasoningTokens)}
+                                </td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">{c.cacheRate ?? "-"}</td>
+                                <td className="py-1 pr-2 text-right text-zinc-400">
+                                  {formatRequestToken(c.inputTokens + c.outputTokens)}
+                                </td>
+                                <td className="py-1 text-right text-zinc-400">{formatCost(c.cost)}</td>
+                              </tr>
+                              {expandedConvs.has(c.conversationId) && (
+                                <tr className="border-t border-white/5">
+                                  <td colSpan={11} className="py-2 pl-8 pr-2">
+                                    <ExpandedConversationRequests conv={c} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           ))}
                         </tbody>
                       </table>
@@ -752,4 +755,190 @@ function formatRequestStatus(r: RecentRequest): string {
   }
   const parts = [r.status != null ? String(r.status) : null, r.error ?? null].filter(Boolean);
   return parts.join(" ") || "failed";
+}
+
+// ─── Request detail row (shared by the stats page and the expanded
+// ─── conversation browser so both render identically) ─────────
+
+function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
+  const status = formatRequestStatus(r);
+  const tokenCols = [
+    ["Input", formatRequestToken(r.promptTokens)],
+    ["Output", formatRequestToken(r.completionTokens)],
+    ["Cached", formatRequestToken(r.cachedTokens)],
+    ["Reasoning", formatRequestToken(r.reasoningTokens)],
+    ["Rate", r.cacheRate ?? "-"],
+    ["Total", formatRequestToken(r.totalTokens)],
+    ["Cost", formatCost(r.cost)],
+  ] as const;
+  return (
+    <tr className="border-t border-white/5">
+      <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
+        {formatRequestTime(r.ts)}
+      </td>
+      <td className="py-1 pr-2 text-zinc-300">
+        <span className="block max-w-[12rem] truncate" title={r.conversationId ?? undefined}>
+          {r.conversationName || (r.conversationId ? shortConversationId(r.conversationId) : "-")}
+        </span>
+      </td>
+      <td className="py-1 pr-2 text-zinc-300">{r.provider ?? "-"}</td>
+      <td className="py-1 pr-2 text-zinc-300">{r.model ?? "-"}</td>
+      <td className="py-1 pr-2 text-zinc-400">
+        <span className="block max-w-[14rem] truncate" title={status}>
+          {status}
+        </span>
+      </td>
+      {tokenCols.map(([label, value]) => (
+        <td key={label} className="py-1 pr-2 text-right text-zinc-400">
+          {value}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+// ─── Expanded conversation request browser ────────────────────
+
+function ExpandedConversationRequests({ conv }: { conv: ConversationStats }) {
+  const [data, setData] = useState<ConversationRequestsPage | null>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [error, setError] = useState(false);
+  const seq = useRef(0);
+
+  const load = useCallback(
+    async (page: number, pageSize: number) => {
+      const id = ++seq.current;
+      setError(false);
+      try {
+        const next = await api.conversationRequests(conv.conversationId, page, pageSize);
+        if (id === seq.current) {
+          const lastPage = next.total > 0 ? Math.ceil(next.total / pageSize) - 1 : 0;
+          if (page > lastPage) {
+            // The conversation shrank while we were on a later page: clamp
+            // and re-request once (guarded so it can never re-trigger).
+            setPage(lastPage);
+            void load(lastPage, pageSize);
+            return;
+          }
+          setData(next);
+        }
+      } catch {
+        if (id === seq.current) {
+          setError(true);
+        }
+      }
+    },
+    [conv.conversationId],
+  );
+
+  useEffect(() => {
+    void load(0, 50);
+  }, [load]);
+
+  const totalPages = data && data.total > 0 ? Math.ceil(data.total / pageSize) : 0;
+  const goPage = (nextPage: number) => {
+    setPage(nextPage);
+    void load(nextPage, pageSize);
+  };
+
+  return (
+    <div>
+      <div className="mb-1 text-xs text-zinc-500">
+        Requests in {conv.name || shortConversationId(conv.conversationId)}
+      </div>
+      {error ? (
+        <div className="text-sm text-red-300">Failed to load conversation requests.</div>
+      ) : !data ? (
+        <div className="text-sm text-zinc-500">Loading…</div>
+      ) : data.requests.length === 0 ? (
+        <div className="text-sm text-zinc-500">No requests in this conversation.</div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table aria-label={`Requests of ${conv.conversationId}`} className="w-full text-sm">
+              <thead className="text-left text-xs text-zinc-500">
+                <tr>
+                  <th className="pb-1 pr-2">Time</th>
+                  <th className="pb-1 pr-2">Session</th>
+                  <th className="pb-1 pr-2">Provider</th>
+                  <th className="pb-1 pr-2">Model</th>
+                  <th className="pb-1 pr-2">Status</th>
+                  <th className="pb-1 pr-2 text-right">Input</th>
+                  <th className="pb-1 pr-2 text-right">Output</th>
+                  <th className="pb-1 pr-2 text-right">Cached</th>
+                  <th className="pb-1 pr-2 text-right">Reasoning</th>
+                  <th className="pb-1 pr-2 text-right">Rate</th>
+                  <th className="pb-1 text-right">Total</th>
+                  <th className="pb-1 text-right">Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.requests.map((r, i) => (
+                  <RequestRow key={`${r.ts ?? ""}-${r.model ?? ""}-${i}`} r={r} i={i} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
+            <span>{data.total} rows</span>
+            {totalPages > 1 && (
+              <span className="flex items-center gap-1">
+                <Button
+                  aria-label="Previous request page"
+                  disabled={page === 0}
+                  onClick={() => goPage(page - 1)}
+                >
+                  ‹
+                </Button>
+                {pageNumbers(page, totalPages).map((n, i) =>
+                  n === "…" ? (
+                    <span key={`gap-${i}`} className="px-1 text-zinc-600">
+                      …
+                    </span>
+                  ) : (
+                    <Button
+                      key={n}
+                      variant={n - 1 === page ? "primary" : "subtle"}
+                      aria-pressed={n - 1 === page}
+                      onClick={() => goPage(n - 1)}
+                    >
+                      {n}
+                    </Button>
+                  ),
+                )}
+                <Button
+                  aria-label="Next request page"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => goPage(page + 1)}
+                >
+                  ›
+                </Button>
+              </span>
+            )}
+            <label className="flex items-center gap-1 text-zinc-500">
+              Rows per page
+              <select
+                aria-label="Request rows per page"
+                value={pageSize}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  setPageSize(next);
+                  setPage(0);
+                  void load(0, next);
+                }}
+                className="rounded border border-white/10 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200"
+              >
+                {PAGE_SIZES.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }

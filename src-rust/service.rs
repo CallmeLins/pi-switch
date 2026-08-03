@@ -202,3 +202,16 @@ pub fn conversations_value(
     serde_json::to_value(crate::stats::ConversationsPage { conversations, total })
         .unwrap_or_else(|_| json!({}))
 }
+
+/// All request rows of one conversation as JSON (`{ requests, total }`), for
+/// the expanded conversation browser. `page`/`limit` default to 0/100.
+pub fn conversation_requests_value(
+    conversation_id: &str,
+    page: Option<usize>,
+    limit: Option<usize>,
+) -> Value {
+    let (requests, total) =
+        crate::stats::get_conversation_requests(conversation_id, page, limit);
+    serde_json::to_value(crate::stats::ConversationRequestsPage { requests, total })
+        .unwrap_or_else(|_| json!({}))
+}

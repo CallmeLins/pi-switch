@@ -97,6 +97,14 @@ pub struct ConversationsPage {
     pub total: usize,
 }
 
+/// Paged request rows for one conversation
+/// (`GET /api/stats/conversations/:id/requests`).
+#[derive(Debug, Serialize)]
+pub struct ConversationRequestsPage {
+    pub requests: Vec<RecentRequest>,
+    pub total: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RecentRequest {
     pub ts: Option<String>,
@@ -119,6 +127,10 @@ pub struct RecentRequest {
     pub cache_rate: String,
     #[serde(rename = "cost", default)]
     pub cost: Option<f64>,
+    #[serde(rename = "conversationId", default)]
+    pub conversation_id: Option<String>,
+    #[serde(rename = "conversationName", default)]
+    pub conversation_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -335,6 +347,38 @@ pub fn aggregate(
     aggregate_paged(entries, circuit, cooldown_ms, now_ms, window, 0, 100)
 }
 
+/// One request-detail row for a log entry: token fields only from countable
+/// usage, otherwise null with a "-" rate. Shared by the stats page and the
+/// per-conversation request browser so both render identically.
+fn request_detail(entry: &RequestLogEntry) -> RecentRequest {
+    let mut detail = RecentRequest {
+        ts: entry.ts.clone(),
+        provider: entry.provider.clone(),
+        model: entry.model.clone(),
+        ok: entry.ok,
+        status: entry.status,
+        error: entry.error.clone(),
+        prompt_tokens: None,
+        completion_tokens: None,
+        cached_tokens: None,
+        reasoning_tokens: None,
+        total_tokens: None,
+        cache_rate: "-".into(),
+        cost: entry.cost_total,
+        conversation_id: entry.conversation_id.clone(),
+        conversation_name: entry.conversation_name.clone(),
+    };
+    if let Some(u) = usage_of(entry) {
+        detail.prompt_tokens = Some(u.prompt);
+        detail.completion_tokens = Some(u.completion);
+        detail.cached_tokens = Some(u.cached);
+        detail.reasoning_tokens = Some(u.reasoning);
+        detail.total_tokens = Some(u.prompt + u.completion);
+        detail.cache_rate = cache_rate_of(u.prompt, u.cached);
+    }
+    detail
+}
+
 /// Aggregate request-log entries into usage stats, paging the recent-request
 /// details list. `page` is 0-based, `limit` is the per-page row count; the
 /// response always carries the full in-window row count as `recentRequestTotal`.
@@ -484,29 +528,7 @@ pub fn aggregate_paged(
 
         // Per-request detail rows: every in-window entry gets one row; token
         // fields only from countable usage, otherwise null with a "-" rate.
-        let mut detail = RecentRequest {
-            ts: entry.ts.clone(),
-            provider: entry.provider.clone(),
-            model: entry.model.clone(),
-            ok: entry.ok,
-            status: entry.status,
-            error: entry.error.clone(),
-            prompt_tokens: None,
-            completion_tokens: None,
-            cached_tokens: None,
-            reasoning_tokens: None,
-            total_tokens: None,
-            cache_rate: "-".into(),
-            cost: entry.cost_total,
-        };
-        if let Some(u) = &usage {
-            detail.prompt_tokens = Some(u.prompt);
-            detail.completion_tokens = Some(u.completion);
-            detail.cached_tokens = Some(u.cached);
-            detail.reasoning_tokens = Some(u.reasoning);
-            detail.total_tokens = Some(u.prompt + u.completion);
-            detail.cache_rate = cache_rate_of(u.prompt, u.cached);
-        }
+        let detail = request_detail(entry);
         stats.recent_requests.push(detail);
     }
 
@@ -690,6 +712,48 @@ pub fn get_conversations_paged(
 ) -> (Vec<ConversationStats>, usize) {
     let entries = parse_logs();
     aggregate_conversations_paged(&entries, window, page.unwrap_or(0), limit.unwrap_or(100))
+}
+
+/// Whether a log entry belongs to the given conversation key: entries with a
+/// non-empty `conversation_id` match that id; `"unlabeled"` matches entries
+/// without one (mirrors the conversation-aggregation key semantics).
+fn matches_conversation(entry: &RequestLogEntry, conversation_id: &str) -> bool {
+    match entry.conversation_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(id) => id == conversation_id,
+        None => conversation_id == "unlabeled",
+    }
+}
+
+/// All request-detail rows of one conversation (full history, no window),
+/// newest first, paged: `page` (0-based) / `limit` (rows per page). Returns
+/// `(rows, total)` where total is the full conversation row count.
+pub fn aggregate_conversation_requests(
+    entries: &[RequestLogEntry],
+    conversation_id: &str,
+    page: usize,
+    limit: usize,
+) -> (Vec<RecentRequest>, usize) {
+    let mut rows: Vec<RecentRequest> = entries
+        .iter()
+        .filter(|e| matches_conversation(e, conversation_id))
+        .map(request_detail)
+        .collect();
+    rows.sort_by(|a, b| cmp_ts_desc(&a.ts, &b.ts));
+    let total = rows.len();
+    let start = page.saturating_mul(limit);
+    rows = rows.into_iter().skip(start).take(limit).collect();
+    (rows, total)
+}
+
+/// All request-detail rows of one conversation over the request log, paged:
+/// `page` (0-based) and `limit` (rows per page) default to 0 and 100.
+pub fn get_conversation_requests(
+    conversation_id: &str,
+    page: Option<usize>,
+    limit: Option<usize>,
+) -> (Vec<RecentRequest>, usize) {
+    let entries = parse_logs();
+    aggregate_conversation_requests(&entries, conversation_id, page.unwrap_or(0), limit.unwrap_or(100))
 }
 
 pub fn export_logs_json() -> crate::error::Result<String> {
@@ -2211,5 +2275,87 @@ mod tests {
         assert_eq!(rows[0].output_tokens, 10);
         assert_eq!(rows[0].requests, 3);
         assert_eq!(rows[0].last_active.as_deref(), Some("2026-08-02T10:00:02Z"), "lastActive still tracks every row");
+    }
+
+    // ─── conversation_id on request details + conversation requests ───
+
+    #[test]
+    fn aggregate_recent_requests_carry_conversation_fields() {
+        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        named.conversation_id = Some("conv-a".into());
+        named.conversation_name = Some("my-chat".into());
+        let bare = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+
+        let stats = aggregate(&[named, bare], &HashMap::new(), 60_000, 0, None);
+        assert_eq!(stats.recent_requests.len(), 2);
+        let named_row = stats
+            .recent_requests
+            .iter()
+            .find(|r| r.ts.as_deref() == Some("2026-08-02T10:00:00Z"))
+            .unwrap();
+        assert_eq!(named_row.conversation_id.as_deref(), Some("conv-a"));
+        assert_eq!(named_row.conversation_name.as_deref(), Some("my-chat"));
+        let bare_row = stats
+            .recent_requests
+            .iter()
+            .find(|r| r.ts.as_deref() == Some("2026-08-02T10:00:01Z"))
+            .unwrap();
+        assert_eq!(bare_row.conversation_id, None, "bare rows carry no conversation id");
+        assert_eq!(bare_row.conversation_name, None);
+    }
+
+    #[test]
+    fn conversation_requests_filters_by_id_and_keeps_all_rows() {
+        let mut a1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        a1.conversation_id = Some("conv-a".into());
+        a1.cost_total = Some(0.25);
+        let mut a2 = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:01Z");
+        a2.conversation_id = Some("conv-a".into());
+        a2.retry = Some(true);
+        let mut b = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 50, 5, 0);
+        b.conversation_id = Some("conv-b".into());
+
+        let (rows, total) = aggregate_conversation_requests(&[a1, a2, b], "conv-a", 0, 50);
+        assert_eq!(total, 2, "total counts only matching rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].ts.as_deref(), Some("2026-08-02T10:00:01Z"), "newest first");
+        assert_eq!(rows[0].ok, Some(false), "failed/retry rows included like request details");
+        assert_eq!(rows[1].ts.as_deref(), Some("2026-08-02T10:00:00Z"));
+        assert_eq!(rows[1].prompt_tokens, Some(100), "token semantics match request details");
+        assert_eq!(rows[1].cost, Some(0.25));
+    }
+
+    #[test]
+    fn conversation_requests_unlabeled_matches_bare_rows() {
+        let bare1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        named.conversation_id = Some("conv-a".into());
+
+        let (rows, total) = aggregate_conversation_requests(&[bare1, named], "unlabeled", 0, 50);
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].conversation_id, None, "unlabeled matches rows without an id");
+    }
+
+    #[test]
+    fn conversation_requests_pages_and_sorts_desc() {
+        let entries: Vec<RequestLogEntry> = (0..5)
+            .map(|i| {
+                let mut e = with_usage(entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")), 100, 10, 0);
+                e.conversation_id = Some("conv-a".into());
+                e
+            })
+            .collect();
+
+        let (page1, total) = aggregate_conversation_requests(&entries, "conv-a", 0, 2);
+        assert_eq!(total, 5);
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].ts.as_deref(), Some("2026-08-02T10:00:04Z"), "newest first");
+
+        let (page3, _) = aggregate_conversation_requests(&entries, "conv-a", 2, 2);
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].ts.as_deref(), Some("2026-08-02T10:00:00Z"));
+
+        let (beyond, _) = aggregate_conversation_requests(&entries, "conv-a", 5, 2);
+        assert!(beyond.is_empty(), "page beyond the end yields no rows");
     }
 }

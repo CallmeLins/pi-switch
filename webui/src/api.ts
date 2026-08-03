@@ -1,5 +1,6 @@
 import type {
   AppState,
+  ConversationRequestsPage,
   ConversationsPage,
   DaemonResult,
   DoctorCheck,
@@ -61,6 +62,11 @@ export const api = {
         : `range=${range}&from=${from}&to=${to}&page=${page}&limit=${limit}`;
     return req<ConversationsPage>("GET", `/stats/conversations?${params}`);
   },
+  conversationRequests: (id: string, page = 0, limit = 50) =>
+    req<ConversationRequestsPage>(
+      "GET",
+      `/stats/conversations/${enc(id)}/requests?page=${page}&limit=${limit}`
+    ),
   proxyStatus: () => req<DaemonResult>("GET", "/proxy/status"),
   webuiInfo: () => req<{ authRequired: boolean }>("GET", "/webui/info"),
 

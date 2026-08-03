@@ -83,6 +83,7 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/backups", get(get_backups))
         .route("/stats", get(get_stats))
         .route("/stats/conversations", get(get_stats_conversations))
+        .route("/stats/conversations/:id/requests", get(get_conversation_requests))
         .route("/proxy/status", get(get_proxy_status))
         .route("/webui/info", get(get_webui_info))
         .route("/logs/export", get(get_logs_export))
@@ -223,6 +224,20 @@ async fn get_stats_conversations(Query(q): Query<HashMap<String, String>>) -> Ap
     let page = q.get("page").and_then(|s| s.parse::<usize>().ok());
     let limit = q.get("limit").and_then(|s| s.parse::<usize>().ok());
     Ok(Json(service::conversations_value(window, page, limit)))
+}
+
+async fn get_conversation_requests(
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiJson {
+    if id.trim().is_empty() {
+        return Err("conversation id must not be empty".to_string().into());
+    }
+    // Same optional paging as `/stats`: omitted or unparseable values fall
+    // back to page 0 / limit 100.
+    let page = q.get("page").and_then(|s| s.parse::<usize>().ok());
+    let limit = q.get("limit").and_then(|s| s.parse::<usize>().ok());
+    Ok(Json(service::conversation_requests_value(&id, page, limit)))
 }
 
 async fn get_proxy_status() -> ApiJson {
@@ -677,5 +692,37 @@ mod tests {
                 "{uri} should be 400, not 500"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn conversation_requests_with_valid_id_returns_200() {
+        let res = get("/api/stats/conversations/conv-a/requests?page=0&limit=5").await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let requests = body.get("requests").expect("body must include requests");
+        assert!(requests.is_array(), "requests must be an array");
+        let total = body.get("total").expect("body must include total");
+        assert!(total.is_u64() || total.is_i64(), "total must be a number");
+    }
+
+    #[tokio::test]
+    async fn conversation_requests_empty_id_is_rejected() {
+        let res = get("/api/stats/conversations//requests").await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "empty id should be 400");
+    }
+
+    #[tokio::test]
+    async fn conversation_requests_coexists_with_conversations_list() {
+        // The precise /stats/conversations route must still resolve after the
+        // deeper :id/requests route is registered.
+        let list = get("/api/stats/conversations").await;
+        assert_eq!(list.status(), StatusCode::OK, "list route unaffected");
+        let detail = get("/api/stats/conversations/conv-a/requests").await;
+        assert_eq!(detail.status(), StatusCode::OK, "detail route resolves too");
     }
 }

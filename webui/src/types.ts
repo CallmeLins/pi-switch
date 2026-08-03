@@ -166,6 +166,11 @@ export interface ConversationsPage {
   total: number;
 }
 
+export interface ConversationRequestsPage {
+  requests: RecentRequest[];
+  total: number;
+}
+
 export interface RecentRequest {
   ts?: string | null;
   provider?: string | null;
@@ -180,6 +185,8 @@ export interface RecentRequest {
   totalTokens?: number | null;
   cacheRate?: string;
   cost?: number | null;
+  conversationId?: string | null;
+  conversationName?: string | null;
 }
 
 export interface UsageStats {
