@@ -190,3 +190,15 @@ pub fn stats_value(
     serde_json::to_value(crate::stats::get_stats_paged(window, page, limit))
         .unwrap_or_else(|_| json!({}))
 }
+
+/// Paged per-conversation stats as JSON (`{ conversations, total }`), for the
+/// independent conversation browser. `page`/`limit` default to 0/100.
+pub fn conversations_value(
+    window: Option<(u64, u64)>,
+    page: Option<usize>,
+    limit: Option<usize>,
+) -> Value {
+    let (conversations, total) = crate::stats::get_conversations_paged(window, page, limit);
+    serde_json::to_value(crate::stats::ConversationsPage { conversations, total })
+        .unwrap_or_else(|_| json!({}))
+}

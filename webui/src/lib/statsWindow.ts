@@ -49,3 +49,26 @@ export function computeStatsWindow(
     }
   }
 }
+
+/**
+ * Range choices for the independent conversation browser: the four stats
+ * ranges plus "all" (full history, no window).
+ */
+export type ConversationRange = StatsRange | "all";
+
+/**
+ * Resolve a conversation-browser range into optional epoch-millis bounds.
+ * "all" yields a null window (backend treats it as full history); the other
+ * four ranges reuse the stats-window logic. `now` is injectable for tests.
+ */
+export function computeConversationWindow(
+  range: ConversationRange,
+  from: string | null,
+  to: string | null,
+  now = Date.now(),
+): { from: number | null; to: number | null } {
+  if (range === "all") {
+    return { from: null, to: null };
+  }
+  return computeStatsWindow(range, from, to, now);
+}

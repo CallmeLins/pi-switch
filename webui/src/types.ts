@@ -161,6 +161,11 @@ export interface ConversationStats {
   cost?: number | null;
 }
 
+export interface ConversationsPage {
+  conversations: ConversationStats[];
+  total: number;
+}
+
 export interface RecentRequest {
   ts?: string | null;
   provider?: string | null;

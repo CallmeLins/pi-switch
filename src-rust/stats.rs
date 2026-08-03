@@ -89,6 +89,14 @@ pub struct ConversationStats {
     pub cost: Option<f64>,
 }
 
+/// Paged per-conversation stats response for the independent conversation
+/// browser (`GET /api/stats/conversations`).
+#[derive(Debug, Serialize)]
+pub struct ConversationsPage {
+    pub conversations: Vec<ConversationStats>,
+    pub total: usize,
+}
+
 #[derive(Debug, Serialize)]
 pub struct RecentRequest {
     pub ts: Option<String>,
@@ -642,6 +650,83 @@ pub fn get_stats_paged(
         .as_millis() as u64;
 
     aggregate_paged(&entries, &circuit_entries, cooldown_ms, now_ms, window, page.unwrap_or(0), limit.unwrap_or(100))
+}
+
+/// Aggregate request-log entries into per-conversation stats, paging the
+/// result. Mirrors the conversation grouping inside `aggregate_paged` but
+/// returns every conversation in the window (no top-20 cap) together with the
+/// full in-window total, so the UI can browse any historical window
+/// independently of the main stats. `None` window keeps full history.
+pub fn aggregate_conversations_paged(
+    entries: &[RequestLogEntry],
+    window: Option<(u64, u64)>,
+    page: usize,
+    limit: usize,
+) -> (Vec<ConversationStats>, usize) {
+    let mut conversations: HashMap<String, ConversationStats> = HashMap::new();
+    for entry in entries {
+        if !in_window(entry, window) {
+            continue;
+        }
+        let key = entry.conversation_id.as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unlabeled")
+            .to_string();
+        let conv = conversations.entry(key.clone()).or_insert_with(|| ConversationStats {
+            conversation_id: key.clone(),
+            name: None,
+            requests: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cached_tokens: 0,
+            reasoning_tokens: 0,
+            last_active: None,
+            cache_rate: "-".into(),
+            cost: None,
+        });
+        conv.requests += 1;
+        // Name: newest named row in the window wins (log order is
+        // chronological). Never a grouping key — ADR-0002.
+        if let Some(name) = entry.conversation_name.as_deref().filter(|s| !s.is_empty()) {
+            conv.name = Some(name.to_string());
+        }
+        if let Some(ts) = entry.ts.as_deref() {
+            if conv.last_active.as_deref().map_or(true, |last| ts > last) {
+                conv.last_active = Some(ts.to_string());
+            }
+        }
+        if let Some(u) = usage_of(entry) {
+            conv.input_tokens += u.prompt;
+            conv.output_tokens += u.completion;
+            conv.cached_tokens += u.cached;
+            conv.reasoning_tokens += u.reasoning;
+            if let Some(c) = entry.cost_total {
+                conv.cost = Some(conv.cost.unwrap_or(0.0) + c);
+            }
+        }
+    }
+
+    let mut rows: Vec<ConversationStats> = conversations.into_values().collect();
+    for conv in &mut rows {
+        conv.cache_rate = cache_rate_of(conv.input_tokens, conv.cached_tokens);
+    }
+    rows.sort_by(|a, b| cmp_ts_desc(&a.last_active, &b.last_active));
+    let total = rows.len();
+    let start = page.saturating_mul(limit);
+    rows = rows.into_iter().skip(start).take(limit).collect();
+    (rows, total)
+}
+
+/// Per-conversation stats over the request log, paged: `page` (0-based) and
+/// `limit` (rows per page) default to 0 and 100 when omitted. `None` window
+/// keeps full history (All-time).
+pub fn get_conversations_paged(
+    window: Option<(u64, u64)>,
+    page: Option<usize>,
+    limit: Option<usize>,
+) -> (Vec<ConversationStats>, usize) {
+    let entries = parse_logs();
+    aggregate_conversations_paged(&entries, window, page.unwrap_or(0), limit.unwrap_or(100))
 }
 
 pub fn export_logs_json() -> crate::error::Result<String> {
@@ -2054,5 +2139,133 @@ mod tests {
         let stats = aggregate(&entries, &HashMap::new(), 60_000, 0, None);
         assert_eq!(stats.recent_request_total, 150);
         assert_eq!(stats.recent_requests.len(), 100);
+    }
+
+    // ─── aggregate_conversations_paged ─────────────────────────
+
+    #[test]
+    fn conversations_paged_filters_by_window_and_none_means_all() {
+        let mut in_win = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        in_win.conversation_id = Some("conv-a".into());
+        let mut out_win = with_usage(entry(true, "hyb", "m1", 10, "2026-08-03T10:00:00Z"), 100, 10, 0);
+        out_win.conversation_id = Some("conv-b".into());
+
+        let window = (ts_epoch_ms("2026-08-02T00:00:00Z").unwrap(), ts_epoch_ms("2026-08-02T23:59:59Z").unwrap());
+        let (rows, total) = aggregate_conversations_paged(&[in_win, out_win], Some(window), 0, 50);
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].conversation_id, "conv-a", "window excludes out-of-window rows");
+
+        let mut in_win2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        in_win2.conversation_id = Some("conv-a".into());
+        let (rows, total) = aggregate_conversations_paged(&[in_win2], None, 0, 50);
+        assert_eq!(total, 1, "None window keeps full history");
+        assert_eq!(rows[0].conversation_id, "conv-a");
+    }
+
+    #[test]
+    fn conversations_paged_groups_missing_ids_under_unlabeled() {
+        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        named.conversation_id = Some("conv-a".into());
+        let bare1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let bare2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+
+        let (rows, _) = aggregate_conversations_paged(&[named, bare1, bare2], None, 0, 50);
+        assert_eq!(rows.len(), 2);
+        let unlabeled = rows.iter().find(|c| c.conversation_id == "unlabeled").unwrap();
+        assert_eq!(unlabeled.requests, 2, "bare rows share the unlabeled group");
+    }
+
+    #[test]
+    fn conversations_paged_sorts_by_last_active_desc() {
+        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T09:00:00Z"), 100, 10, 0);
+        old.conversation_id = Some("conv-old".into());
+        let mut new = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T11:00:00Z"), 100, 10, 0);
+        new.conversation_id = Some("conv-new".into());
+        let mut mid = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        mid.conversation_id = Some("conv-mid".into());
+
+        let (rows, _) = aggregate_conversations_paged(&[old, new, mid], None, 0, 50);
+        let ids: Vec<&str> = rows.iter().map(|c| c.conversation_id.as_str()).collect();
+        assert_eq!(ids, vec!["conv-new", "conv-mid", "conv-old"]);
+    }
+
+    #[test]
+    fn conversations_paged_slices_pages_and_reports_total() {
+        let entries: Vec<RequestLogEntry> = (0..5)
+            .map(|i| {
+                let mut e = with_usage(entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")), 100, 10, 0);
+                e.conversation_id = Some(format!("conv-{i}"));
+                e
+            })
+            .collect();
+
+        let (page1, total) = aggregate_conversations_paged(&entries, None, 0, 2);
+        assert_eq!(total, 5, "total always reflects the whole window");
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].conversation_id, "conv-4", "newest first");
+
+        let (page3, _) = aggregate_conversations_paged(&entries, None, 2, 2);
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].conversation_id, "conv-0");
+
+        let (beyond, _) = aggregate_conversations_paged(&entries, None, 5, 2);
+        assert!(beyond.is_empty(), "page beyond the end yields no rows");
+    }
+
+    #[test]
+    fn conversations_paged_cost_sums_known_rows_and_stays_none_when_all_unknown() {
+        let mut priced1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        priced1.conversation_id = Some("conv-a".into());
+        priced1.cost_total = Some(0.25);
+        let mut priced2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        priced2.conversation_id = Some("conv-a".into());
+        priced2.cost_total = Some(0.5);
+        // Failed and retried rows carry cost but are outside the countable scope.
+        let mut failed = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:02Z");
+        failed.conversation_id = Some("conv-a".into());
+        failed.cost_total = Some(9.9);
+        let mut retry = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"), 100, 10, 0);
+        retry.conversation_id = Some("conv-a".into());
+        retry.retry = Some(true);
+        retry.cost_total = Some(9.9);
+
+        let (rows, _) = aggregate_conversations_paged(&[priced1, priced2, failed, retry], None, 0, 50);
+        assert_eq!(rows[0].cost, Some(0.75), "only countable known rows sum");
+        assert_eq!(rows[0].requests, 4, "requests count every row incl. failed/retry");
+
+        let mut unknown = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:04Z"), 100, 10, 0);
+        unknown.conversation_id = Some("conv-b".into());
+        let (rows, _) = aggregate_conversations_paged(&[unknown], None, 0, 50);
+        assert_eq!(rows[0].cost, None, "all-unknown conversation shows no cost");
+    }
+
+    #[test]
+    fn conversations_paged_name_comes_from_newest_named_row() {
+        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        old.conversation_id = Some("conv-a".into());
+        old.conversation_name = Some("old-name".into());
+        let mut latest = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        latest.conversation_id = Some("conv-a".into());
+        latest.conversation_name = Some("new-name".into());
+
+        let (rows, _) = aggregate_conversations_paged(&[old, latest], None, 0, 50);
+        assert_eq!(rows[0].name.as_deref(), Some("new-name"), "newest named row wins");
+    }
+
+    #[test]
+    fn conversations_paged_token_scope_excludes_retry_and_failed_rows() {
+        let mut ok = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        ok.conversation_id = Some("conv-a".into());
+        let mut retry = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 999, 999, 0);
+        retry.conversation_id = Some("conv-a".into());
+        retry.retry = Some(true);
+        let mut failed = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:02Z");
+        failed.conversation_id = Some("conv-a".into());
+
+        let (rows, _) = aggregate_conversations_paged(&[ok, retry, failed], None, 0, 50);
+        assert_eq!(rows[0].input_tokens, 100, "retry/failed rows do not add tokens");
+        assert_eq!(rows[0].output_tokens, 10);
+        assert_eq!(rows[0].requests, 3);
+        assert_eq!(rows[0].last_active.as_deref(), Some("2026-08-02T10:00:02Z"), "lastActive still tracks every row");
     }
 }
