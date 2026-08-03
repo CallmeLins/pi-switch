@@ -206,7 +206,14 @@ impl UiData {
         let config = load_config().unwrap_or_default();
         let stats = get_stats(range.window_ms());
         let profiles = profile_rows(&config, &stats);
-        let packages = crate::package_ops::list_packages().unwrap_or_default();
+        // Only show installed packages in the UI (db may hold stale/uninstalled
+        // records that are invisible to pi). The CLI `package list` still shows
+        // everything with status markers.
+        let packages = crate::package_ops::list_packages()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.installed)
+            .collect();
         Self {
             config,
             profiles,

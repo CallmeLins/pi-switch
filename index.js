@@ -47,6 +47,7 @@ export const {
   enablePackage,
   disablePackage,
   deletePackage,
+  uninstallAndRemovePackage,
   syncPackages,
   importPackages,
   listPackageSources,

@@ -248,7 +248,10 @@ async fn get_logs_export(Query(q): Query<HashMap<String, String>>) -> Response {
 
 async fn get_packages() -> ApiJson {
     let packages = crate::package_ops::list_packages()?;
-    Ok(Json(json!({ "packages": packages })))
+    // UI lists installed packages only; stale/uninstalled db records stay
+    // invisible (CLI `package list` still shows them with status markers).
+    let installed: Vec<_> = packages.into_iter().filter(|p| p.installed).collect();
+    Ok(Json(json!({ "packages": installed })))
 }
 
 async fn get_package(Path(id): Path<String>) -> ApiJson {
@@ -260,15 +263,19 @@ async fn get_package(Path(id): Path<String>) -> ApiJson {
 
 #[derive(Deserialize)]
 struct PackageBody {
-    name: String,
+    id: String,
     version: String,
 }
 
 async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {
-    // Create spec from the body (for now, just use id as spec)
-    let spec = format!("{}@{}", body.name, body.version);
-    let package = crate::package_ops::add_package(&spec)?;
-    Ok(Json(json!({ "ok": true, "package": package.name })))
+    // WebUI adds npm packages: add the db record, then install it so the
+    // package actually appears in the installed list (UI shows installed only).
+    let spec = format!("npm:{}@{}", body.id, body.version);
+    crate::package_ops::add_package(&spec)?;
+    let pkg = crate::package_ops::install_package(&spec)?;
+    Ok(Json(
+        json!({ "ok": true, "package": pkg.name, "installed": true }),
+    ))
 }
 
 async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
@@ -277,8 +284,9 @@ async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
 }
 
 async fn delete_package(Path(id): Path<String>) -> ApiJson {
-    crate::package_ops::remove_package(&id)?;
-    Ok(Json(json!({ "ok": true })))
+    // UI delete = uninstall from pi (if installed) + remove db record.
+    crate::package_ops::uninstall_and_remove(&id)?;
+    Ok(Json(json!({ "ok": true, "uninstalled": true })))
 }
 
 async fn post_package_import() -> ApiJson {

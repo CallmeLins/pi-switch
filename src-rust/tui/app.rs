@@ -745,10 +745,10 @@ impl App {
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
-                // Delete package
+                // Delete = uninstall from pi (if installed) + remove record
                 if let Some(pkg) = self.data.packages.get(self.packages_idx) {
                     let pkg_id = pkg.id.clone();
-                    match crate::package_ops::remove_package(&pkg_id) {
+                    match crate::package_ops::uninstall_and_remove(&pkg_id) {
                         Ok(_) => {
                             self.refresh();
                             if self.packages_idx >= self.data.packages.len()
@@ -756,7 +756,7 @@ impl App {
                             {
                                 self.packages_idx -= 1;
                             }
-                            self.push_toast(ToastKind::Success, "Package removed");
+                            self.push_toast(ToastKind::Success, "Package uninstalled");
                         }
                         Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
                     }

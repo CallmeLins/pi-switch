@@ -734,6 +734,14 @@ pub fn delete_package(id: String) -> napi::Result<String> {
     Ok(format!("Package '{}' deleted", id))
 }
 
+/// Uninstall from Pi Agent (if installed) and remove the database record.
+#[napi]
+pub fn uninstall_and_remove_package(id: String) -> napi::Result<String> {
+    package_ops::uninstall_and_remove(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' uninstalled and removed", id))
+}
+
 /// Sync packages to Pi Agent
 #[napi]
 pub fn sync_packages() -> napi::Result<String> {

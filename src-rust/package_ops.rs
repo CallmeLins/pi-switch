@@ -3,6 +3,42 @@ use crate::error::{AppError, Result};
 use crate::package::{Package, PackageSource};
 use std::path::PathBuf;
 
+/// Run `pi uninstall <spec>` to actually remove the installed package files
+/// (e.g. `~/.pi/agent/npm/node_modules/...`) in addition to settings.json.
+/// Cross-platform: on Windows `pi` is a `.cmd`, so it must go through `cmd /c`.
+fn run_pi_uninstall(spec: &str) -> Result<()> {
+    let output = {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", "pi", "uninstall", spec])
+                .output()
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("pi")
+                .args(["uninstall", spec])
+                .output()
+        }
+    }
+    .map_err(|e| {
+        AppError::Message(format!(
+            "Failed to run `pi uninstall {}`: {}. The package was removed from pi's settings but its files may remain.",
+            spec, e
+        ))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Message(format!(
+            "`pi uninstall {}` failed: {}",
+            spec,
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
 /// Initialize package management (create database if not exists)
 pub fn init_packages() -> Result<()> {
     let _db = Database::open()?;
@@ -75,7 +111,8 @@ pub fn install_package(id: &str) -> Result<Package> {
     Ok(pkg)
 }
 
-/// Uninstall a package (mark as not installed and sync to Pi Agent)
+/// Uninstall a package (mark as not installed, sync to Pi Agent, and run
+/// `pi uninstall <spec>` to remove the actual package files).
 pub fn uninstall_package(id: &str) -> Result<Package> {
     let db = Database::open()?;
 
@@ -96,8 +133,11 @@ pub fn uninstall_package(id: &str) -> Result<Package> {
 
     db.update_package(&pkg)?;
 
-    // Sync to Pi Agent settings.json
+    // Sync to Pi Agent settings.json (stop pi from loading it)
     sync_packages_to_pi()?;
+
+    // Actually remove the installed files via `pi uninstall`
+    run_pi_uninstall(&pkg.spec)?;
 
     Ok(pkg)
 }
@@ -185,9 +225,28 @@ pub fn toggle_package(id: &str) -> Result<Package> {
     Ok(pkg)
 }
 
-/// Alias for delete_package (for backward compatibility)
-pub fn remove_package(id: &str) -> Result<()> {
-    delete_package(id)
+/// Uninstall from Pi Agent (if installed) and remove the database record
+/// entirely. This is what UI "delete" should do: one action fully removes
+/// the package instead of erroring on installed packages.
+pub fn uninstall_and_remove(id: &str) -> Result<()> {
+    let db = Database::open()?;
+
+    let pkg = db
+        .get_package(id)?
+        .ok_or_else(|| AppError::InvalidInput(format!("Package '{}' not found", id)))?;
+
+    if pkg.installed {
+        let mut p = pkg.clone();
+        p.installed = false;
+        p.updated_at = Some(chrono::Utc::now().timestamp());
+        db.update_package(&p)?;
+        sync_packages_to_pi()?;
+        // Actually remove the installed files via `pi uninstall`
+        run_pi_uninstall(&pkg.spec)?;
+    }
+
+    db.delete_package(id)?;
+    Ok(())
 }
 
 /// Sync enabled packages to Pi Agent's settings.json
