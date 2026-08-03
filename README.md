@@ -321,6 +321,76 @@ In pi, select the `pi-switch` provider, then `provider-a/gpt-5.4`. The model nam
 </details>
 
 <details>
+<summary><b>Pi errors with `unknown variant 'developer'` (400) for reasoning models?</b></summary>
+
+<br>
+
+**Problem** — pi sends the OpenAI `developer` role (the 2025 recommendation) for models marked `reasoning: true`. Some upstream gateways only accept `system` / `user` / `assistant` / `tool` (e.g. opencode zen) and reject the request:
+
+```
+400: messages[0].role: unknown variant `developer`, expected one of `system`, `user`, `assistant`, `tool`
+```
+
+**Fix — edit pi's config `~/.pi/agent/models.json`**: on each offending model of the `pi-switch` provider, add `"compat": { "supportsDeveloperRole": false }` — pi then sends the `system` role while keeping thinking features:
+
+```json
+{
+  "id": "opencode-go/deepseek-v4-flash",
+  "reasoning": true,
+  "compat": { "supportsDeveloperRole": false }
+}
+```
+
+**Note** — the next web/CLI sync rebuilds the `pi-switch` provider entry and wipes manual edits to `models.json`. To survive syncs, put the same `compat` on the model entry inside `~/.pi-switch/config.json` (profile → `models`, id without the `profile/` prefix) instead — sync passes it through verbatim.
+
+Reference — `pi-switch` provider entry with an opencode upstream (sanitized example):
+
+```json
+{
+  "pi-switch": {
+    "api": "openai-completions",
+    "apiKey": "pi-switch-proxy",
+    "baseUrl": "http://127.0.0.1:43112/v1",
+    "models": [
+      {
+        "compat": { "requiresReasoningContentOnAssistantMessages": true, "supportsDeveloperRole": false, "supportsLongCacheRetention": true, "thinkingFormat": "deepseek" },
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.0028, "cacheWrite": 0.0, "input": 0.14, "output": 0.28 },
+        "id": "opencode-go/deepseek-v4-flash",
+        "input": ["text"],
+        "maxTokens": 384000,
+        "name": "DeepSeek V4 Flash",
+        "reasoning": true,
+        "thinkingLevelMap": { "xhigh": "max" }
+      },
+      {
+        "compat": { "requiresReasoningContentOnAssistantMessages": true, "supportsDeveloperRole": false, "supportsLongCacheRetention": true, "thinkingFormat": "deepseek" },
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.0145, "cacheWrite": 0.0, "input": 1.74, "output": 3.48 },
+        "id": "opencode-go/deepseek-v4-pro",
+        "input": ["text"],
+        "maxTokens": 384000,
+        "name": "DeepSeek V4 Pro",
+        "reasoning": true,
+        "thinkingLevelMap": { "xhigh": "max" }
+      },
+      {
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.08, "cacheWrite": 0.0, "input": 0.4, "output": 2.0 },
+        "id": "opencode-go/mimo-v2.5",
+        "input": ["text", "image"],
+        "maxTokens": 1000000,
+        "name": "MiMo V2.5",
+        "reasoning": true
+      }
+    ],
+    "proxy": false
+  }
+}
+```
+</details>
+
+<details>
 <summary><b>How does User-Agent disguise work?</b></summary>
 <br>
 

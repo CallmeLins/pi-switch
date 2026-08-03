@@ -320,6 +320,76 @@ pi-switch proxy start --daemon
 </details>
 
 <details>
+<summary><b>reasoning 模型报错 `unknown variant 'developer'`（400）？</b></summary>
+
+<br>
+
+**问题** — pi 对标记了 `reasoning: true` 的模型默认使用 OpenAI 的 `developer` role（2025 新推荐项）。部分上游网关的 schema 只接受 `system` / `user` / `assistant` / `tool`（如 opencode zen），直接拒绝请求：
+
+```
+400: messages[0].role: unknown variant `developer`, expected one of `system`, `user`, `assistant`, `tool`
+```
+
+**修复 — 修改 pi 的配置文件 `~/.pi/agent/models.json`**：在 `pi-switch` provider 下每个报错模型条目上加 `"compat": { "supportsDeveloperRole": false }`，pi 会改用 `system` role 发送，思考功能保留：
+
+```json
+{
+  "id": "opencode-go/deepseek-v4-flash",
+  "reasoning": true,
+  "compat": { "supportsDeveloperRole": false }
+}
+```
+
+**注意** — 下次网页/CLI sync 会重建 `pi-switch` provider 条目，抹掉对 models.json 的手动修改。想持久化，把同样的 compat 写进 `~/.pi-switch/config.json` 对应 profile 的 models 条目（id 不带 `profile/` 前缀）即可——sync 会原样透传。
+
+参考 — opencode 上游的 `pi-switch` provider 条目（脱敏示例）：
+
+```json
+{
+  "pi-switch": {
+    "api": "openai-completions",
+    "apiKey": "pi-switch-proxy",
+    "baseUrl": "http://127.0.0.1:43112/v1",
+    "models": [
+      {
+        "compat": { "requiresReasoningContentOnAssistantMessages": true, "supportsDeveloperRole": false, "supportsLongCacheRetention": true, "thinkingFormat": "deepseek" },
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.0028, "cacheWrite": 0.0, "input": 0.14, "output": 0.28 },
+        "id": "opencode-go/deepseek-v4-flash",
+        "input": ["text"],
+        "maxTokens": 384000,
+        "name": "DeepSeek V4 Flash",
+        "reasoning": true,
+        "thinkingLevelMap": { "xhigh": "max" }
+      },
+      {
+        "compat": { "requiresReasoningContentOnAssistantMessages": true, "supportsDeveloperRole": false, "supportsLongCacheRetention": true, "thinkingFormat": "deepseek" },
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.0145, "cacheWrite": 0.0, "input": 1.74, "output": 3.48 },
+        "id": "opencode-go/deepseek-v4-pro",
+        "input": ["text"],
+        "maxTokens": 384000,
+        "name": "DeepSeek V4 Pro",
+        "reasoning": true,
+        "thinkingLevelMap": { "xhigh": "max" }
+      },
+      {
+        "contextWindow": 1000000,
+        "cost": { "cacheRead": 0.08, "cacheWrite": 0.0, "input": 0.4, "output": 2.0 },
+        "id": "opencode-go/mimo-v2.5",
+        "input": ["text", "image"],
+        "maxTokens": 1000000,
+        "name": "MiMo V2.5",
+        "reasoning": true
+      }
+    ],
+    "proxy": false
+  }
+}
+```
+</details>
+
+<details>
 <summary><b>User-Agent 伪装如何工作？</b></summary>
 <br>
 
