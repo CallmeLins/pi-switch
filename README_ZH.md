@@ -138,7 +138,7 @@ pi-switch stats                                     # 查看请求统计
 - **WebUI 面板**：token 总量平铺 5 格（输入/输出/缓存/推理/合计）并带子集角标（`Cached ⊆ Input`、`Reasoning ⊆ Output`）；每个对话行补齐输入/输出/缓存/推理/缓存命中率/合计六项，超宽时两行平铺；token 缺失或 0 值显示 `-`。
 - **请求明细**：「By conversation」卡片下方列出当前窗口内每条请求，倒序截取最近 100 条：时间、provider、model、状态（失败带错误）以及输入/输出/缓存/推理/合计与单条缓存命中率。无使用量上报的行显示 `-`，绝不冒充 0 测量。
 - **缓存命中率** = 命中缓存的输入 token ÷ 总输入 token（输出 token 不参与）。无缓存数据时显示 `-`，绝不显示误导的 `0%`。
-- **对话标识**来自客户端：`x-conversation-id` 请求头优先，body `conversation_id` 兜底（ADR-0002）。
+- **对话标识**来自客户端：`x-conversation-id` 请求头优先，`x-opencode-session` 请求头次之（pi / open-code 客户端自带），body `conversation_id` 兜底（ADR-0002）。
 - 仅成功且上报了 usage 的请求计入 token 统计；failover/重试的中间行与升级前的旧日志行（无 token 字段）优雅跳过，升级不会清空或污染既有历史。
 
 ---

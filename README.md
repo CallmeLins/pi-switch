@@ -139,7 +139,7 @@ Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line.
 - **WebUI dashboard** — token totals render as five tiles (Input / Output / Cached / Reasoning / Total) with subset badges (`Cached ⊆ Input`, `Reasoning ⊆ Output`), and each conversation row adds Input / Output / Cached / Reasoning / cache hit rate / Total in a two-line layout when over-wide; missing or zero token values show `-`.
 - **Request details** — below the conversation card, the stats page lists every request in the current window, newest first, capped at the most recent 100: time, provider, model, status (with error for failures), and input / output / cached / reasoning / total tokens plus per-request cache hit rate. Rows without reported usage show `-`, never a misleading zero.
 - **Cache hit rate** = cached input tokens ÷ total input tokens (output tokens excluded). When no cache data exists it shows `-`, never a misleading `0%`.
-- **Conversation id** comes from the client: `x-conversation-id` header first, `conversation_id` body field as fallback (ADR-0002).
+- **Conversation id** comes from the client: `x-conversation-id` header first, `x-opencode-session` second (sent by pi/open-code clients), `conversation_id` body field as fallback (ADR-0002).
 - Only successful requests with reported usage count towards token totals; failover/retry intermediate rows and old log lines without token fields are excluded gracefully, so upgrading never breaks or blanks existing history.
 
 ---
