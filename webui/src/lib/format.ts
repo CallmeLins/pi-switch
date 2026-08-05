@@ -78,6 +78,18 @@ export function formatRequestTime(ts?: string | null): string {
 const SHORT_ID_MAX = 16;
 const SHORT_ID_KEEP = 12;
 
+/**
+ * True when a formatted cache-rate string (e.g. "73.5%") is below 50%, so
+ * the UI can flag it red. Unparseable or absent values are not flagged.
+ */
+export function isLowCacheRate(rate: string | undefined): boolean {
+  if (!rate) {
+    return false;
+  }
+  const value = Number.parseFloat(rate);
+  return Number.isFinite(value) && value < 50;
+}
+
 export function shortConversationId(id: string): string {
   if (id.length <= SHORT_ID_MAX) {
     return id;
