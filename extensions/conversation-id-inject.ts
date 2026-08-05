@@ -118,6 +118,20 @@ function textOf(content: SessionEntryContent | undefined): string {
  * (`role`/`content` at the top level) and the real pi SessionManager entry
  * shape (`role`/`content` nested under `message`).
  */
+/**
+ * Text of the first non-empty user message in a session, or `undefined` when
+ * there is none. The returned text is trimmed but not sanitized/truncated —
+ * callers decide how to present it. Handles both the legacy flat entry
+ * (`role`/`content` at the top level) and the real pi SessionManager entry
+ * shape (`role`/`content` nested under `message`).
+ *
+ * Pi writes skill invocations into the session as user messages whose text
+ * starts with the `<skill name="..."` tag (the whole SKILL.md body follows).
+ * Those are system injections, not the user's own words, so they are skipped
+ * when picking the title text.
+ */
+const SKILL_INJECTION_RE = /^\s*<skill\s+name=/;
+
 export function firstUserMessageText(entries: SessionEntry[]): string | undefined {
   for (const entry of entries) {
     const role = entry.message?.role ?? entry.role;
@@ -125,7 +139,7 @@ export function firstUserMessageText(entries: SessionEntry[]): string | undefine
       continue;
     }
     const text = textOf(entry.message?.content ?? entry.content).trim();
-    if (text) {
+    if (text && !SKILL_INJECTION_RE.test(text)) {
       return text;
     }
   }

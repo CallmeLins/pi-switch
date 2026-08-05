@@ -211,6 +211,31 @@ test("returns undefined when no user message has text", () => {
   );
 });
 
+test("skips pi skill-injection messages and uses the first real user message", () => {
+  const entries = [
+    {
+      role: "user",
+      content:
+        '<skill name="tdd-implement" location="/home/shial/Project/pi-session-anylize/.agents/skills/tdd-implement/SKILL.md">\n# TDD Implement\n...',
+    },
+    { role: "user", content: "继续" },
+  ];
+  assert.equal(firstUserMessageText(entries), "继续");
+});
+
+test("returns undefined when every user message is a skill injection", () => {
+  const entries = [
+    { role: "user", content: '<skill name="tdd-implement" location="/x/SKILL.md">' },
+  ];
+  assert.equal(firstUserMessageText(entries), undefined);
+});
+
+test("treats a plain message starting with <skill as real user input", () => {
+  // Only the exact pi injection form (`<skill name="..."`) is skipped;
+  // a user pasting other angle-bracket text still counts.
+  assert.equal(firstUserMessageText([{ role: "user", content: "<skill> is not a tag" }]), "<skill> is not a tag");
+});
+
 // ─── resolveSessionName ──────────────────────────────────
 
 test("prefers the explicit name over the first message", () => {
