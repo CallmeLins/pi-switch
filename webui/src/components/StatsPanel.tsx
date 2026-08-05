@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { AppState, ConversationRequestsPage, ConversationStats, ConversationsPage, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
-import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, isLowCacheRate, shortConversationId } from "../lib/format";
+import { decodeConversationName, formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, isLowCacheRate, shortConversationId } from "../lib/format";
 import { computeConversationWindow, computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { ConversationRange, StatsRange } from "../lib/statsWindow";
 import { useI18n } from "../i18n";
@@ -811,7 +811,7 @@ function CopyableSessionCell({
   className?: string;
 }) {
   const [copied, setCopied] = useState(false);
-  const display = name || (id ? shortConversationId(id) : "-");
+  const display = decodeConversationName(name ?? "") || (id ? shortConversationId(id) : "-");
   return (
     <button
       type="button"
@@ -883,7 +883,7 @@ function ExpandedConversationRequests({ conv }: { conv: ConversationStats }) {
   return (
     <div>
       <div className="mb-1 text-xs text-zinc-500">
-        Requests in {conv.name || shortConversationId(conv.conversationId)}
+        Requests in {decodeConversationName(conv.name ?? "") || shortConversationId(conv.conversationId)}
       </div>
       {error ? (
         <div className="text-sm text-red-300">Failed to load conversation requests.</div>
