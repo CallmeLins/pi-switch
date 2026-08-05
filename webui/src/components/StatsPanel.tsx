@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { AppState, ConversationRequestsPage, ConversationStats, ConversationsPage, RecentRequest, UsageStats } from "../types";
 import { api, logsExportUrl } from "../api";
 import { Button, Card, Input, SectionTitle } from "./ui";
-import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
+import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, isLowCacheRate, shortConversationId } from "../lib/format";
 import { computeConversationWindow, computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { ConversationRange, StatsRange } from "../lib/statsWindow";
 import { useI18n } from "../i18n";
@@ -597,10 +597,8 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                                 <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
                                   {formatRequestTime(c.lastActive)}
                                 </td>
-                                <td className="py-1 pr-2 text-zinc-300">
-                                  <span className="block max-w-[14rem] truncate" title={c.conversationId}>
-                                    {c.name || shortConversationId(c.conversationId)}
-                                  </span>
+                                <td className="py-1 pr-2">
+                                  <CopyableSessionCell id={c.conversationId} name={c.name} className="max-w-[14rem]" />
                                 </td>
                                 <td className="py-1 pr-2 text-right text-zinc-400">{c.requests}</td>
                                 <td className="py-1 pr-2 text-right text-zinc-400">
@@ -615,7 +613,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                                 <td className="py-1 pr-2 text-right text-zinc-400">
                                   {formatRequestToken(c.reasoningTokens)}
                                 </td>
-                                <td className="py-1 pr-2 text-right text-zinc-400">{c.cacheRate ?? "-"}</td>
+                                <td className={`py-1 pr-2 text-right ${isLowCacheRate(c.cacheRate) ? "text-red-300" : "text-zinc-400"}`}>{c.cacheRate ?? "-"}</td>
                                 <td className="py-1 pr-2 text-right text-zinc-400">
                                   {formatRequestToken(c.inputTokens + c.outputTokens)}
                                 </td>
@@ -771,7 +769,7 @@ function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
     ["Output", formatRequestToken(r.completionTokens)],
     ["Cached", formatRequestToken(r.cachedTokens)],
     ["Reasoning", formatRequestToken(r.reasoningTokens)],
-    ["Cache rate", r.cacheRate ?? "-"],
+    ["Cache rate", r.cacheRate ?? "-", isLowCacheRate(r.cacheRate) ? "text-red-300" : undefined],
     ["Total", formatRequestToken(r.totalTokens)],
     ["Cost", formatCost(r.cost)],
   ] as const;
@@ -780,10 +778,8 @@ function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
       <td className="py-1 pr-2 whitespace-nowrap text-zinc-500">
         {formatRequestTime(r.ts)}
       </td>
-      <td className="py-1 pr-2 text-zinc-300">
-        <span className="block max-w-[12rem] truncate" title={r.conversationId ?? undefined}>
-          {r.conversationName || (r.conversationId ? shortConversationId(r.conversationId) : "-")}
-        </span>
+      <td className="py-1 pr-2">
+        <CopyableSessionCell id={r.conversationId} name={r.conversationName} />
       </td>
       <td className="py-1 pr-2 text-zinc-300">{r.provider ?? "-"}</td>
       <td className="py-1 pr-2 text-zinc-300">{r.model ?? "-"}</td>
@@ -792,12 +788,49 @@ function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
           {status}
         </span>
       </td>
-      {tokenCols.map(([label, value]) => (
-        <td key={label} className="py-1 pr-2 text-right text-zinc-400">
+      {tokenCols.map(([label, value, tone]) => (
+        <td key={label} className={`py-1 pr-2 text-right ${tone ?? "text-zinc-400"}`}>
           {value}
         </td>
       ))}
     </tr>
+  );
+}
+
+/**
+ * Session cell that shows the display name (or a truncated id) and copies
+ * the full conversation id to the clipboard on click.
+ */
+function CopyableSessionCell({
+  id,
+  name,
+  className = "",
+}: {
+  id?: string | null;
+  name?: string | null;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const display = name || (id ? shortConversationId(id) : "-");
+  return (
+    <button
+      type="button"
+      title={id ?? undefined}
+      aria-label={id ? `Copy conversation ${id}` : undefined}
+      onClick={() => {
+        if (!id) return;
+        navigator.clipboard
+          ?.writeText(id)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          })
+          .catch(() => {});
+      }}
+      className={`block max-w-[12rem] truncate text-left text-zinc-300 hover:text-zinc-100 ${className}`}
+    >
+      {copied ? "✓" : display}
+    </button>
   );
 }
 

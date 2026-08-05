@@ -6,6 +6,7 @@ import {
   formatTokenCount,
   formatTokenDimension,
   formatTotalTokens,
+  isLowCacheRate,
   shortConversationId,
 } from "./format";
 import type { TokenTotals } from "../types";
@@ -160,5 +161,15 @@ describe("formatCost", () => {
   it("renders large amounts with K/M suffixes", () => {
     expect(formatCost(1234)).toBe("$1.2K");
     expect(formatCost(12_345_678)).toBe("$12.3M");
+  });
+
+  it("flags cache rates below 50% as low", () => {
+    expect(isLowCacheRate("49.9%")).toBe(true);
+    expect(isLowCacheRate("0%")).toBe(true);
+    expect(isLowCacheRate("50%")).toBe(false);
+    expect(isLowCacheRate("73.5%")).toBe(false);
+    expect(isLowCacheRate("100.0%")).toBe(false);
+    expect(isLowCacheRate(undefined)).toBe(false);
+    expect(isLowCacheRate("-")).toBe(false);
   });
 });

@@ -1435,4 +1435,91 @@ describe("StatsPanel", () => {
 
     expect(await screen.findByText("Failed to load conversation requests.")).toBeInTheDocument();
   });
+
+  it("flags cache rates below 50% in red in the request and conversation tables", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 100,
+          completionTokens: 50,
+          cachedTokens: 30,
+          reasoningTokens: 10,
+          totalTokens: 150,
+          cacheRate: "30.0%",
+          conversationId: "conv-low",
+        },
+        {
+          ts: "2026-08-02T11:00:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 200,
+          completionTokens: 50,
+          cachedTokens: 180,
+          reasoningTokens: 0,
+          totalTokens: 250,
+          cacheRate: "90.0%",
+          conversationId: "conv-high",
+        },
+      ],
+    });
+    convMock.mockResolvedValue(
+      convPage([
+        { conversationId: "conv-low", requests: 1, inputTokens: 100, outputTokens: 50, cachedTokens: 30, reasoningTokens: 10, lastActive: "2026-08-02T10:00:00Z", cacheRate: "30.0%" },
+        { conversationId: "conv-high", requests: 1, inputTokens: 200, outputTokens: 50, cachedTokens: 180, reasoningTokens: 0, lastActive: "2026-08-02T11:00:00Z", cacheRate: "90.0%" },
+      ]),
+    );
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("Request details");
+    const reqTable = screen.getByRole("table", { name: "Request details" });
+    const lowRow = within(reqTable).getByText("30.0%");
+    expect(lowRow.className).toContain("text-red-300");
+    const highRow = within(reqTable).getByText("90.0%");
+    expect(highRow.className).not.toContain("text-red-300");
+
+    fireEvent.click(screen.getByRole("button", { name: /By conversation/ }));
+    const convTable = await screen.findByRole("table", { name: "By conversation" });
+    expect(within(convTable).getByText("30.0%").className).toContain("text-red-300");
+    expect(within(convTable).getByText("90.0%").className).not.toContain("text-red-300");
+  });
+
+  it("copies the full conversation id when a session cell is clicked", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      recentRequests: [
+        {
+          ts: "2026-08-02T10:00:00Z",
+          provider: "hyb",
+          model: "deepseek-chat",
+          ok: true,
+          status: 200,
+          error: null,
+          promptTokens: 100,
+          completionTokens: 50,
+          cachedTokens: 30,
+          reasoningTokens: 10,
+          totalTokens: 150,
+          cacheRate: "30.0%",
+          conversationId: "conv-abc-123",
+          conversationName: "my chat",
+        },
+      ],
+    });
+    convMock.mockResolvedValue(convPage([]));
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("Request details");
+    fireEvent.click(screen.getByRole("button", { name: /Copy conversation conv-abc-123/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("conv-abc-123"));
+  });
 });
