@@ -314,3 +314,40 @@ test("handler refreshes the parent session id after the session changes (/new)",
   handler({ headers: {} }, makeCtx("session-b"));
   assert.equal(process.env.PI_PARENT_SESSION_ID, "session-b");
 });
+
+// ─── 真实 pi SessionManager entry 结构（message 嵌套）───
+
+test("firstUserMessageText reads the message-nested shape pi actually returns", () => {
+  const entries = [
+    { type: "model_change" },
+    { type: "message", message: { role: "user", content: "real shape first message" } },
+    { type: "message", message: { role: "assistant", content: "hi" } },
+  ];
+  assert.equal(firstUserMessageText(entries), "real shape first message");
+});
+
+test("resolveSessionName falls back to the first user message in the real entry shape", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", content: "ignored" } },
+    { type: "message", message: { role: "user", content: "帮我修复 cost 计算" } },
+  ];
+  const name = resolveSessionName(undefined, entries);
+  assert.equal(name, "帮我修复 cost 计算");
+});
+
+test("handler falls back to the first user message in the real entry shape", () => {
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const event = { headers: { authorization: "Bearer x" } };
+  const ctx: SessionIdProvider = {
+    sessionManager: {
+      getSessionId: () => "uuid-9",
+      getSessionName: () => undefined,
+      getEntries: () => [{ type: "message", message: { role: "user", content: "帮我修复 cost 计算" } }],
+    },
+  };
+  handler(event, ctx);
+  assert.equal(event.headers["x-conversation-name"], "%E5%B8%AE%E6%88%91%E4%BF%AE%E5%A4%8D cost %E8%AE%A1%E7%AE%97");
+});
