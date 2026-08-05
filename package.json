@@ -19,6 +19,7 @@
   },
   "files": [
     "bin",
+    "src",
     "index.js",
     "index.d.ts",
     "pi-switch-native.cjs",

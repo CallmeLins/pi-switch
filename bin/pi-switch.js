@@ -17,6 +17,8 @@ import {
   installPackage, uninstallPackage, enablePackage, disablePackage,
   deletePackage, syncPackages, importPackages,
   listPackageSources, addPackageSource, deletePackageSource,
+  // cc-switch import
+  defaultCcsSwitchDbPath, listCcsSwitchProviders, importCcsSwitchProviders,
 } from "../index.js";
 import * as readline from "readline";
 import { dirname, resolve } from "path";
@@ -42,9 +44,9 @@ Usage:
   pi-switch provider expose <name> <model-id>...       # Expose models to pi agent
   pi-switch package list                               # List all packages
   pi-switch package show <id>                          # Show package details
-  pi-switch package add <spec>                         # Add package (npm:name@version | git:url)
-  pi-switch package install <id>                       # Install and sync to Pi Agent
-  pi-switch package uninstall <id>                     # Uninstall package
+  pi-switch package add <spec>                         # Add package record (npm:name@version | git:url)
+  pi-switch package install <id>                       # Install (runs pi install) and sync to Pi Agent
+  pi-switch package uninstall <id>                     # Uninstall (runs pi uninstall) and remove files
   pi-switch package enable <id>                        # Enable package
   pi-switch package disable <id>                       # Disable package
   pi-switch package delete <id>                        # Delete package from database
@@ -55,6 +57,7 @@ Usage:
   pi-switch package sources delete <id>                # Delete package source
   pi-switch presets [list]
   pi-switch presets show <id>
+  pi-switch import ccswitch [--path <db>] [--all] [--force]   # Import from cc-switch
   pi-switch config show
   pi-switch config path
   pi-switch config validate
@@ -509,6 +512,106 @@ async function main() {
         return;
       }
       fail(`unknown config subcommand: '${sub}'`);
+    }
+
+    // ─── cc-switch import ───────────────────────────
+
+    if (effectiveCmd === "import") {
+      const sub = rest[0];
+      if (sub !== "ccswitch") {
+        fail("usage: pi-switch import ccswitch [--path <db>] [--all] [--force]");
+      }
+
+      const args = {};
+      for (let i = 1; i < rest.length; i++) {
+        if (rest[i] === "--path") args.path = rest[++i];
+        else if (rest[i] === "--all") args.all = true;
+        else if (rest[i] === "--force") args.force = true;
+      }
+
+      // Load providers; if the default db is missing, ask for a path.
+      let dbPath = args.path || null;
+      let providers;
+      try {
+        providers = JSON.parse(listCcsSwitchProviders(dbPath));
+      } catch (err) {
+        if (args.path) {
+          console.error(`Failed to read cc-switch db at '${args.path}': ${err.message}`);
+          process.exit(1);
+        }
+        const defaultPath = defaultCcsSwitchDbPath();
+        console.log(`cc-switch database not found at ${defaultPath}`);
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise((resolve) =>
+          rl.question("Enter path to cc-switch.db (or press Enter to cancel): ", resolve)
+        );
+        rl.close();
+        if (!answer.trim()) {
+          console.log("Import cancelled.");
+          process.exit(0);
+        }
+        dbPath = answer.trim();
+        providers = JSON.parse(listCcsSwitchProviders(dbPath));
+      }
+
+      if (providers.length === 0) {
+        console.log("No importable providers found in cc-switch.");
+        return;
+      }
+
+      console.log("cc-switch providers:");
+      console.log("─".repeat(80));
+      providers.forEach((p, i) => {
+        const tag = p.exists ? "[EXISTS] " : "        ";
+        const api = { "anthropic-messages": "anthropic", "openai-responses": "openai", "google-generative-ai": "gemini" }[p.api] || p.api;
+        const models = p.models.slice(0, 3).join(", ") + (p.models.length > 3 ? ", …" : "");
+        console.log(`${String(i + 1).padStart(2)}. ${tag}${p.name}  (${api})\n    ${p.baseUrl}\n    models: ${models || "-"}`);
+      });
+      console.log();
+
+      // Choose which to import.
+      let selections;
+      if (args.all) {
+        selections = providers.map((p) => ({ id: p.id, force: !!args.force }));
+      } else {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise((resolve) =>
+          rl.question(
+            "Enter numbers to import (comma separated, e.g. 1,3,5), 'all', or press Enter to cancel: ",
+            resolve
+          )
+        );
+        rl.close();
+        const text = answer.trim();
+        if (!text) {
+          console.log("Import cancelled.");
+          return;
+        }
+        if (text.toLowerCase() === "all") {
+          selections = providers.map((p) => ({ id: p.id, force: !!args.force }));
+        } else {
+          const idxs = text.split(/[,\s]+/).map(Number).filter((n) => n >= 1 && n <= providers.length);
+          selections = idxs.map((n) => ({ id: providers[n - 1].id, force: !!args.force }));
+        }
+      }
+
+      if (selections.length === 0) {
+        console.log("Nothing selected.");
+        return;
+      }
+
+      const results = JSON.parse(importCcsSwitchProviders(selections, dbPath));
+      let imported = 0;
+      for (const r of results) {
+        if (r.imported) {
+          imported++;
+          console.log(`  ✓ ${r.name} — ${r.message}`);
+        } else {
+          console.log(`  · ${r.name} — ${r.message}`);
+        }
+      }
+      console.log(`\nImported ${imported} of ${results.length} provider(s).`);
+      return;
     }
 
     // ─── Package subcommands ─────────────────────────

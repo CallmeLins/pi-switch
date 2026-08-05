@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use crate::daemon::{daemon_start, daemon_stop, PROXY};
 use crate::ops;
 
-use super::data::{ProfileRow, UiData};
+use super::data::{ProfileRow, StatsRange, UiData};
 use super::form::{FieldKind, FormFocus, FormMode, ProviderFormState};
 use super::i18n;
 use super::route::{NavItem, Route};
@@ -121,6 +121,10 @@ pub struct App {
     pub failover_idx: usize,
     // Packages state
     pub packages_idx: usize,
+    // cc-switch import state
+    pub ccswitch_list: Vec<(crate::ccswitch::CcsProvider, bool)>, // (provider, selected)
+    pub ccswitch_idx: usize,
+    pub ccswitch_error: Option<String>,
 }
 
 pub fn proxy_actions() -> [&'static str; 3] {
@@ -131,26 +135,37 @@ pub fn proxy_actions() -> [&'static str; 3] {
     ]
 }
 
-pub fn user_agent_presets() -> [&'static str; 3] {
-    ["Claude Code", "Codex", "Gemini"]
+pub fn user_agent_presets() -> [&'static str; 4] {
+    ["none", "Claude Code", "Codex", "Gemini"]
 }
 
 pub fn user_agent_preset_value(idx: usize) -> Option<&'static str> {
     match idx {
-        0 => Some("claude-code"),
-        1 => Some("codex"),
-        2 => Some("gemini"),
+        0 => None, // none: no disguise header
+        1 => Some("claude-code"),
+        2 => Some("codex"),
+        3 => Some("gemini"),
         _ => None,
+    }
+}
+
+/// Localized label for a stats time range (used in key-bar hint + toast).
+fn stats_range_label(range: StatsRange) -> &'static str {
+    match range {
+        StatsRange::All => i18n::stats_range_all(),
+        StatsRange::Today => i18n::stats_range_today(),
+        StatsRange::Last24h => i18n::stats_range_24h(),
+        StatsRange::Last7d => i18n::stats_range_7d(),
     }
 }
 
 impl App {
     pub fn new(data: UiData) -> Self {
-        // Detect User-Agent preset index
+        // Detect User-Agent preset index (0 = none)
         let user_agent_idx = match data.config.settings.proxy.user_agent.as_deref() {
-            Some("claude-code") => 0,
-            Some("codex") => 1,
-            Some("gemini") => 2,
+            Some("claude-code") => 1,
+            Some("codex") => 2,
+            Some("gemini") => 3,
             _ => 0,
         };
 
@@ -186,6 +201,9 @@ impl App {
             failover_list: vec![],
             failover_idx: 0,
             packages_idx: 0,
+            ccswitch_list: vec![],
+            ccswitch_idx: 0,
+            ccswitch_error: None,
         }
     }
 
@@ -558,6 +576,7 @@ impl App {
             Route::FetchModels(name) => self.on_fetch_models_key(key, &name),
             Route::ExposeModels(name) => self.on_expose_models_key(key, &name),
             Route::Packages => self.on_packages_key(key),
+            Route::CcSwitchImport => self.on_ccswitch_key(key),
             Route::Proxy => self.on_proxy_key(key),
             Route::Stats => self.on_stats_key(key),
             Route::Backups => self.on_backups_key(key),
@@ -627,6 +646,7 @@ impl App {
                     self.copy_profile(&name);
                 }
             }
+            KeyCode::Char('i') => self.open_ccswitch_import(),
             KeyCode::Char('d') => {
                 if let Some(name) = self.selected_profile_name() {
                     self.confirm_delete(&name);
@@ -701,7 +721,7 @@ impl App {
                     self.refresh();
                     self.push_toast(
                         ToastKind::Success,
-                        format!("Imported {} packages from Pi Agent", imported.len())
+                        format!("Imported {} packages from Pi Agent", imported.len()),
                     );
                 }
                 Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
@@ -735,16 +755,18 @@ impl App {
                 }
             }
             KeyCode::Char('d') | KeyCode::Delete => {
-                // Delete package
+                // Delete = uninstall from pi (if installed) + remove record
                 if let Some(pkg) = self.data.packages.get(self.packages_idx) {
                     let pkg_id = pkg.id.clone();
-                    match crate::package_ops::remove_package(&pkg_id) {
+                    match crate::package_ops::uninstall_and_remove(&pkg_id) {
                         Ok(_) => {
                             self.refresh();
-                            if self.packages_idx >= self.data.packages.len() && self.packages_idx > 0 {
+                            if self.packages_idx >= self.data.packages.len()
+                                && self.packages_idx > 0
+                            {
                                 self.packages_idx -= 1;
                             }
-                            self.push_toast(ToastKind::Success, "Package removed");
+                            self.push_toast(ToastKind::Success, "Package uninstalled");
                         }
                         Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
                     }
@@ -753,6 +775,104 @@ impl App {
             KeyCode::Char('r') => {
                 self.refresh();
                 self.push_toast(ToastKind::Info, "Refreshed");
+            }
+            _ => {}
+        }
+    }
+
+    // ─── cc-switch import ─────────────────────────────
+
+    fn open_ccswitch_import(&mut self) {
+        self.ccswitch_list.clear();
+        self.ccswitch_idx = 0;
+        self.ccswitch_error = None;
+
+        match crate::ccswitch::list_ccswitch_providers(None) {
+            Ok(providers) => {
+                // Default: pre-select providers that don't already exist.
+                self.ccswitch_list = providers
+                    .into_iter()
+                    .map(|p| (p.clone(), !p.exists))
+                    .collect();
+                if self.ccswitch_list.is_empty() {
+                    self.ccswitch_error = Some(if i18n::is_zh() {
+                        "cc-switch 中没有可导入的 provider".into()
+                    } else {
+                        "No importable providers in cc-switch".into()
+                    });
+                }
+            }
+            Err(e) => {
+                self.ccswitch_error = Some(if i18n::is_zh() {
+                    format!("无法读取 cc-switch 数据库: {}", e)
+                } else {
+                    format!("Failed to read cc-switch db: {}", e)
+                });
+            }
+        }
+        self.route = Route::CcSwitchImport;
+    }
+
+    fn on_ccswitch_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Esc {
+            self.route = Route::Profiles;
+            return;
+        }
+
+        let len = self.ccswitch_list.len();
+        if len == 0 {
+            return;
+        }
+
+        match key.code {
+            KeyCode::Up => {
+                self.ccswitch_idx = self.ccswitch_idx.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.ccswitch_idx = (self.ccswitch_idx + 1).min(len - 1);
+            }
+            KeyCode::Char(' ') => {
+                self.ccswitch_list[self.ccswitch_idx].1 = !self.ccswitch_list[self.ccswitch_idx].1;
+            }
+            KeyCode::Enter | KeyCode::Char('s') => {
+                let selections: Vec<crate::ccswitch::CcsImportSelection> = self
+                    .ccswitch_list
+                    .iter()
+                    .filter(|(_, selected)| *selected)
+                    .map(|(p, _)| crate::ccswitch::CcsImportSelection {
+                        id: p.id.clone(),
+                        force: false,
+                    })
+                    .collect();
+
+                if selections.is_empty() {
+                    self.push_toast(
+                        ToastKind::Warning,
+                        if i18n::is_zh() {
+                            String::from("请先勾选要导入的 provider")
+                        } else {
+                            String::from("Select providers to import first")
+                        },
+                    );
+                    return;
+                }
+
+                match crate::ccswitch::import_ccswitch_providers(&selections, None) {
+                    Ok(results) => {
+                        let imported = results.iter().filter(|r| r.imported).count();
+                        self.push_toast(
+                            ToastKind::Success,
+                            if i18n::is_zh() {
+                                format!("已从 cc-switch 导入 {} 个 provider", imported)
+                            } else {
+                                format!("Imported {} provider(s) from cc-switch", imported)
+                            },
+                        );
+                        self.route = Route::Profiles;
+                        self.refresh();
+                    }
+                    Err(e) => self.push_toast(ToastKind::Error, e.to_string()),
+                }
             }
             _ => {}
         }
@@ -808,6 +928,8 @@ impl App {
                 self.refresh();
                 self.push_toast(ToastKind::Info, i18n::toast_refreshed());
             }
+            KeyCode::Left => self.cycle_stats_range(false),
+            KeyCode::Right => self.cycle_stats_range(true),
             KeyCode::Up => {
                 self.stats_scroll = self.stats_scroll.saturating_sub(1);
             }
@@ -816,6 +938,22 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Cycle the stats time range (All ⇄ Today ⇄ 24h ⇄ 7d) and reload stats.
+    fn cycle_stats_range(&mut self, forward: bool) {
+        let next = if forward {
+            self.data.stats_range.next()
+        } else {
+            self.data.stats_range.prev()
+        };
+        if next == self.data.stats_range {
+            return;
+        }
+        self.data.stats_range = next;
+        self.stats_scroll = 0;
+        self.refresh();
+        self.push_toast(ToastKind::Info, stats_range_label(next));
     }
 
     fn on_backups_key(&mut self, key: KeyEvent) {

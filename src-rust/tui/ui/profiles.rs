@@ -53,6 +53,11 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let copy = i18n::key_copy();
     let edit = i18n::key_edit();
     let del = i18n::key_delete();
+    let cc_import = if i18n::is_zh() {
+        "导入 cc-switch"
+    } else {
+        "cc-switch"
+    };
     let full_keys: &[(&str, &str)] = &[
         ("Enter", detail),
         ("Space", switch),
@@ -60,6 +65,7 @@ pub(super) fn render_profiles(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ("c", copy),
         ("e", edit),
         ("d", del),
+        ("i", cc_import),
         ("/", fltr),
     ];
     render_key_bar_center(

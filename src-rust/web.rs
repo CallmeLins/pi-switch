@@ -83,7 +83,10 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/backups", get(get_backups))
         .route("/stats", get(get_stats))
         .route("/stats/conversations", get(get_stats_conversations))
-        .route("/stats/conversations/:id/requests", get(get_conversation_requests))
+        .route(
+            "/stats/conversations/:id/requests",
+            get(get_conversation_requests),
+        )
         .route("/proxy/status", get(get_proxy_status))
         .route("/webui/info", get(get_webui_info))
         .route("/logs/export", get(get_logs_export))
@@ -92,6 +95,9 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/packages/import", post(post_package_import))
         .route("/packages/:id", get(get_package).delete(delete_package))
         .route("/packages/:id/toggle", post(post_package_toggle))
+        // cc-switch import
+        .route("/ccswitch/providers", get(get_ccswitch_providers))
+        .route("/ccswitch/import", post(post_ccswitch_import))
         // profile mutations
         .route("/init", post(post_init))
         .route("/profiles", post(post_profile))
@@ -242,7 +248,9 @@ async fn get_conversation_requests(
 
 async fn get_proxy_status() -> ApiJson {
     let result = daemon::daemon_status(&daemon::PROXY)?;
-    Ok(Json(serde_json::to_value(result).unwrap_or_else(|_| json!({}))))
+    Ok(Json(
+        serde_json::to_value(result).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 async fn get_webui_info(State(state): State<Arc<WebState>>) -> Json<Value> {
@@ -280,25 +288,32 @@ async fn get_logs_export(Query(q): Query<HashMap<String, String>>) -> Response {
 
 async fn get_packages() -> ApiJson {
     let packages = crate::package_ops::list_packages()?;
-    Ok(Json(json!({ "packages": packages })))
+    // UI lists installed packages only; stale/uninstalled db records stay
+    // invisible (CLI `package list` still shows them with status markers).
+    let installed: Vec<_> = packages.into_iter().filter(|p| p.installed).collect();
+    Ok(Json(json!({ "packages": installed })))
 }
 
 async fn get_package(Path(id): Path<String>) -> ApiJson {
     let package = crate::package_ops::get_package(&id)?;
-    Ok(Json(serde_json::to_value(package).unwrap_or_else(|_| json!({}))))
+    Ok(Json(
+        serde_json::to_value(package).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 #[derive(Deserialize)]
 struct PackageBody {
-    name: String,
-    version: String,
+    spec: String,
 }
 
 async fn post_package(Json(body): Json<PackageBody>) -> ApiJson {
-    // Create spec from the body (for now, just use id as spec)
-    let spec = format!("{}@{}", body.name, body.version);
-    let package = crate::package_ops::add_package(&spec)?;
-    Ok(Json(json!({ "ok": true, "package": package.name })))
+    // WebUI adds by full spec (e.g. npm:foo@1.0.0): add the db record, then
+    // install it so the package actually appears in the installed list.
+    crate::package_ops::add_package(&body.spec)?;
+    let pkg = crate::package_ops::install_package(&body.spec)?;
+    Ok(Json(
+        json!({ "ok": true, "package": pkg.name, "installed": true }),
+    ))
 }
 
 async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
@@ -307,8 +322,9 @@ async fn post_package_toggle(Path(id): Path<String>) -> ApiJson {
 }
 
 async fn delete_package(Path(id): Path<String>) -> ApiJson {
-    crate::package_ops::remove_package(&id)?;
-    Ok(Json(json!({ "ok": true })))
+    // UI delete = uninstall from pi (if installed) + remove db record.
+    crate::package_ops::uninstall_and_remove(&id)?;
+    Ok(Json(json!({ "ok": true, "uninstalled": true })))
 }
 
 async fn post_package_import() -> ApiJson {
@@ -317,6 +333,46 @@ async fn post_package_import() -> ApiJson {
         "ok": true,
         "count": imported.len(),
         "message": format!("Imported {} packages from Pi Agent", imported.len())
+    })))
+}
+
+// ─── cc-switch import ─────────────────────────────────────
+
+async fn get_ccswitch_providers(Query(q): Query<HashMap<String, String>>) -> ApiJson {
+    let path = q.get("path").cloned();
+    let providers = crate::ccswitch::list_ccswitch_providers(path.as_deref())?;
+    Ok(Json(json!({ "providers": providers })))
+}
+
+#[derive(Deserialize)]
+struct CcsImportBody {
+    selections: Vec<CcsImportSel>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CcsImportSel {
+    id: String,
+    #[serde(default)]
+    force: bool,
+}
+
+async fn post_ccswitch_import(Json(body): Json<CcsImportBody>) -> ApiJson {
+    let selections: Vec<crate::ccswitch::CcsImportSelection> = body
+        .selections
+        .into_iter()
+        .map(|s| crate::ccswitch::CcsImportSelection {
+            id: s.id,
+            force: s.force,
+        })
+        .collect();
+    let results = crate::ccswitch::import_ccswitch_providers(&selections, body.path.as_deref())?;
+    let imported = results.iter().filter(|r| r.imported).count();
+    Ok(Json(json!({
+        "ok": true,
+        "imported": imported,
+        "results": results,
     })))
 }
 
@@ -449,7 +505,12 @@ async fn post_proxy_start(
     State(state): State<Arc<WebState>>,
     Json(body): Json<ProxyStartBody>,
 ) -> ApiJson {
-    let result = daemon::daemon_start(&daemon::PROXY, body.host, body.port, state.project_dir.clone())?;
+    let result = daemon::daemon_start(
+        &daemon::PROXY,
+        body.host,
+        body.port,
+        state.project_dir.clone(),
+    )?;
     ok(serde_json::to_value(result).unwrap_or_else(|_| json!({})))
 }
 
@@ -518,7 +579,10 @@ async fn static_handler(uri: Uri) -> Response {
 
     if let Some(content) = WebAssets::get(path) {
         let mime = content.metadata.mimetype();
-        return ([(header::CONTENT_TYPE, mime.to_string())], content.data.into_owned())
+        return (
+            [(header::CONTENT_TYPE, mime.to_string())],
+            content.data.into_owned(),
+        )
             .into_response();
     }
 
@@ -624,8 +688,8 @@ mod tests {
 
     #[tokio::test]
     async fn stats_response_includes_recent_request_total_field() {
-        let res = get("/api/stats?range=today&from=1785664800000&to=1785672000000&page=0&limit=50")
-            .await;
+        let res =
+            get("/api/stats?range=today&from=1785664800000&to=1785672000000&page=0&limit=50").await;
         assert_eq!(res.status(), StatusCode::OK);
         let body: Value = serde_json::from_slice(
             &axum::body::to_bytes(res.into_body(), usize::MAX)
@@ -633,8 +697,13 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let total = body.get("recentRequestTotal").expect("stats body must include recentRequestTotal");
-        assert!(total.is_u64() || total.is_i64(), "recentRequestTotal must be a number");
+        let total = body
+            .get("recentRequestTotal")
+            .expect("stats body must include recentRequestTotal");
+        assert!(
+            total.is_u64() || total.is_i64(),
+            "recentRequestTotal must be a number"
+        );
     }
 
     #[tokio::test]
@@ -655,7 +724,9 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let convs = body.get("conversations").expect("body must include conversations");
+        let convs = body
+            .get("conversations")
+            .expect("body must include conversations");
         assert!(convs.is_array(), "conversations must be an array");
         let total = body.get("total").expect("body must include total");
         assert!(total.is_u64() || total.is_i64(), "total must be a number");
@@ -713,7 +784,11 @@ mod tests {
     #[tokio::test]
     async fn conversation_requests_empty_id_is_rejected() {
         let res = get("/api/stats/conversations//requests").await;
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "empty id should be 400");
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "empty id should be 400"
+        );
     }
 
     #[tokio::test]

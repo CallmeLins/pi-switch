@@ -66,7 +66,7 @@ npm install -g @heihei0299/pi-switch --build-from-source
 
 ```bash
 pi-switch tui          # Interactive TUI (recommended)
-pi-switch webui start  # Browser UI at http://127.0.0.1:43110
+pi-switch webui start --daemon  # Browser UI at http://127.0.0.1:43110 (background daemon)
 pi-switch doctor       # Run environment diagnostics
 ```
 
@@ -97,8 +97,9 @@ pi-switch package toggle <id>                      # Enable/disable package
 pi-switch package remove <id>                      # Remove package
 pi-switch package show <id>                        # Show package details
 
-# WebUI (browser config)
-pi-switch webui start [--host <ip>] [--port <port>] [--daemon]
+# WebUI (browser config) — always use --daemon so it runs in the
+# background and can be stopped with `pi-switch webui stop`
+pi-switch webui start --daemon [--host <ip>] [--port <port>]
 pi-switch webui status
 pi-switch webui stop
 
@@ -108,6 +109,7 @@ pi-switch config show                               # Display current config
 pi-switch config backups                            # List backup files
 pi-switch config export <passphrase>                # Encrypted export
 pi-switch config import <path> <passphrase>         # Encrypted import
+pi-switch import ccswitch [--path <db>] [--all] [--force]  # Import providers from cc-switch
 pi-switch stats                                     # View request statistics
 ```
 
@@ -118,6 +120,7 @@ pi-switch stats                                     # View request statistics
 | Category | Highlights |
 |----------|------------|
 | 🔌 **Provider Management** | CRUD, duplicate, search/filter, model management, expose to pi agent |
+| ⇥ **cc-switch Import** | One-click import of providers from cc-switch (Claude Code / Codex / Gemini), dedup by base URL, skip official presets — CLI, TUI, WebUI |
 | 💡 **Built-in Presets** | OpenRouter, Anthropic, DeepSeek, SiliconFlow, OpenAI — add profiles instantly |
 | 🌉 **Model-Name Gateway** | Stateless routing by `profile/model` in the request body, SSE streaming, User-Agent disguise, request-body filtering, OpenAI ↔ Anthropic conversion, failover, circuit breaker |
 | 📦 **Package Management** | Install, enable/disable, and manage packages across CLI, TUI, and WebUI |
@@ -126,6 +129,27 @@ pi-switch stats                                     # View request statistics
 | 📊 **Usage Stats** | Per-provider, per-model request metrics & latency; four-dimension token totals (input/output/cached/reasoning), cache hit rate, time-window queries (today/24h/7d/custom), per-conversation breakdown |
 | 💾 **Backup & Sync** | Auto-backup on mutation, AES-256-CBC encrypted export/import |
 | 🩺 **Diagnostics** | `doctor` command checks config, models.json, structure |
+
+---
+
+## ⇥ Import from cc-switch
+
+Already using [cc-switch](https://github.com/farion1231/cc-switch)? You can import its providers into pi-switch with one command instead of re-adding them by hand:
+
+```bash
+pi-switch import ccswitch                 # interactive selection
+pi-switch import ccswitch --all           # import everything new
+pi-switch import ccswitch --path /path/to/cc-switch.db   # custom db location
+```
+
+- Reads `~/.cc-switch/cc-switch.db` (SQLite, read-only — cc-switch is never modified)
+- Maps the three common client types: **Claude** → `anthropic-messages`, **Codex** → `openai-responses`, **Gemini** → `google-generative-ai`
+- Official presets (e.g. `claude-official`) are skipped
+- **Dedup by base URL**: providers already in pi-switch are flagged as existing and skipped (use `--force` to overwrite)
+- Name collisions resolve to `name (cc)` instead of silently overwriting
+- If the default db path is missing, you are prompted for the path to `cc-switch.db` (or you can cancel)
+
+Available in all three UIs: CLI (`pi-switch import ccswitch`), TUI (Profiles → `i`), WebUI (Profiles → *Import from cc-switch*).
 
 ---
 

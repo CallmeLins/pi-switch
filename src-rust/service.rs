@@ -182,11 +182,7 @@ pub fn run_doctor() -> Vec<DoctorCheck> {
 
 /// Usage stats as JSON (request counts, per-provider/model breakdown, circuit state).
 /// `page`/`limit` page the recent-request details list (defaults 0/100).
-pub fn stats_value(
-    window: Option<(u64, u64)>,
-    page: Option<usize>,
-    limit: Option<usize>,
-) -> Value {
+pub fn stats_value(window: Option<(u64, u64)>, page: Option<usize>, limit: Option<usize>) -> Value {
     serde_json::to_value(crate::stats::get_stats_paged(window, page, limit))
         .unwrap_or_else(|_| json!({}))
 }
@@ -199,8 +195,11 @@ pub fn conversations_value(
     limit: Option<usize>,
 ) -> Value {
     let (conversations, total) = crate::stats::get_conversations_paged(window, page, limit);
-    serde_json::to_value(crate::stats::ConversationsPage { conversations, total })
-        .unwrap_or_else(|_| json!({}))
+    serde_json::to_value(crate::stats::ConversationsPage {
+        conversations,
+        total,
+    })
+    .unwrap_or_else(|_| json!({}))
 }
 
 /// All request rows of one conversation as JSON (`{ requests, total }`), for
@@ -210,8 +209,7 @@ pub fn conversation_requests_value(
     page: Option<usize>,
     limit: Option<usize>,
 ) -> Value {
-    let (requests, total) =
-        crate::stats::get_conversation_requests(conversation_id, page, limit);
+    let (requests, total) = crate::stats::get_conversation_requests(conversation_id, page, limit);
     serde_json::to_value(crate::stats::ConversationRequestsPage { requests, total })
         .unwrap_or_else(|_| json!({}))
 }

@@ -1,8 +1,64 @@
 use crate::config::{load_config, PiSwitchConfig};
 use crate::daemon::{daemon_status, DaemonResult, PROXY};
+use crate::package::Package;
 use crate::presets::{all_presets, Preset};
 use crate::stats::{get_stats, UsageStats};
-use crate::package::Package;
+
+/// Time range for the TUI stats page. Mirrors the WebUI picker semantics:
+/// `Today` is the local calendar day (00:00 → now), `Last24h`/`Last7d` are
+/// rolling windows ending at now, and `All` keeps full history (no window).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatsRange {
+    All,
+    Today,
+    Last24h,
+    Last7d,
+}
+
+impl StatsRange {
+    pub const ALL: [StatsRange; 4] = [
+        StatsRange::All,
+        StatsRange::Today,
+        StatsRange::Last24h,
+        StatsRange::Last7d,
+    ];
+
+    pub fn next(self) -> StatsRange {
+        let idx = StatsRange::ALL.iter().position(|r| *r == self).unwrap_or(0);
+        StatsRange::ALL[(idx + 1) % StatsRange::ALL.len()]
+    }
+
+    pub fn prev(self) -> StatsRange {
+        let idx = StatsRange::ALL.iter().position(|r| *r == self).unwrap_or(0);
+        StatsRange::ALL[(idx + StatsRange::ALL.len() - 1) % StatsRange::ALL.len()]
+    }
+
+    /// Resolve to a `(from_ms, to_ms)` window; `None` means full history.
+    pub fn window_ms(self) -> Option<(u64, u64)> {
+        const HOUR_MS: u64 = 3600 * 1000;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        match self {
+            StatsRange::All => None,
+            StatsRange::Today => {
+                let local = chrono::Local::now();
+                let start = local
+                    .date_naive()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap_or_default()
+                    .and_local_timezone(chrono::Local)
+                    .earliest()
+                    .map(|dt| dt.timestamp_millis() as u64)
+                    .unwrap_or(now_ms);
+                Some((start, now_ms))
+            }
+            StatsRange::Last24h => Some((now_ms.saturating_sub(24 * HOUR_MS), now_ms)),
+            StatsRange::Last7d => Some((now_ms.saturating_sub(7 * 24 * HOUR_MS), now_ms)),
+        }
+    }
+}
 
 pub struct ProfileRow {
     pub name: String,
@@ -29,6 +85,8 @@ pub struct UiData {
     pub backups: Vec<String>,
     /// Pi's currently selected model (from ~/.pi/agent/settings.json defaultModel)
     pub pi_default_model: Option<String>,
+    /// Active stats time range (kept across refreshes).
+    pub stats_range: StatsRange,
 }
 
 fn offline_daemon(message: String) -> DaemonResult {
@@ -54,7 +112,8 @@ fn read_pi_default_model() -> Option<String> {
         .map(str::to_string)
 }
 
-fn list_backup_files() -> Vec<String> {    let dir = crate::config::backup_dir();
+fn list_backup_files() -> Vec<String> {
+    let dir = crate::config::backup_dir();
     if !dir.exists() {
         return vec![];
     }
@@ -98,8 +157,7 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
             let circuit_breaker_open = cb_status
                 .map(|s| s.state == "open" || s.state == "half_open")
                 .unwrap_or(false);
-            let circuit_breaker_error = cb_status
-                .and_then(|s| s.last_error.clone());
+            let circuit_breaker_error = cb_status.and_then(|s| s.last_error.clone());
 
             ProfileRow {
                 name: name.clone(),
@@ -141,10 +199,21 @@ fn profile_rows(config: &PiSwitchConfig, stats: &UsageStats) -> Vec<ProfileRow> 
 
 impl UiData {
     pub fn load() -> Self {
+        Self::load_with_range(StatsRange::All)
+    }
+
+    pub fn load_with_range(range: StatsRange) -> Self {
         let config = load_config().unwrap_or_default();
-        let stats = get_stats(None);
+        let stats = get_stats(range.window_ms());
         let profiles = profile_rows(&config, &stats);
-        let packages = crate::package_ops::list_packages().unwrap_or_default();
+        // Only show installed packages in the UI (db may hold stale/uninstalled
+        // records that are invisible to pi). The CLI `package list` still shows
+        // everything with status markers.
+        let packages = crate::package_ops::list_packages()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.installed)
+            .collect();
         Self {
             config,
             profiles,
@@ -154,11 +223,13 @@ impl UiData {
             stats,
             backups: list_backup_files(),
             pi_default_model: read_pi_default_model(),
+            stats_range: range,
         }
     }
 
     pub fn refresh(&mut self) {
-        *self = Self::load();
+        let range = self.stats_range;
+        *self = Self::load_with_range(range);
     }
 
     /// Cheaply re-read just pi's current model (no daemon/stats reload).

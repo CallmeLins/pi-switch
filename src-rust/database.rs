@@ -62,8 +62,7 @@ impl Database {
 
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| AppError::io(parent, e))?;
+            std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
         let conn = Connection::open(&path)
@@ -84,32 +83,34 @@ impl Database {
 
     /// Insert a new package
     pub fn insert_package(&self, pkg: &Package) -> Result<()> {
-        self.conn.execute(
-            r#"
+        self.conn
+            .execute(
+                r#"
             INSERT INTO packages (
                 id, spec, type, name, version, description, homepage,
                 has_extensions, has_skills, has_prompts, has_themes,
                 installed, enabled, installed_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
-            params![
-                pkg.id,
-                pkg.spec,
-                pkg.pkg_type.to_string(),
-                pkg.name,
-                pkg.version,
-                pkg.description,
-                pkg.homepage,
-                pkg.has_extensions as i32,
-                pkg.has_skills as i32,
-                pkg.has_prompts as i32,
-                pkg.has_themes as i32,
-                pkg.installed as i32,
-                pkg.enabled as i32,
-                pkg.installed_at,
-                pkg.updated_at,
-            ],
-        ).map_err(|e| AppError::Message(format!("Failed to insert package: {}", e)))?;
+                params![
+                    pkg.id,
+                    pkg.spec,
+                    pkg.pkg_type.to_string(),
+                    pkg.name,
+                    pkg.version,
+                    pkg.description,
+                    pkg.homepage,
+                    pkg.has_extensions as i32,
+                    pkg.has_skills as i32,
+                    pkg.has_prompts as i32,
+                    pkg.has_themes as i32,
+                    pkg.installed as i32,
+                    pkg.enabled as i32,
+                    pkg.installed_at,
+                    pkg.updated_at,
+                ],
+            )
+            .map_err(|e| AppError::Message(format!("Failed to insert package: {}", e)))?;
 
         Ok(())
     }
@@ -151,15 +152,18 @@ impl Database {
 
     /// List all packages
     pub fn list_packages(&self) -> Result<Vec<Package>> {
-        let mut stmt = self.conn.prepare(
-            r#"
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
             SELECT id, spec, type, name, version, description, homepage,
                    has_extensions, has_skills, has_prompts, has_themes,
                    installed, enabled, installed_at, updated_at
             FROM packages
             ORDER BY name ASC
             "#,
-        ).map_err(|e| AppError::Message(format!("Failed to prepare statement: {}", e)))?;
+            )
+            .map_err(|e| AppError::Message(format!("Failed to prepare statement: {}", e)))?;
 
         let packages = stmt
             .query_map([], |row| {
@@ -190,8 +194,9 @@ impl Database {
 
     /// Update a package
     pub fn update_package(&self, pkg: &Package) -> Result<()> {
-        self.conn.execute(
-            r#"
+        self.conn
+            .execute(
+                r#"
             UPDATE packages SET
                 spec = ?, type = ?, name = ?, version = ?,
                 description = ?, homepage = ?,
@@ -199,24 +204,25 @@ impl Database {
                 installed = ?, enabled = ?, installed_at = ?, updated_at = ?
             WHERE id = ?
             "#,
-            params![
-                pkg.spec,
-                pkg.pkg_type.to_string(),
-                pkg.name,
-                pkg.version,
-                pkg.description,
-                pkg.homepage,
-                pkg.has_extensions as i32,
-                pkg.has_skills as i32,
-                pkg.has_prompts as i32,
-                pkg.has_themes as i32,
-                pkg.installed as i32,
-                pkg.enabled as i32,
-                pkg.installed_at,
-                pkg.updated_at,
-                pkg.id,
-            ],
-        ).map_err(|e| AppError::Message(format!("Failed to update package: {}", e)))?;
+                params![
+                    pkg.spec,
+                    pkg.pkg_type.to_string(),
+                    pkg.name,
+                    pkg.version,
+                    pkg.description,
+                    pkg.homepage,
+                    pkg.has_extensions as i32,
+                    pkg.has_skills as i32,
+                    pkg.has_prompts as i32,
+                    pkg.has_themes as i32,
+                    pkg.installed as i32,
+                    pkg.enabled as i32,
+                    pkg.installed_at,
+                    pkg.updated_at,
+                    pkg.id,
+                ],
+            )
+            .map_err(|e| AppError::Message(format!("Failed to update package: {}", e)))?;
 
         Ok(())
     }
@@ -234,13 +240,16 @@ impl Database {
 
     /// List all package sources
     pub fn list_sources(&self) -> Result<Vec<PackageSource>> {
-        let mut stmt = self.conn.prepare(
-            r#"
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"
             SELECT id, url, type, name, enabled, added_at
             FROM package_sources
             ORDER BY id ASC
             "#,
-        ).map_err(|e| AppError::Message(format!("Failed to prepare statement: {}", e)))?;
+            )
+            .map_err(|e| AppError::Message(format!("Failed to prepare statement: {}", e)))?;
 
         let sources = stmt
             .query_map([], |row| {
@@ -262,19 +271,21 @@ impl Database {
 
     /// Add a package source
     pub fn add_source(&self, source: &PackageSource) -> Result<i64> {
-        self.conn.execute(
-            r#"
+        self.conn
+            .execute(
+                r#"
             INSERT INTO package_sources (url, type, name, enabled, added_at)
             VALUES (?, ?, ?, ?, ?)
             "#,
-            params![
-                source.url,
-                source.source_type,
-                source.name,
-                source.enabled as i32,
-                source.added_at,
-            ],
-        ).map_err(|e| AppError::Message(format!("Failed to add source: {}", e)))?;
+                params![
+                    source.url,
+                    source.source_type,
+                    source.name,
+                    source.enabled as i32,
+                    source.added_at,
+                ],
+            )
+            .map_err(|e| AppError::Message(format!("Failed to add source: {}", e)))?;
 
         Ok(self.conn.last_insert_rowid())
     }

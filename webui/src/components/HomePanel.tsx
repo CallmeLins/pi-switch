@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { AppState, DaemonResult } from "../types";
 import { api } from "../api";
 import { Badge, Button, Card, SectionTitle } from "./ui";
+import { useI18n } from "../i18n";
 
 export function HomePanel({
   state,
@@ -11,6 +12,7 @@ export function HomePanel({
   refresh: () => Promise<void>;
   onNavigate: (k: any) => void;
 }) {
+  const { t } = useI18n();
   const [proxy, setProxy] = useState<DaemonResult | null>(null);
   const profiles = Object.entries(state.profiles);
   const exposedCount = profiles.filter(
@@ -23,50 +25,55 @@ export function HomePanel({
 
   return (
     <div>
-      <SectionTitle hint="CLI / TUI / WebUI share one Rust core">Overview</SectionTitle>
+      <SectionTitle hint={t("CLI / TUI / WebUI share one Rust core")}>
+        {t("Overview")}
+      </SectionTitle>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Profiles" value={String(profiles.length)} />
-        <Stat label="Exposed" value={String(exposedCount)} />
+        <Stat label={t("Profiles")} value={String(profiles.length)} />
+        <Stat label={t("Exposed")} value={String(exposedCount)} />
         <Stat
-          label="Current"
+          label={t("Current")}
           value={state.current || "—"}
         />
         <Stat
-          label="Proxy"
-          value={proxy?.running ? "running" : "stopped"}
+          label={t("Proxy")}
+          value={proxy?.running ? t("running") : t("stopped")}
           tone={proxy?.running ? "green" : "zinc"}
         />
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <Card>
-          <div className="mb-2 text-sm font-semibold text-zinc-200">Gateway workflow</div>
+          <div className="mb-2 text-sm font-semibold text-zinc-200">{t("Gateway workflow")}</div>
           <ol className="ml-4 list-decimal space-y-1 text-sm text-zinc-400">
-            <li>Add profiles &amp; set API keys</li>
-            <li>Expose models to pi (per profile)</li>
-            <li>Optionally set a failover chain</li>
-            <li>Start the proxy — pi routes by <code>profile/model</code></li>
+            <li>{t("Add profiles & set API keys")}</li>
+            <li>{t("Expose models to pi (per profile)")}</li>
+            <li>{t("Optionally set a failover chain")}</li>
+            <li>
+              {t("Start the proxy — pi routes by profile/model")}{" "}
+              <code>profile/model</code>
+            </li>
           </ol>
           <div className="mt-3 flex gap-2">
             <Button variant="primary" onClick={() => onNavigate("profiles")}>
-              Manage profiles
+              {t("Manage profiles")}
             </Button>
-            <Button onClick={() => onNavigate("proxy")}>Proxy control</Button>
+            <Button onClick={() => onNavigate("proxy")}>{t("Proxy control")}</Button>
           </div>
         </Card>
 
         <Card>
-          <div className="mb-2 text-sm font-semibold text-zinc-200">Current selection</div>
+          <div className="mb-2 text-sm font-semibold text-zinc-200">{t("Current selection")}</div>
           {state.current ? (
             <div className="text-sm text-zinc-400">
-              Active profile: <Badge tone="indigo">{state.current}</Badge>
+              {t("Active profile:")} <Badge tone="indigo">{state.current}</Badge>
               <div className="mt-2 text-xs text-zinc-500">
-                Provider id: {state.settings.providerPrefix}
+                {t("Provider id:")} {state.settings.providerPrefix}
               </div>
             </div>
           ) : (
-            <div className="text-sm text-zinc-500">No profile selected yet.</div>
+            <div className="text-sm text-zinc-500">{t("No profile selected yet.")}</div>
           )}
           {proxy && (
             <div className="mt-3 text-xs text-zinc-500">{proxy.message}</div>

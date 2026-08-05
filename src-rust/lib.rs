@@ -1,3 +1,4 @@
+mod ccswitch;
 mod config;
 mod daemon;
 mod database;
@@ -651,21 +652,19 @@ impl From<package::PackageSource> for PackageSourceInfo {
 /// Initialize package management
 #[napi]
 pub fn init_packages() -> napi::Result<String> {
-    package_ops::init_packages()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    package_ops::init_packages().map_err(|e| napi::Error::from_reason(e.to_string()))?;
     Ok("Package management initialized".to_string())
 }
 
 /// List all packages
 #[napi]
 pub fn list_packages() -> napi::Result<String> {
-    let packages = package_ops::list_packages()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let packages =
+        package_ops::list_packages().map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     let infos: Vec<PackageInfo> = packages.into_iter().map(PackageInfo::from).collect();
 
-    serde_json::to_string_pretty(&infos)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    serde_json::to_string_pretty(&infos).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 /// Get a package by ID
@@ -677,15 +676,14 @@ pub fn get_package(id: String) -> napi::Result<String> {
 
     let info = PackageInfo::from(package);
 
-    serde_json::to_string_pretty(&info)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    serde_json::to_string_pretty(&info).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 /// Add a package
 #[napi]
 pub fn add_package(spec: String) -> napi::Result<String> {
-    let package = package_ops::add_package(&spec)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let package =
+        package_ops::add_package(&spec).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package '{}' added", package.name))
 }
@@ -693,17 +691,20 @@ pub fn add_package(spec: String) -> napi::Result<String> {
 /// Install a package
 #[napi]
 pub fn install_package(id: String) -> napi::Result<String> {
-    let package = package_ops::install_package(&id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let package =
+        package_ops::install_package(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    Ok(format!("Package '{}' installed and synced to Pi Agent", package.name))
+    Ok(format!(
+        "Package '{}' installed and synced to Pi Agent",
+        package.name
+    ))
 }
 
 /// Uninstall a package
 #[napi]
 pub fn uninstall_package(id: String) -> napi::Result<String> {
-    let package = package_ops::uninstall_package(&id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let package =
+        package_ops::uninstall_package(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package '{}' uninstalled", package.name))
 }
@@ -711,8 +712,8 @@ pub fn uninstall_package(id: String) -> napi::Result<String> {
 /// Enable a package
 #[napi]
 pub fn enable_package(id: String) -> napi::Result<String> {
-    let package = package_ops::enable_package(&id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let package =
+        package_ops::enable_package(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package '{}' enabled", package.name))
 }
@@ -720,8 +721,8 @@ pub fn enable_package(id: String) -> napi::Result<String> {
 /// Disable a package
 #[napi]
 pub fn disable_package(id: String) -> napi::Result<String> {
-    let package = package_ops::disable_package(&id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let package =
+        package_ops::disable_package(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package '{}' disabled", package.name))
 }
@@ -729,17 +730,23 @@ pub fn disable_package(id: String) -> napi::Result<String> {
 /// Delete a package
 #[napi]
 pub fn delete_package(id: String) -> napi::Result<String> {
-    package_ops::delete_package(&id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    package_ops::delete_package(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package '{}' deleted", id))
+}
+
+/// Uninstall from Pi Agent (if installed) and remove the database record.
+#[napi]
+pub fn uninstall_and_remove_package(id: String) -> napi::Result<String> {
+    package_ops::uninstall_and_remove(&id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(format!("Package '{}' uninstalled and removed", id))
 }
 
 /// Sync packages to Pi Agent
 #[napi]
 pub fn sync_packages() -> napi::Result<String> {
-    package_ops::sync_packages_to_pi()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    package_ops::sync_packages_to_pi().map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok("Packages synced to Pi Agent settings.json".to_string())
 }
@@ -747,27 +754,33 @@ pub fn sync_packages() -> napi::Result<String> {
 /// Import packages from Pi Agent
 #[napi]
 pub fn import_packages() -> napi::Result<String> {
-    let imported = package_ops::import_from_pi()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let imported =
+        package_ops::import_from_pi().map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
-    Ok(format!("Imported {} packages from Pi Agent", imported.len()))
+    Ok(format!(
+        "Imported {} packages from Pi Agent",
+        imported.len()
+    ))
 }
 
 /// List package sources
 #[napi]
 pub fn list_package_sources() -> napi::Result<String> {
-    let sources = package_ops::list_sources()
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    let sources =
+        package_ops::list_sources().map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     let infos: Vec<PackageSourceInfo> = sources.into_iter().map(PackageSourceInfo::from).collect();
 
-    serde_json::to_string_pretty(&infos)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    serde_json::to_string_pretty(&infos).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 /// Add a package source
 #[napi]
-pub fn add_package_source(url: String, source_type: String, name: Option<String>) -> napi::Result<String> {
+pub fn add_package_source(
+    url: String,
+    source_type: String,
+    name: Option<String>,
+) -> napi::Result<String> {
     let source = package_ops::add_source(&url, &source_type, name.as_deref())
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
@@ -777,9 +790,92 @@ pub fn add_package_source(url: String, source_type: String, name: Option<String>
 /// Delete a package source
 #[napi]
 pub fn delete_package_source(id: i64) -> napi::Result<String> {
-    package_ops::delete_source(id)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    package_ops::delete_source(id).map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
     Ok(format!("Package source #{} deleted", id))
 }
 
+// ─── cc-switch import ─────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct CcsProviderInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "appType")]
+    pub app_type: String,
+    pub api: String,
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    pub models: Vec<String>,
+    pub exists: bool,
+}
+
+#[napi(object)]
+pub struct CcsImportSelectionInput {
+    pub id: String,
+    pub force: Option<bool>,
+}
+
+#[derive(serde::Serialize)]
+pub struct CcsImportResultInfo {
+    pub name: String,
+    pub imported: bool,
+    pub message: String,
+}
+
+#[napi(js_name = "defaultCcsSwitchDbPath")]
+pub fn default_ccswitch_db_path() -> String {
+    ccswitch::default_db_path().display().to_string()
+}
+
+#[napi(js_name = "listCcsSwitchProviders")]
+pub fn list_ccswitch_providers(path: Option<String>) -> napi::Result<String> {
+    let providers = ccswitch::list_ccswitch_providers(path.as_deref())
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let infos: Vec<CcsProviderInfo> = providers
+        .into_iter()
+        .map(|p| CcsProviderInfo {
+            id: p.id,
+            name: p.name,
+            app_type: p.app_type,
+            api: p.api,
+            base_url: p.base_url,
+            api_key: p.api_key,
+            models: p.models,
+            exists: p.exists,
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&infos).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[napi(js_name = "importCcsSwitchProviders")]
+pub fn import_ccswitch_providers(
+    selections: Vec<CcsImportSelectionInput>,
+    path: Option<String>,
+) -> napi::Result<String> {
+    let selections: Vec<ccswitch::CcsImportSelection> = selections
+        .into_iter()
+        .map(|s| ccswitch::CcsImportSelection {
+            id: s.id,
+            force: s.force.unwrap_or(false),
+        })
+        .collect();
+
+    let results = ccswitch::import_ccswitch_providers(&selections, path.as_deref())
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    let infos: Vec<CcsImportResultInfo> = results
+        .into_iter()
+        .map(|r| CcsImportResultInfo {
+            name: r.name,
+            imported: r.imported,
+            message: r.message,
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&infos).map_err(|e| napi::Error::from_reason(e.to_string()))
+}

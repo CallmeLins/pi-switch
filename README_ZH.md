@@ -66,7 +66,7 @@ npm install -g @heihei0299/pi-switch --build-from-source
 
 ```bash
 pi-switch tui          # 交互式 TUI（推荐）
-pi-switch webui start  # 浏览器界面 http://127.0.0.1:43110
+pi-switch webui start --daemon  # 浏览器界面 http://127.0.0.1:43110（后台守护进程）
 pi-switch doctor       # 运行环境诊断
 ```
 
@@ -96,8 +96,9 @@ pi-switch package toggle <id>                      # 启用/禁用包
 pi-switch package remove <id>                      # 删除包
 pi-switch package show <id>                        # 显示包详情
 
-# WebUI（浏览器配置）
-pi-switch webui start [--host <ip>] [--port <端口>] [--daemon]
+# WebUI（浏览器配置）——建议始终使用 --daemon 后台运行，
+# 这样可以用 `pi-switch webui stop` 停止
+pi-switch webui start --daemon [--host <ip>] [--port <端口>]
 pi-switch webui status
 pi-switch webui stop
 
@@ -107,6 +108,7 @@ pi-switch config show                               # 显示当前配置
 pi-switch config backups                            # 列出备份文件
 pi-switch config export <密码>                      # 加密导出
 pi-switch config import <路径> <密码>                # 加密导入
+pi-switch import ccswitch [--path <db>] [--all] [--force]  # 从 cc-switch 导入 provider
 pi-switch stats                                     # 查看请求统计
 ```
 
@@ -117,6 +119,7 @@ pi-switch stats                                     # 查看请求统计
 | 分类 | 亮点 |
 |------|------|
 | 🔌 **Provider 管理** | 增删改查、复制、搜索/过滤、模型管理、暴露到 pi agent |
+| ⇥ **cc-switch 导入** | 一键从 cc-switch（Claude Code / Codex / Gemini）导入 provider，按 baseUrl 去重、跳过官方预置项 — CLI、TUI、WebUI 三端支持 |
 | 💡 **内置预设** | OpenRouter、Anthropic、DeepSeek、SiliconFlow、OpenAI — 一键创建配置 |
 | 🌉 **模型名网关** | 无状态按 `profile/model` 路由、SSE 流式、User-Agent 伪装、请求体过滤、OpenAI ↔ Anthropic 转换、故障转移、断路器 |
 | 📦 **Package 管理** | 在 CLI、TUI、WebUI 中安装、启用/禁用和管理包 |
@@ -125,6 +128,27 @@ pi-switch stats                                     # 查看请求统计
 | 📊 **使用统计** | 按 provider、按模型的请求指标与延迟；四维度 token 总量（输入/输出/缓存/推理）、缓存命中率、时间窗口查询（当天/24h/7 天/自定义）、按对话统计 |
 | 💾 **备份与同步** | 每次修改自动备份、AES-256-CBC 加密导出/导入 |
 | 🩺 **诊断工具** | `doctor` 命令检查配置、models.json、结构完整性 |
+
+---
+
+## ⇥ 从 cc-switch 导入
+
+已经在用 [cc-switch](https://github.com/farion1231/cc-switch)？一条命令即可把它的 provider 导入 pi-switch，无需手动重新添加：
+
+```bash
+pi-switch import ccswitch                 # 交互式选择
+pi-switch import ccswitch --all           # 导入全部新 provider
+pi-switch import ccswitch --path /路径/cc-switch.db   # 自定义数据库路径
+```
+
+- 读取 `~/.cc-switch/cc-switch.db`（SQLite，只读 — 不修改 cc-switch 数据）
+- 映射三种常用客户端：**Claude** → `anthropic-messages`、**Codex** → `openai-responses`、**Gemini** → `google-generative-ai`
+- 跳过官方预置项（如 `claude-official`）
+- **按 baseUrl 去重**：pi-switch 已有的 provider 标记为已存在并跳过（`--force` 可覆盖）
+- 同名冲突自动加 `(cc)` 后缀，不静默覆盖
+- 默认路径找不到时会提示输入 `cc-switch.db` 的路径（或取消）
+
+三端均支持：CLI（`pi-switch import ccswitch`）、TUI（Profiles → `i`）、WebUI（Profiles → *Import from cc-switch*）。
 
 ---
 

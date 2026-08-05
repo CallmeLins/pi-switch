@@ -1,8 +1,8 @@
-use crate::config::{config_dir, config_path, save_config, backup_config, PiSwitchConfig};
-use aes::cipher::{BlockEncrypt, KeyInit, BlockDecrypt};
-use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use crate::config::{backup_config, config_dir, config_path, save_config, PiSwitchConfig};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand::Rng;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 // ─── Encryption ───────────────────────────────────────────
@@ -26,8 +26,7 @@ pub fn encrypt_config(passphrase: &str) -> Result<String, String> {
         return Err(format!("No config at {}", path.display()));
     }
 
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read error: {}", e))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Read error: {}", e))?;
 
     let key = derive_key(passphrase);
     let iv: [u8; 16] = rand::thread_rng().gen();
@@ -38,14 +37,15 @@ pub fn encrypt_config(passphrase: &str) -> Result<String, String> {
     data.extend(std::iter::repeat_n(pad_len as u8, pad_len));
 
     // Encrypt using AES-256-CBC manually
-    let cipher = aes::Aes256::new_from_slice(&key)
-        .map_err(|e| format!("Cipher error: {:?}", e))?;
+    let cipher = aes::Aes256::new_from_slice(&key).map_err(|e| format!("Cipher error: {:?}", e))?;
 
     for chunk in data.chunks_mut(16) {
         let mut block = aes::Block::default();
         block.copy_from_slice(chunk);
         let mut out = block;
-        for i in 0..16 { out[i] ^= iv[i]; }
+        for i in 0..16 {
+            out[i] ^= iv[i];
+        }
         cipher.encrypt_block(&mut out);
         chunk.copy_from_slice(&out);
     }
@@ -57,16 +57,14 @@ pub fn encrypt_config(passphrase: &str) -> Result<String, String> {
     });
 
     let export_dir = config_dir().join("exports");
-    std::fs::create_dir_all(&export_dir)
-        .map_err(|e| format!("Create dir error: {}", e))?;
+    std::fs::create_dir_all(&export_dir).map_err(|e| format!("Create dir error: {}", e))?;
 
     let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S-%3fZ");
     let export_path = export_dir.join(format!("pi-switch-export-{}.json", ts));
-    let json = serde_json::to_string_pretty(&encrypted)
-        .map_err(|e| format!("Serialize error: {}", e))?;
+    let json =
+        serde_json::to_string_pretty(&encrypted).map_err(|e| format!("Serialize error: {}", e))?;
 
-    std::fs::write(&export_path, json)
-        .map_err(|e| format!("Write error: {}", e))?;
+    std::fs::write(&export_path, json).map_err(|e| format!("Write error: {}", e))?;
 
     Ok(format!("Config exported to {}", export_path.display()))
 }
@@ -81,11 +79,10 @@ pub fn import_config(file_path: &str, passphrase: &str) -> Result<String, String
         return Err(format!("file not found: {}", file_path));
     }
 
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read error: {}", e))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("Read error: {}", e))?;
 
-    let wrapper: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| format!("JSON parse error: {}", e))?;
+    let wrapper: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("JSON parse error: {}", e))?;
 
     let v = wrapper.get("v").and_then(|v| v.as_u64()).unwrap_or(0);
     if v != 1 {
@@ -95,16 +92,19 @@ pub fn import_config(file_path: &str, passphrase: &str) -> Result<String, String
     let iv_b64 = wrapper.get("iv").and_then(|v| v.as_str()).unwrap_or("");
     let data_b64 = wrapper.get("data").and_then(|v| v.as_str()).unwrap_or("");
 
-    let iv = B64.decode(iv_b64).map_err(|e| format!("IV decode: {}", e))?;
-    let mut data = B64.decode(data_b64).map_err(|e| format!("Data decode: {}", e))?;
+    let iv = B64
+        .decode(iv_b64)
+        .map_err(|e| format!("IV decode: {}", e))?;
+    let mut data = B64
+        .decode(data_b64)
+        .map_err(|e| format!("Data decode: {}", e))?;
 
     if iv.len() != 16 {
         return Err("invalid IV length".into());
     }
 
     let key = derive_key(passphrase);
-    let cipher = aes::Aes256::new_from_slice(&key)
-        .map_err(|e| format!("Cipher error: {:?}", e))?;
+    let cipher = aes::Aes256::new_from_slice(&key).map_err(|e| format!("Cipher error: {:?}", e))?;
 
     // Decrypt
     for chunk in data.chunks_mut(16) {
@@ -112,7 +112,9 @@ pub fn import_config(file_path: &str, passphrase: &str) -> Result<String, String
         block.copy_from_slice(chunk);
         let mut out = block;
         cipher.decrypt_block(&mut out);
-        for i in 0..16 { out[i] ^= iv[i]; }
+        for i in 0..16 {
+            out[i] ^= iv[i];
+        }
         chunk.copy_from_slice(&out);
     }
 
@@ -130,7 +132,9 @@ pub fn import_config(file_path: &str, passphrase: &str) -> Result<String, String
     // Sanitize raw API keys
     let mut sanitized = 0u32;
     for name in new_config.profiles.keys().cloned().collect::<Vec<_>>() {
-        let needs_sanitize = new_config.profiles.get(&name)
+        let needs_sanitize = new_config
+            .profiles
+            .get(&name)
             .and_then(|v| v.get("apiKey"))
             .and_then(|v| v.as_str())
             .is_some_and(|key| !key.starts_with('$') && key.len() > 8);

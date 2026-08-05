@@ -1,5 +1,7 @@
 import type {
   AppState,
+  CcsImportResult,
+  CcsProvider,
   ConversationRequestsPage,
   ConversationsPage,
   DaemonResult,
@@ -73,11 +75,17 @@ export const api = {
   // package management
   getPackages: () => req<{ packages: PackageEntry[] }>("GET", "/packages"),
   getPackage: (id: string) => req<PackageEntry>("GET", `/packages/${enc(id)}`),
-  addPackage: (id: string, name: string, version: string) =>
-    req("POST", "/packages", { id, name, version, enabled: true }),
+  addPackage: (spec: string) =>
+    req("POST", "/packages", { spec, enabled: true }),
   importPackages: () => req<{ ok: boolean; count: number; message: string }>("POST", "/packages/import"),
   togglePackage: (id: string) => req("POST", `/packages/${enc(id)}/toggle`),
   deletePackage: (id: string) => req("DELETE", `/packages/${enc(id)}`),
+
+  // cc-switch import
+  ccsProviders: (path?: string) =>
+    req<{ providers: CcsProvider[] }>("GET", `/ccswitch/providers${path ? `?path=${enc(path)}` : ""}`),
+  importCcs: (selections: { id: string; force?: boolean }[], path?: string) =>
+    req<{ ok: boolean; imported: number; results: CcsImportResult[] }>("POST", "/ccswitch/import", { selections, path }),
 
   // profile mutations
   init: () => req<{ messages: string[] }>("POST", "/init"),

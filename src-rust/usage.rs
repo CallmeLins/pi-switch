@@ -50,7 +50,11 @@ pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(serde_json::Value::as_u64)
         })
-        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(serde_json::Value::as_u64))
+        .or_else(|| {
+            usage
+                .get("prompt_cache_hit_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
         .unwrap_or(0);
     let reasoning_tokens = usage
         .get("completion_tokens_details")
@@ -222,13 +226,22 @@ mod tests {
         });
 
         let a = extract_usage(&anthropic).expect("anthropic style");
-        assert_eq!((a.prompt_tokens, a.completion_tokens, a.cached_tokens), (100, 50, 40));
+        assert_eq!(
+            (a.prompt_tokens, a.completion_tokens, a.cached_tokens),
+            (100, 50, 40)
+        );
 
         let o = extract_usage(&openai).expect("openai style");
-        assert_eq!((o.prompt_tokens, o.completion_tokens, o.cached_tokens), (200, 30, 120));
+        assert_eq!(
+            (o.prompt_tokens, o.completion_tokens, o.cached_tokens),
+            (200, 30, 120)
+        );
 
         let d = extract_usage(&deepseek).expect("deepseek style");
-        assert_eq!((d.prompt_tokens, d.completion_tokens, d.cached_tokens), (300, 40, 150));
+        assert_eq!(
+            (d.prompt_tokens, d.completion_tokens, d.cached_tokens),
+            (300, 40, 150)
+        );
     }
 
     #[test]
@@ -287,13 +300,23 @@ mod tests {
 
         let c = extract_usage(&chat).expect("chat completions style");
         assert_eq!(
-            (c.prompt_tokens, c.completion_tokens, c.cached_tokens, c.reasoning_tokens),
+            (
+                c.prompt_tokens,
+                c.completion_tokens,
+                c.cached_tokens,
+                c.reasoning_tokens
+            ),
             (200, 30, 120, 20)
         );
 
         let d = extract_usage(&deepseek).expect("deepseek style");
         assert_eq!(
-            (d.prompt_tokens, d.completion_tokens, d.cached_tokens, d.reasoning_tokens),
+            (
+                d.prompt_tokens,
+                d.completion_tokens,
+                d.cached_tokens,
+                d.reasoning_tokens
+            ),
             (300, 40, 150, 25)
         );
     }
@@ -312,7 +335,12 @@ mod tests {
 
         let r = extract_usage(&responses).expect("responses style");
         assert_eq!(
-            (r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.reasoning_tokens),
+            (
+                r.prompt_tokens,
+                r.completion_tokens,
+                r.cached_tokens,
+                r.reasoning_tokens
+            ),
             (100, 50, 40, 15)
         );
     }
@@ -352,7 +380,11 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            (partial.prompt_tokens, partial.completion_tokens, partial.cached_tokens),
+            (
+                partial.prompt_tokens,
+                partial.completion_tokens,
+                partial.cached_tokens
+            ),
             (200, 0, 0),
             "missing fields default to zero"
         );
@@ -467,7 +499,10 @@ mod tests {
 
     #[test]
     fn sse_parser_returns_none_for_anthropic_stream_without_message_start() {
-        let stream = anthropic_stream("", r#""cache_creation_input_tokens":null,"cache_read_input_tokens":null"#);
+        let stream = anthropic_stream(
+            "",
+            r#""cache_creation_input_tokens":null,"cache_read_input_tokens":null"#,
+        );
         let mut parser = SseUsageParser::new();
         parser.push(stream.as_bytes());
         assert_eq!(parser.finish(), None);
@@ -527,8 +562,8 @@ mod tests {
 
         for offset in 0..openai_stream.len() {
             let mut split = SseUsageParser::new();
-            split.push(openai_stream[..offset].as_bytes());
-            split.push(openai_stream[offset..].as_bytes());
+            split.push(&openai_stream.as_bytes()[..offset]);
+            split.push(&openai_stream.as_bytes()[offset..]);
             assert_eq!(
                 split.finish(),
                 expected,
@@ -546,7 +581,11 @@ mod tests {
         parser.push(b"event: unknown_event\n");
         parser.push(b"data: {\"type\":\"ping\"}\n\n");
         parser.push(b"data: [DONE]\n\n");
-        assert_eq!(parser.finish(), None, "garbage must not panic or invent usage");
+        assert_eq!(
+            parser.finish(),
+            None,
+            "garbage must not panic or invent usage"
+        );
     }
 
     #[test]

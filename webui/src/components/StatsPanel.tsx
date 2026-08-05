@@ -5,13 +5,9 @@ import { Button, Card, Input, SectionTitle } from "./ui";
 import { formatCost, formatRequestTime, formatRequestToken, formatTokenCount, formatTokenDimension, formatTotalTokens, shortConversationId } from "../lib/format";
 import { computeConversationWindow, computeStatsWindow, todayString } from "../lib/statsWindow";
 import type { ConversationRange, StatsRange } from "../lib/statsWindow";
+import { useI18n } from "../i18n";
 
-const PRESETS: { key: StatsRange; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "last24h", label: "24h" },
-  { key: "last7d", label: "7d" },
-  { key: "custom", label: "Custom" },
-];
+const PRESET_KEYS: StatsRange[] = ["today", "last24h", "last7d", "custom"];
 
 const CONV_PRESETS: { key: ConversationRange; label: string }[] = [
   { key: "today", label: "Today" },
@@ -32,6 +28,7 @@ const REFRESH_TIERS: { label: string; ms: number | null }[] = [
 ];
 
 export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> }) {
+  const { t } = useI18n();
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [range, setRange] = useState<StatsRange>("today");
   const [customFrom, setCustomFrom] = useState("");
@@ -184,14 +181,14 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       const from = customFrom || todayString();
       const to = customTo || todayString();
       if (customFrom && customTo && to < from) {
-        setCustomError("End must be on or after start");
+        setCustomError(t("End must be on or after start"));
         return;
       }
       setCustomFrom(from);
       setCustomTo(to);
       setPage(0);
-      const { from: f, to: t } = computeStatsWindow("custom", from, to);
-      void load("custom", f, t, 0, pageSize);
+      const { from: f, to: toMs } = computeStatsWindow("custom", from, to);
+      void load("custom", f, toMs, 0, pageSize);
     } else {
       setCustomError(null);
       const { from, to } = computeStatsWindow(key, null, null);
@@ -235,14 +232,14 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         setCustomTo(value);
       }
       if (!from || !to) {
-        setCustomError("Select both start and end dates");
+        setCustomError(t("Select both start and end dates"));
       } else if (to < from) {
-        setCustomError("End must be on or after start");
+        setCustomError(t("End must be on or after start"));
       } else {
         setCustomError(null);
         setPage(0);
-        const { from: f, to: t } = computeStatsWindow("custom", from, to);
-        void load("custom", f, t, 0, pageSize);
+        const { from: f, to: toMs } = computeStatsWindow("custom", from, to);
+        void load("custom", f, toMs, 0, pageSize);
       }
     };
 
@@ -263,10 +260,17 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
       } else {
         setConvError(null);
         setConvPage(0);
-        const { from: f, to: t } = computeConversationWindow("custom", from, to);
-        void loadConversations("custom", f, t, 0, convPageSize);
+        const { from: f, to: toMs } = computeConversationWindow("custom", from, to);
+        void loadConversations("custom", f, toMs, 0, convPageSize);
       }
     };
+
+  const PRESETS: { key: StatsRange; label: string }[] = [
+    { key: "today", label: t("Today") },
+    { key: "last24h", label: t("24h") },
+    { key: "last7d", label: t("7d") },
+    { key: "custom", label: t("Custom") },
+  ];
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
   const totals = stats?.totalTokens;
@@ -298,7 +302,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
 
   return (
     <div>
-      <SectionTitle hint="proxy request usage">Stats</SectionTitle>
+      <SectionTitle hint={t("proxy request usage")}>{t("Stats")}</SectionTitle>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {PRESETS.map(({ key, label }) => (
@@ -313,20 +317,20 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
         ))}
         {range === "custom" && (
           <span className="flex items-center gap-2">
-            <Input type="date" aria-label="From" value={customFrom} onChange={onCustomDate("from")} />
+            <Input type="date" aria-label={t("From")} value={customFrom} onChange={onCustomDate("from")} />
             <span className="text-xs text-zinc-500">→</span>
-            <Input type="date" aria-label="To" value={customTo} onChange={onCustomDate("to")} />
+            <Input type="date" aria-label={t("To")} value={customTo} onChange={onCustomDate("to")} />
             {customError && <span className="text-xs text-red-300">{customError}</span>}
           </span>
         )}
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Button onClick={() => select(range, true)}>Refresh</Button>
+        <Button onClick={() => select(range, true)}>{t("Refresh")}</Button>
         <label className="flex items-center gap-1 text-xs text-zinc-500">
           Auto-refresh
           <select
-            aria-label="Auto-refresh"
+            aria-label={t("Auto-refresh")}
             value={refreshMs ?? "off"}
             onChange={(e) => setRefreshMs(e.target.value === "off" ? null : Number(e.target.value))}
             className="rounded border border-white/10 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200"
@@ -339,64 +343,64 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
           </select>
         </label>
         <a href={logsExportUrl("json")} className="inline-flex">
-          <Button>Export JSON</Button>
+          <Button>{t("Export JSON")}</Button>
         </a>
         <a href={logsExportUrl("csv")} className="inline-flex">
-          <Button>Export CSV</Button>
+          <Button>{t("Export CSV")}</Button>
         </a>
       </div>
 
       {!stats || stats.totalRequests === 0 ? (
         <Card>
           <div className="text-sm text-zinc-500">
-            No request data yet. Start the proxy and make some requests.
+            {t("No request data yet. Start the proxy and make some requests.")}
           </div>
         </Card>
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <Metric label="Total" value={stats.totalRequests} />
-            <Metric label="OK" value={stats.okRequests} tone="green" />
-            <Metric label="Failed" value={stats.failedRequests} tone="red" />
-            <Metric label="Success" value={stats.successRate} />
-            <Metric label="Cache 率" value={stats.cacheHitRate ?? "-"} />
+            <Metric label={t("Total")} value={stats.totalRequests} />
+            <Metric label={t("OK")} value={stats.okRequests} tone="green" />
+            <Metric label={t("Failed")} value={stats.failedRequests} tone="red" />
+            <Metric label={t("Success")} value={stats.successRate} />
+            <Metric label={t("Cache rate")} value={stats.cacheHitRate ?? "-"} />
           </div>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-            <Metric label="Input" value={formatTokenDimension(totals?.input)} />
-            <Metric label="Output" value={formatTokenDimension(totals?.output)} />
-            <Metric label="Cached" value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
+            <Metric label={t("Input")} value={formatTokenDimension(totals?.input)} />
+            <Metric label={t("Output")} value={formatTokenDimension(totals?.output)} />
+            <Metric label={t("Cached")} value={formatTokenDimension(totals?.cached)} badge="⊆ Input" />
             <Metric
-              label="Reasoning"
+              label={t("Reasoning")}
               value={formatTokenDimension(totals?.reasoning)}
               badge="⊆ Output"
             />
-            <Metric label="Total" value={formatTotalTokens(totals)} />
+            <Metric label={t("Total")} value={formatTotalTokens(totals)} />
           </div>
           <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
             <Metric label="Cost" value={formatCost(stats.totalCost)} />
             {stats.costUnknown ? (
               <div className="col-span-full text-xs text-zinc-500">
-                {stats.costUnknown} unknown cost rows
+                {stats.costUnknown} {t("unknown cost rows")}
               </div>
             ) : null}
           </div>
           {stats.avgLatencyMs != null && (
             <div className="mb-4 text-sm text-zinc-400">
-              Avg latency: <span className="text-zinc-200">{stats.avgLatencyMs} ms</span>
+              {t("Avg latency:")} <span className="text-zinc-200">{stats.avgLatencyMs} ms</span>
             </div>
           )}
 
           {byProvider.length > 0 && (
             <Card>
-              <div className="mb-2 text-sm font-semibold text-zinc-200">By provider</div>
+              <div className="mb-2 text-sm font-semibold text-zinc-200">{t("By provider")}</div>
               <table className="w-full text-sm">
                 <thead className="text-left text-xs text-zinc-500">
                   <tr>
-                    <th className="pb-1">Provider</th>
-                    <th className="pb-1 text-right">Total</th>
-                    <th className="pb-1 text-right">OK</th>
-                    <th className="pb-1 text-right">Rate</th>
-                    <th className="pb-1 text-right">Tokens</th>
+                    <th className="pb-1">{t("Provider")}</th>
+                    <th className="pb-1 text-right">{t("Total")}</th>
+                    <th className="pb-1 text-right">{t("OK")}</th>
+                    <th className="pb-1 text-right">{t("Rate")}</th>
+                    <th className="pb-1 text-right">{t("Tokens")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -427,27 +431,27 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                 onClick={() => setRequestsOpen((v) => !v)}
                 className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
               >
-                <span>Request details</span>
+                <span>{t("Request details")}</span>
                 <span className="text-zinc-500">{requestsOpen ? "▾" : "▸"}</span>
               </button>
               {requestsOpen && (
                 <>
                   <div className="overflow-x-auto">
-                <table aria-label="Request details" className="w-full text-sm">
+                <table aria-label={t("Request details")} className="w-full text-sm">
                   <thead className="text-left text-xs text-zinc-500">
                     <tr>
-                      <th className="pb-1 pr-2">Time</th>
-                      <th className="pb-1 pr-2">Session</th>
-                      <th className="pb-1 pr-2">Provider</th>
-                      <th className="pb-1 pr-2">Model</th>
-                      <th className="pb-1 pr-2">Status</th>
-                      <th className="pb-1 pr-2 text-right">Input</th>
-                      <th className="pb-1 pr-2 text-right">Output</th>
-                      <th className="pb-1 pr-2 text-right">Cached</th>
-                      <th className="pb-1 pr-2 text-right">Reasoning</th>
-                      <th className="pb-1 pr-2 text-right">Rate</th>
-                      <th className="pb-1 text-right">Total</th>
-                      <th className="pb-1 text-right">Cost</th>
+                      <th className="pb-1 pr-2">{t("Time")}</th>
+                      <th className="pb-1 pr-2">{t("Session")}</th>
+                      <th className="pb-1 pr-2">{t("Provider")}</th>
+                      <th className="pb-1 pr-2">{t("Model")}</th>
+                      <th className="pb-1 pr-2">{t("Status")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Input")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Output")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                      <th className="pb-1 text-right">{t("Total")}</th>
+                      <th className="pb-1 text-right">{t("Cost")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -459,11 +463,11 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
               </div>
               {totalRows != null && totalRows > 0 && (
                 <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-                  <span>{totalRows} rows</span>
+                  <span>{totalRows} {t("rows")}</span>
                   {totalPages > 1 && (
                     <span className="flex items-center gap-1">
                       <Button
-                        aria-label="Previous page"
+                        aria-label={t("Previous page")}
                         disabled={page === 0}
                         onClick={() => goPage(page - 1)}
                       >
@@ -486,7 +490,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                         ),
                       )}
                       <Button
-                        aria-label="Next page"
+                        aria-label={t("Next page")}
                         disabled={page >= totalPages - 1}
                         onClick={() => goPage(page + 1)}
                       >
@@ -497,7 +501,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   <label className="flex items-center gap-1 text-zinc-500">
                     Rows per page
                     <select
-                      aria-label="Rows per page"
+                      aria-label={t("Rows per page")}
                       value={pageSize}
                       onChange={(e) => {
                         const next = Number(e.target.value);
@@ -529,7 +533,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
               onClick={() => setConversationsOpen((v) => !v)}
               className="mb-2 flex w-full items-center justify-between text-sm font-semibold text-zinc-200"
             >
-              <span>By conversation</span>
+              <span>{t("By conversation")}</span>
               <span className="text-zinc-500">{conversationsOpen ? "▾" : "▸"}</span>
             </button>
             {conversationsOpen && (
@@ -547,32 +551,32 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                   ))}
                   {convRange === "custom" && (
                     <span className="flex items-center gap-2">
-                      <Input type="date" aria-label="Conversation from" value={convFrom} onChange={onConvCustomDate("from")} />
+                      <Input type="date" aria-label={t("Conversation from")} value={convFrom} onChange={onConvCustomDate("from")} />
                       <span className="text-xs text-zinc-500">→</span>
-                      <Input type="date" aria-label="Conversation to" value={convTo} onChange={onConvCustomDate("to")} />
+                      <Input type="date" aria-label={t("Conversation to")} value={convTo} onChange={onConvCustomDate("to")} />
                       {convError && <span className="text-xs text-red-300">{convError}</span>}
                     </span>
                   )}
                 </div>
                 {!convData || convData.total === 0 ? (
-                  <div className="text-sm text-zinc-500">No conversation data in this range.</div>
+                  <div className="text-sm text-zinc-500">{t("No conversation data in this range.")}</div>
                 ) : (
                   <>
                     <div className="overflow-x-auto">
-                      <table aria-label="By conversation" className="w-full text-sm">
+                      <table aria-label={t("By conversation")} className="w-full text-sm">
                         <thead className="text-left text-xs text-zinc-500">
                           <tr>
                             <th className="pb-1 pr-2"></th>
-                            <th className="pb-1 pr-2">Time</th>
-                            <th className="pb-1 pr-2">Session</th>
-                            <th className="pb-1 pr-2 text-right">Requests</th>
-                            <th className="pb-1 pr-2 text-right">Input</th>
-                            <th className="pb-1 pr-2 text-right">Output</th>
-                            <th className="pb-1 pr-2 text-right">Cached</th>
-                            <th className="pb-1 pr-2 text-right">Reasoning</th>
-                            <th className="pb-1 pr-2 text-right">Rate</th>
-                            <th className="pb-1 pr-2 text-right">Total</th>
-                            <th className="pb-1 text-right">Cost</th>
+                            <th className="pb-1 pr-2">{t("Time")}</th>
+                            <th className="pb-1 pr-2">{t("Session")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Requests")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Input")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Output")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Total")}</th>
+                            <th className="pb-1 text-right">{t("Cost")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -630,11 +634,11 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       </table>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
-                      <span>{convData.total} rows</span>
+                      <span>{convData.total} {t("rows")}</span>
                       {convTotalPages > 1 && (
                         <span className="flex items-center gap-1">
                           <Button
-                            aria-label="Previous conversation page"
+                            aria-label={t("Previous conversation page")}
                             disabled={convPage === 0}
                             onClick={() => convGoPage(convPage - 1)}
                           >
@@ -657,7 +661,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                             ),
                           )}
                           <Button
-                            aria-label="Next conversation page"
+                            aria-label={t("Next conversation page")}
                             disabled={convPage >= convTotalPages - 1}
                             onClick={() => convGoPage(convPage + 1)}
                           >
@@ -668,7 +672,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       <label className="flex items-center gap-1 text-zinc-500">
                         Rows per page
                         <select
-                          aria-label="Conversation rows per page"
+                          aria-label={t("Conversation rows per page")}
                           value={convPageSize}
                           onChange={(e) => {
                             const next = Number(e.target.value);
@@ -800,6 +804,7 @@ function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
 // ─── Expanded conversation request browser ────────────────────
 
 function ExpandedConversationRequests({ conv }: { conv: ConversationStats }) {
+  const { t } = useI18n();
   const [data, setData] = useState<ConversationRequestsPage | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
@@ -859,18 +864,18 @@ function ExpandedConversationRequests({ conv }: { conv: ConversationStats }) {
             <table aria-label={`Requests of ${conv.conversationId}`} className="w-full text-sm">
               <thead className="text-left text-xs text-zinc-500">
                 <tr>
-                  <th className="pb-1 pr-2">Time</th>
-                  <th className="pb-1 pr-2">Session</th>
-                  <th className="pb-1 pr-2">Provider</th>
-                  <th className="pb-1 pr-2">Model</th>
-                  <th className="pb-1 pr-2">Status</th>
-                  <th className="pb-1 pr-2 text-right">Input</th>
-                  <th className="pb-1 pr-2 text-right">Output</th>
-                  <th className="pb-1 pr-2 text-right">Cached</th>
-                  <th className="pb-1 pr-2 text-right">Reasoning</th>
-                  <th className="pb-1 pr-2 text-right">Rate</th>
-                  <th className="pb-1 text-right">Total</th>
-                  <th className="pb-1 text-right">Cost</th>
+                  <th className="pb-1 pr-2">{t("Time")}</th>
+                  <th className="pb-1 pr-2">{t("Session")}</th>
+                  <th className="pb-1 pr-2">{t("Provider")}</th>
+                  <th className="pb-1 pr-2">{t("Model")}</th>
+                  <th className="pb-1 pr-2">{t("Status")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Input")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Output")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                  <th className="pb-1 text-right">{t("Total")}</th>
+                  <th className="pb-1 text-right">{t("Cost")}</th>
                 </tr>
               </thead>
               <tbody>

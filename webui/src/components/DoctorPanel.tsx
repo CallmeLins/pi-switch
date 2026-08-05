@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { AppState, DoctorCheck, ValidationIssue } from "../types";
 import { api } from "../api";
 import { Badge, Button, Card, SectionTitle } from "./ui";
+import { useI18n } from "../i18n";
 
 export function DoctorPanel(_: { state: AppState; refresh: () => Promise<void> }) {
+  const { t } = useI18n();
   const [checks, setChecks] = useState<DoctorCheck[]>([]);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
 
@@ -21,14 +23,14 @@ export function DoctorPanel(_: { state: AppState; refresh: () => Promise<void> }
 
   return (
     <div>
-      <SectionTitle hint="config & connectivity checks">Doctor</SectionTitle>
+      <SectionTitle hint={t("config & connectivity checks")}>{t("Doctor")}</SectionTitle>
 
       <div className="mb-3">
-        <Button onClick={() => void load()}>Re-run</Button>
+        <Button onClick={() => void load()}>{t("Re-run")}</Button>
       </div>
 
       <Card className="mb-4">
-        <div className="mb-2 text-sm font-semibold text-zinc-200">Health checks</div>
+        <div className="mb-2 text-sm font-semibold text-zinc-200">{t("Health checks")}</div>
         <div className="space-y-1">
           {checks.map((c, i) => (
             <div key={i} className="flex items-center gap-2 text-sm">
@@ -38,14 +40,14 @@ export function DoctorPanel(_: { state: AppState; refresh: () => Promise<void> }
               <span className="text-zinc-300">{c.msg}</span>
             </div>
           ))}
-          {checks.length === 0 && <div className="text-sm text-zinc-500">No checks.</div>}
+          {checks.length === 0 && <div className="text-sm text-zinc-500">{t("No checks.")}</div>}
         </div>
       </Card>
 
       <Card>
-        <div className="mb-2 text-sm font-semibold text-zinc-200">Validation</div>
+        <div className="mb-2 text-sm font-semibold text-zinc-200">{t("Validation")}</div>
         {issues.length === 0 ? (
-          <div className="text-sm text-emerald-300">No issues found.</div>
+          <div className="text-sm text-emerald-300">{t("No issues found.")}</div>
         ) : (
           <div className="space-y-1">
             {issues.map((iss, i) => (
