@@ -28,7 +28,8 @@
     "pi-switch-native.linux-x64-gnu.node",
     "pi-switch-native.linux-x64-musl.node",
     "pi-switch-native.win32-x64-msvc.node",
-    "extensions"
+    "extensions/index.ts",
+    "extensions/conversation-id-inject.ts"
   ],
   "scripts": {
     "artifacts": "napi artifacts",
