@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-20260805.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-20260806.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -164,7 +164,7 @@ Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line.
 - **Request details** — below the conversation card, the stats page lists every request in the current window, newest first, capped at the most recent 100: time, provider, model, status (with error for failures), and input / output / cached / reasoning / total tokens plus per-request cache hit rate. Rows without reported usage show `-`, never a misleading zero. **Cache rates below 50% render in red**, and clicking a conversation cell copies the full conversation id to the clipboard.
 - **Cache hit rate** = cached input tokens ÷ total input tokens (output tokens excluded). When no cache data exists it shows `-`, never a misleading `0%`.
 - **Conversation id** comes from the client: `x-conversation-id` header first, `x-opencode-session` second (sent by pi/open-code clients), `conversation_id` body field as fallback (ADR-0002). Requests from spawned subagents fold into the parent conversation id, so background agents don't fragment the stats.
-- **Conversation name** — the injected `x-conversation-name` is the session's explicit title, or falls back to the first user message as a readable label (non-Latin1 titles are percent-encoded so the header stays HTTP-safe).
+- **Conversation name** — the injected `x-conversation-name` is the session's explicit title, or falls back to the first user message as a readable label. Non-Latin1 titles are percent-encoded on the wire so the header stays HTTP-safe, then decoded back by the proxy and again defensively by the webui, so Chinese titles render readably in the dashboard (legacy pre-decode log rows are decoded at display time too). Pi's skill-injection messages (`<skill name="…">`) are skipped when picking the fallback title, so the label is the user's own first message, never the injected tag.
 - Only successful requests with reported usage count towards token totals; failover/retry intermediate rows and old log lines without token fields are excluded gracefully, so upgrading never breaks or blanks existing history.
 
 ---

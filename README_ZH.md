@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![版本](https://img.shields.io/badge/version-20260805.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![版本](https://img.shields.io/badge/version-20260806.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -163,7 +163,7 @@ pi-switch import ccswitch --path /路径/cc-switch.db   # 自定义数据库路�
 - **请求明细**：「By conversation」卡片下方列出当前窗口内每条请求，倒序截取最近 100 条：时间、provider、model、状态（失败带错误）以及输入/输出/缓存/推理/合计与单条缓存命中率。无使用量上报的行显示 `-`，绝不冒充 0 测量。**缓存率低于 50% 标红**；点击会话单元格可复制完整会话 ID。
 - **缓存命中率** = 命中缓存的输入 token ÷ 总输入 token（输出 token 不参与）。无缓存数据时显示 `-`，绝不显示误导的 `0%`。
 - **对话标识**来自客户端：`x-conversation-id` 请求头优先，`x-opencode-session` 请求头次之（pi / open-code 客户端自带），body `conversation_id` 兜底（ADR-0002）。子代理（subagent）发起的请求归并到父会话标识，后台代理不会打碎统计。
-- **对话名称**：注入的 `x-conversation-name` 为会话显式标题；无标题时回退到第一条用户消息作为可读名称（非 Latin-1 标题做百分号编码，保证 header 合法）。
+- **对话名称**：注入的 `x-conversation-name` 为会话显式标题；无标题时回退到第一条用户消息作为可读名称。非 Latin-1 标题在传输层做百分号编码保证 header 合法，代理与 webui 显示层分别解码还原，中文标题在仪表盘可读显示（修复前写入的历史编码行也在显示时兼容解码）。选取回退标题时跳过 pi 的 skill 注入消息（`<skill name="…">`），标签永远是用户自己的第一条消息，而非注入的标签。
 - 仅成功且上报了 usage 的请求计入 token 统计；failover/重试的中间行与升级前的旧日志行（无 token 字段）优雅跳过，升级不会清空或污染既有历史。
 
 ---
