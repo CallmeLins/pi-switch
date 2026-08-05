@@ -18,10 +18,23 @@ export function injectConversationId(
 }
 
 /**
+ * Percent-encode every code point above Latin-1 (> 255) so the value stays
+ * a valid ByteString for HTTP headers: undici's Headers rejects non-Latin1
+ * characters with a TypeError and the request dies before being sent.
+ * ASCII/Latin1 characters are kept as-is, so plain names round-trip
+ * unchanged. The `u` flag matches astral characters (surrogate pairs) as
+ * single code points so `encodeURIComponent` never sees an isolated surrogate.
+ */
+function encodeHeaderValue(value: string): string {
+  return value.replace(/[^\x00-\xff]/gu, (ch) => encodeURIComponent(ch));
+}
+
+/**
  * Pure injection logic for the conversation display name: return a new
  * headers object with `x-conversation-name` set to the current session
- * name, overriding any existing value. Blank names are not injected. The
- * caller's headers object is never mutated.
+ * name, overriding any existing value. Non-Latin1 characters are
+ * percent-encoded so the header value stays HTTP-safe. Blank names are not
+ * injected. The caller's headers object is never mutated.
  */
 export function injectConversationName(
   headers: RequestHeaders,
@@ -30,7 +43,7 @@ export function injectConversationName(
   if (sessionName == null || sessionName.trim() === "") {
     return { ...headers };
   }
-  return { ...headers, "x-conversation-name": sessionName };
+  return { ...headers, "x-conversation-name": encodeHeaderValue(sessionName) };
 }
 
 export type ProviderHeadersEvent = { headers: RequestHeaders };
