@@ -72,8 +72,15 @@ export type SessionIdProvider = {
  */
 export type SessionEntryContent = string | Array<{ type?: string; text?: string }>;
 export type SessionEntry = {
+  type?: string;
+  // Legacy flat shape (extension tests / early callers).
   role?: string;
   content?: SessionEntryContent;
+  // Real pi SessionManager entry shape: role/content live under `message`.
+  message?: {
+    role?: string;
+    content?: SessionEntryContent;
+  };
 };
 
 export const TITLE_MAX_LEN = 60;
@@ -104,12 +111,20 @@ function textOf(content: SessionEntryContent | undefined): string {
  * there is none. The returned text is trimmed but not sanitized/truncated —
  * callers decide how to present it.
  */
+/**
+ * Text of the first non-empty user message in a session, or `undefined` when
+ * there is none. The returned text is trimmed but not sanitized/truncated —
+ * callers decide how to present it. Handles both the legacy flat entry
+ * (`role`/`content` at the top level) and the real pi SessionManager entry
+ * shape (`role`/`content` nested under `message`).
+ */
 export function firstUserMessageText(entries: SessionEntry[]): string | undefined {
   for (const entry of entries) {
-    if (entry?.role !== "user") {
+    const role = entry.message?.role ?? entry.role;
+    if (role !== "user") {
       continue;
     }
-    const text = textOf(entry.content).trim();
+    const text = textOf(entry.message?.content ?? entry.content).trim();
     if (text) {
       return text;
     }
