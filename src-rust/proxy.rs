@@ -991,14 +991,24 @@ fn conversation_id_of(headers: &HeaderMap, body: &Value) -> Option<String> {
 
 /// The conversation display name from the `x-conversation-name` request
 /// header. Header-only source (no body fallback); empty values are ignored.
-/// Control characters (tab/newline — legal tab may survive HTTP parsing) are
-/// collapsed to spaces so the name stays clean in logs/exports. The name is a
-/// display attribute only — it never participates in conversation-boundary
-/// detection (ADR-0002).
+/// The client extension percent-encodes non-Latin1 characters (> 0xff) so the
+/// header stays HTTP-safe; this decodes them back for a readable name. Only a
+/// fully valid UTF-8 decode result is taken — a literal "%AB" that is not
+/// valid UTF-8 (e.g. "100%EF") keeps the raw value instead of being
+/// mis-decoded. Control characters (tab/newline — legal tab may survive HTTP
+/// parsing, and %0A decodes to a newline) are collapsed to spaces so the name
+/// stays clean in logs/exports. The name is a display attribute only — it
+/// never participates in conversation-boundary detection (ADR-0002).
 fn conversation_name_of(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-conversation-name")
         .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            percent_encoding::percent_decode_str(s)
+                .decode_utf8()
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| s.to_string())
+        })
         .map(|s| s.replace(['\r', '\n', '\t'], " "))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -2078,6 +2088,69 @@ mod tests {
             HeaderValue::from_bytes(b" \t ").unwrap(),
         );
         assert_eq!(super::conversation_name_of(&blank), None);
+    }
+
+    #[test]
+    fn conversation_name_percent_decodes_cjk_titles() {
+        // The client extension percent-encodes non-Latin1 characters
+        // (> 0xff) so the header stays HTTP-safe; the proxy must decode
+        // them back so the display name in logs/webui is the readable
+        // original, not %-escapes.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-name",
+            HeaderValue::from_static("%E7%BC%96%E6%8E%92%E8%AE%A1%E5%88%92"),
+        );
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("编排计划".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_name_percent_decode_keeps_ascii_and_mixed() {
+        // Spaces and ASCII pass through untouched; only the encoded CJK
+        // segment is decoded.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-name",
+            HeaderValue::from_static("tdd-implement %E7%9A%84%E8%A6%81%E6%B1%82"),
+        );
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("tdd-implement 的要求".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_name_percent_decode_ignores_invalid_utf8_escapes() {
+        // "100%EF" is a literal percent sequence, not an encoded name:
+        // decoding would yield invalid UTF-8 (0xEF alone), so the raw
+        // value is kept instead of being mis-decoded.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-name",
+            HeaderValue::from_static("100%EF"),
+        );
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("100%EF".to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_name_percent_decode_then_collapses_control_characters() {
+        // %0A decodes to a newline; the control-character pass must still
+        // clean it out of the final name.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-name",
+            HeaderValue::from_static("line1%0Aline2"),
+        );
+        assert_eq!(
+            super::conversation_name_of(&headers),
+            Some("line1 line2".to_string())
+        );
     }
 
     #[test]
