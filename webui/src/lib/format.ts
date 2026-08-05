@@ -90,6 +90,29 @@ export function isLowCacheRate(rate: string | undefined): boolean {
   return Number.isFinite(value) && value < 50;
 }
 
+/**
+ * Best-effort percent-decoding of a conversation display name. The client
+ * extension historically percent-encoded non-Latin1 characters in the
+ * `x-conversation-name` header, and rows written before the proxy-side
+ * decode landed still carry those %-escapes in requests.log. Decode only
+ * when the whole value is valid percent-encoded UTF-8 — a literal "%AB"
+ * that is not valid UTF-8 (e.g. "100%EF") keeps the raw value, matching
+ * the proxy's own decode semantics. Already-decoded names pass through
+ * unchanged (decode is a no-op for text without escapes).
+ */
+export function decodeConversationName(name: string): string {
+  if (!/%[0-9A-Fa-f]{2}/.test(name)) {
+    return name;
+  }
+  try {
+    const decoded = decodeURIComponent(name);
+    return decoded !== name ? decoded : name;
+  } catch {
+    return name;
+  }
+}
+
+
 export function shortConversationId(id: string): string {
   if (id.length <= SHORT_ID_MAX) {
     return id;

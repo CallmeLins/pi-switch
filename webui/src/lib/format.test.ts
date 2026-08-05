@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeConversationName,
   formatCost,
   formatRequestTime,
   formatRequestToken,
@@ -171,5 +172,32 @@ describe("formatCost", () => {
     expect(isLowCacheRate("100.0%")).toBe(false);
     expect(isLowCacheRate(undefined)).toBe(false);
     expect(isLowCacheRate("-")).toBe(false);
+  });
+});
+
+describe("decodeConversationName", () => {
+  it("passes plain ASCII names through unchanged", () => {
+    expect(decodeConversationName("my-chat")).toBe("my-chat");
+    expect(decodeConversationName("my chat")).toBe("my chat");
+  });
+
+  it("passes already-decoded CJK names through unchanged", () => {
+    expect(decodeConversationName("编排计划")).toBe("编排计划");
+  });
+
+  it("decodes percent-escaped CJK names from legacy log rows", () => {
+    expect(decodeConversationName("%E4%B8%BB%E8%A6%81%E6%B5%8B%E8%AF%95")).toBe("主要测试");
+    expect(decodeConversationName("%E7%BC%96%E6%8E%92%E8%AE%A1%E5%88%92")).toBe("编排计划");
+  });
+
+  it("decodes mixed ASCII + escaped segments", () => {
+    expect(decodeConversationName("tdd-implement %E7%9A%84%E8%A6%81%E6%B1%82")).toBe(
+      "tdd-implement 的要求",
+    );
+  });
+
+  it("keeps literal percent sequences that are not valid UTF-8", () => {
+    expect(decodeConversationName("100%EF")).toBe("100%EF");
+    expect(decodeConversationName("100%")).toBe("100%");
   });
 });
