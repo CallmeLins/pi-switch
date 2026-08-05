@@ -361,6 +361,10 @@ describe("StatsPanel", () => {
     expect(within(table).getByText("350.0K")).toBeInTheDocument();
     expect(within(table).getByText("13.5K")).toBeInTheDocument();
     expect(within(table).getAllByText("0").length).toBeGreaterThanOrEqual(4);
+    // The cache-rate column header must be labelled "Cache rate", not the
+    // success-rate label "Rate" used by the by-provider table.
+    expect(within(table).getByText("Cache rate")).toBeInTheDocument();
+    expect(within(table).queryByText("Rate")).not.toBeInTheDocument();
   });
 
   it("keeps rendering legacy data that lacks cache/reasoning fields", async () => {
@@ -435,6 +439,11 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect(await screen.findByText("Request details")).toBeInTheDocument();
+    const reqTable = screen.getByRole("table", { name: "Request details" });
+    // The cache-rate column header must be labelled "Cache rate", not the
+    // success-rate label "Rate" used by the by-provider table.
+    expect(within(reqTable).getByText("Cache rate")).toBeInTheDocument();
+    expect(within(reqTable).queryByText("Rate")).not.toBeInTheDocument();
     expect(screen.getByText("deepseek-chat")).toBeInTheDocument();
     expect(screen.getByText("1.2K")).toBeInTheDocument();
     expect(screen.getByText("567")).toBeInTheDocument();
