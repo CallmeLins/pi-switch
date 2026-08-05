@@ -146,10 +146,51 @@ export type SessionInfo = {
 };
 
 /**
+ * The subagent-folding env surface this extension reads. Subagent processes
+ * are spawned by pi-subagents with `PI_SUBAGENT_DEPTH >= 1` and inherit the
+ * parent's `PI_PARENT_SESSION_ID`; the parent process advertises its session
+ * id through that variable so child requests fold into the same conversation.
+ */
+export type RequestEnv = {
+  PI_SUBAGENT_DEPTH?: string;
+  PI_PARENT_SESSION_ID?: string;
+};
+
+export type RequestInjection = {
+  conversationId?: string;
+  conversationName?: string;
+};
+
+/**
+ * Decide what to inject for the current process: a subagent (depth > 0)
+ * folds its requests into the parent conversation (parent id only, no name
+ * so the aggregate label stays the parent's); the parent process injects its
+ * own id and resolved name.
+ */
+export function resolveRequestInjection(
+  ownId: string | undefined,
+  ownName: string | undefined,
+  env: RequestEnv,
+): RequestInjection {
+  const depth = Number.parseInt(env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
+  if (depth > 0) {
+    return env.PI_PARENT_SESSION_ID
+      ? { conversationId: env.PI_PARENT_SESSION_ID }
+      : {};
+  }
+  return {
+    ...(ownId ? { conversationId: ownId } : {}),
+    ...(ownName ? { conversationName: ownName } : {}),
+  };
+}
+
+/**
  * Build the `before_provider_headers` handler: it merges the injected headers
  * back into the event's headers in place (pi's contract for this hook) while
  * the pure functions stay non-mutating. The session-info provider is injected
- * so the handler is testable without a live pi session.
+ * so the handler is testable without a live pi session. The parent process
+ * additionally advertises its session id via `PI_PARENT_SESSION_ID` so spawned
+ * subagents (which inherit the env) fold their requests into it.
  */
 export function makeBeforeProviderHeadersHandler(
   getSession: (ctx: SessionIdProvider) => SessionInfo,
@@ -157,8 +198,14 @@ export function makeBeforeProviderHeadersHandler(
   return (event, ctx) => {
     const { id, name } = getSession(ctx);
     const sessionName = resolveSessionName(name, ctx.sessionManager.getEntries());
-    Object.assign(event.headers, injectConversationId(event.headers, id));
-    Object.assign(event.headers, injectConversationName(event.headers, sessionName));
+    const env = process.env as RequestEnv;
+    const { conversationId, conversationName } = resolveRequestInjection(id, sessionName, env);
+    const isParent = (Number.parseInt(env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) === 0;
+    if (isParent && conversationId) {
+      process.env.PI_PARENT_SESSION_ID = conversationId;
+    }
+    Object.assign(event.headers, injectConversationId(event.headers, conversationId));
+    Object.assign(event.headers, injectConversationName(event.headers, conversationName));
   };
 }
 

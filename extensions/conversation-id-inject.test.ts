@@ -1,6 +1,12 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
-import { injectConversationId, injectConversationName, makeBeforeProviderHeadersHandler, firstUserMessageText, resolveSessionName, TITLE_MAX_LEN, type SessionIdProvider } from "./conversation-id-inject.ts";
+import { injectConversationId, injectConversationName, makeBeforeProviderHeadersHandler, firstUserMessageText, resolveSessionName, resolveRequestInjection, TITLE_MAX_LEN, type SessionIdProvider } from "./conversation-id-inject.ts";
+
+// Subagent folding relies on process.env; keep it clean between tests.
+afterEach(() => {
+  delete process.env.PI_SUBAGENT_DEPTH;
+  delete process.env.PI_PARENT_SESSION_ID;
+});
 
 test("injects a non-empty session id and overrides an existing header", () => {
   const headers = { "x-conversation-id": "stale", authorization: "Bearer x" };
@@ -233,4 +239,78 @@ test("returns undefined when nothing is available", () => {
   assert.equal(resolveSessionName(undefined, []), undefined);
   assert.equal(resolveSessionName(undefined, [{ role: "user", content: "   " }]), undefined);
   assert.equal(resolveSessionName(undefined, [{ role: "user", content: "\n\t" }]), undefined);
+});
+
+// ─── subagent 归并到父会话（PI_SUBAGENT_DEPTH / PI_PARENT_SESSION_ID）───
+
+test("resolveRequestInjection folds subagent requests into the parent conversation", () => {
+  const injection = resolveRequestInjection("child-id", "child title", {
+    PI_SUBAGENT_DEPTH: "1",
+    PI_PARENT_SESSION_ID: "parent-id",
+  });
+  assert.deepEqual(injection, { conversationId: "parent-id" });
+});
+
+test("resolveRequestInjection skips injection for a subagent without a parent id", () => {
+  const injection = resolveRequestInjection("child-id", "child title", {
+    PI_SUBAGENT_DEPTH: "2",
+  });
+  assert.deepEqual(injection, {});
+});
+
+test("resolveRequestInjection uses the own id and name for the parent process", () => {
+  const injection = resolveRequestInjection("own-id", "my title", {});
+  assert.deepEqual(injection, { conversationId: "own-id", conversationName: "my title" });
+});
+
+test("handler folds subagent requests into the parent conversation and skips the name", () => {
+  process.env.PI_SUBAGENT_DEPTH = "1";
+  process.env.PI_PARENT_SESSION_ID = "parent-123";
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const event = { headers: { authorization: "Bearer x" } };
+  const ctx: SessionIdProvider = {
+    sessionManager: {
+      getSessionId: () => "child-uuid",
+      getSessionName: () => "child title",
+      getEntries: () => [],
+    },
+  };
+  handler(event, ctx);
+  assert.equal(event.headers["x-conversation-id"], "parent-123");
+  assert.equal(event.headers["x-conversation-name"], undefined);
+  assert.equal(event.headers.authorization, "Bearer x");
+});
+
+test("handler advertises the parent session id in the env for spawned subagents", () => {
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const event = { headers: { authorization: "Bearer x" } };
+  const ctx: SessionIdProvider = {
+    sessionManager: {
+      getSessionId: () => "own-uuid",
+      getSessionName: () => undefined,
+      getEntries: () => [],
+    },
+  };
+  handler(event, ctx);
+  assert.equal(process.env.PI_PARENT_SESSION_ID, "own-uuid");
+});
+
+test("handler refreshes the parent session id after the session changes (/new)", () => {
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const makeCtx = (id: string): SessionIdProvider => ({
+    sessionManager: { getSessionId: () => id, getSessionName: () => undefined, getEntries: () => [] },
+  });
+  handler({ headers: {} }, makeCtx("session-a"));
+  assert.equal(process.env.PI_PARENT_SESSION_ID, "session-a");
+  handler({ headers: {} }, makeCtx("session-b"));
+  assert.equal(process.env.PI_PARENT_SESSION_ID, "session-b");
 });
