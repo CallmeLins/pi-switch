@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![Version](https://img.shields.io/badge/version-20260804.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![Version](https://img.shields.io/badge/version-20260805.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -161,9 +161,10 @@ Every proxied request is appended to `~/.pi-switch/requests.log` as a JSON line.
 - **Stats API** (`GET /api/stats`) returns `totalTokens` with four dimensions — input / output / cached / reasoning (`total = input + output`, reasoning is a subset of output) — plus `cacheHitRate`, per-provider token columns, and `byConversation` — conversations sorted by most recent activity (top 20), with requests without an id merged into a single `unlabeled` group.
 - **Time window** — the WebUI stats page has a time-range picker: **Today** (local calendar day from 00:00), **Last 24h** and **Last 7d** (rolling windows), and **Custom** (start day 00:00 → end day 24:00, both dates required). The default is Today. The picker converts the window to `from`/`to` epoch-millis and calls `GET /api/stats?range=<today|last24h|last7d|custom>&from=<ms>&to=<ms>`; a bare request with no window parameters returns the full history.
 - **WebUI dashboard** — token totals render as five tiles (Input / Output / Cached / Reasoning / Total) with subset badges (`Cached ⊆ Input`, `Reasoning ⊆ Output`), and each conversation row adds Input / Output / Cached / Reasoning / cache hit rate / Total in a two-line layout when over-wide; missing or zero token values show `-`.
-- **Request details** — below the conversation card, the stats page lists every request in the current window, newest first, capped at the most recent 100: time, provider, model, status (with error for failures), and input / output / cached / reasoning / total tokens plus per-request cache hit rate. Rows without reported usage show `-`, never a misleading zero.
+- **Request details** — below the conversation card, the stats page lists every request in the current window, newest first, capped at the most recent 100: time, provider, model, status (with error for failures), and input / output / cached / reasoning / total tokens plus per-request cache hit rate. Rows without reported usage show `-`, never a misleading zero. **Cache rates below 50% render in red**, and clicking a conversation cell copies the full conversation id to the clipboard.
 - **Cache hit rate** = cached input tokens ÷ total input tokens (output tokens excluded). When no cache data exists it shows `-`, never a misleading `0%`.
-- **Conversation id** comes from the client: `x-conversation-id` header first, `x-opencode-session` second (sent by pi/open-code clients), `conversation_id` body field as fallback (ADR-0002).
+- **Conversation id** comes from the client: `x-conversation-id` header first, `x-opencode-session` second (sent by pi/open-code clients), `conversation_id` body field as fallback (ADR-0002). Requests from spawned subagents fold into the parent conversation id, so background agents don't fragment the stats.
+- **Conversation name** — the injected `x-conversation-name` is the session's explicit title, or falls back to the first user message as a readable label (non-Latin1 titles are percent-encoded so the header stays HTTP-safe).
 - Only successful requests with reported usage count towards token totals; failover/retry intermediate rows and old log lines without token fields are excluded gracefully, so upgrading never breaks or blanks existing history.
 
 ---
@@ -256,6 +257,11 @@ pi-switch/
 │   ├── presets.rs           # Built-in provider presets
 │   ├── proxy.rs             # Proxy server (gateway routing, failover, circuit breaker)
 │   ├── daemon.rs            # Daemon lifecycle
+│   ├── ccswitch.rs          # cc-switch provider import
+│   ├── database.rs          # SQLite persistence
+│   ├── package_ops.rs       # Package management
+│   ├── service.rs           # Shared service layer
+│   ├── web.rs               # WebUI HTTP server
 │   ├── stats.rs             # Request log aggregation + token usage stats
 │   ├── usage.rs             # Token usage extraction & SSE stream parsing
 │   ├── sync.rs              # Encrypted export/import

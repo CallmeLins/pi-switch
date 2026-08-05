@@ -2,7 +2,7 @@
 
 # pi-switch
 
-[![版本](https://img.shields.io/badge/version-20260804.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
+[![版本](https://img.shields.io/badge/version-20260805.0.0-blue.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![平台](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/heihei0299/pi-switch/releases)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 [![许可证](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -160,9 +160,10 @@ pi-switch import ccswitch --path /路径/cc-switch.db   # 自定义数据库路�
 - **统计接口**（`GET /api/stats`）：返回 `totalTokens` 四维度——输入/输出/缓存/推理（`total = 输入 + 输出`，推理是输出的子集）——以及 `cacheHitRate`、按供应商的 token 累计列与 `byConversation`（按最近活跃倒序、截取 Top 20；无标识请求合并为 `unlabeled` 一组）。
 - **时间窗口**：WebUI 统计页带时间范围选择器：**当天**（本地自然日 0 点起）、**24 小时以内**与**7 天以内**（滚动窗口）、**自定义**（起日 0 点至止日 24 点，起止日期均必填）。默认当天。选择器把窗口换算成 `from`/`to` 毫秒调用 `GET /api/stats?range=<today|last24h|last7d|custom>&from=<毫秒>&to=<毫秒>`；不带窗口参数的请求返回全量历史。
 - **WebUI 面板**：token 总量平铺 5 格（输入/输出/缓存/推理/合计）并带子集角标（`Cached ⊆ Input`、`Reasoning ⊆ Output`）；每个对话行补齐输入/输出/缓存/推理/缓存命中率/合计六项，超宽时两行平铺；token 缺失或 0 值显示 `-`。
-- **请求明细**：「By conversation」卡片下方列出当前窗口内每条请求，倒序截取最近 100 条：时间、provider、model、状态（失败带错误）以及输入/输出/缓存/推理/合计与单条缓存命中率。无使用量上报的行显示 `-`，绝不冒充 0 测量。
+- **请求明细**：「By conversation」卡片下方列出当前窗口内每条请求，倒序截取最近 100 条：时间、provider、model、状态（失败带错误）以及输入/输出/缓存/推理/合计与单条缓存命中率。无使用量上报的行显示 `-`，绝不冒充 0 测量。**缓存率低于 50% 标红**；点击会话单元格可复制完整会话 ID。
 - **缓存命中率** = 命中缓存的输入 token ÷ 总输入 token（输出 token 不参与）。无缓存数据时显示 `-`，绝不显示误导的 `0%`。
-- **对话标识**来自客户端：`x-conversation-id` 请求头优先，`x-opencode-session` 请求头次之（pi / open-code 客户端自带），body `conversation_id` 兜底（ADR-0002）。
+- **对话标识**来自客户端：`x-conversation-id` 请求头优先，`x-opencode-session` 请求头次之（pi / open-code 客户端自带），body `conversation_id` 兜底（ADR-0002）。子代理（subagent）发起的请求归并到父会话标识，后台代理不会打碎统计。
+- **对话名称**：注入的 `x-conversation-name` 为会话显式标题；无标题时回退到第一条用户消息作为可读名称（非 Latin-1 标题做百分号编码，保证 header 合法）。
 - 仅成功且上报了 usage 的请求计入 token 统计；failover/重试的中间行与升级前的旧日志行（无 token 字段）优雅跳过，升级不会清空或污染既有历史。
 
 ---
@@ -255,6 +256,11 @@ pi-switch/
 │   ├── presets.rs           # 内置 provider 预设
 │   ├── proxy.rs             # 代理服务器（网关路由、故障转移、断路器）
 │   ├── daemon.rs            # 守护进程管理
+│   ├── ccswitch.rs          # cc-switch provider 导入
+│   ├── database.rs          # SQLite 持久化
+│   ├── package_ops.rs       # 包管理
+│   ├── service.rs           # 共享服务层
+│   ├── web.rs               # WebUI HTTP 服务
 │   ├── stats.rs             # 请求日志聚合 + token 统计
 │   ├── usage.rs             # Token 使用量提取 & SSE 流解析
 │   ├── sync.rs              # 加密导出/导入
