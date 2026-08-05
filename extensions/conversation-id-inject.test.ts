@@ -31,7 +31,7 @@ test("leaves other headers untouched and returns a new object", () => {
 test("injects a non-empty conversation name and overrides an existing header", () => {
   const headers = { "x-conversation-name": "stale", authorization: "Bearer x" };
   const result = injectConversationName(headers, "我的对话");
-  assert.equal(result["x-conversation-name"], "我的对话");
+  assert.equal(result["x-conversation-name"], "%E6%88%91%E7%9A%84%E5%AF%B9%E8%AF%9D");
   assert.equal(result.authorization, "Bearer x");
 });
 
@@ -48,10 +48,33 @@ test("name injection leaves other headers untouched and returns a new object", (
   assert.deepEqual(result, {
     authorization: "Bearer x",
     "x-conversation-id": "abc",
-    "x-conversation-name": "对话A",
+    "x-conversation-name": "%E5%AF%B9%E8%AF%9DA",
   });
   assert.notEqual(result, headers, "must not mutate the caller's object");
   assert.deepEqual(headers, { authorization: "Bearer x", "x-conversation-id": "abc" });
+});
+
+// ─── header 值合法化（Latin1 / ByteString 安全）───────────
+
+test("percent-encodes non-Latin1 characters in the injected name", () => {
+  const result = injectConversationName({}, "主分支内容合并到dev分支");
+  assert.equal(result["x-conversation-name"], "%E4%B8%BB%E5%88%86%E6%94%AF%E5%86%85%E5%AE%B9%E5%90%88%E5%B9%B6%E5%88%B0dev%E5%88%86%E6%94%AF");
+  assert.match(result["x-conversation-name"]!, /^[\x20-\x7e]*$/, "header value must stay ASCII");
+});
+
+test("keeps ASCII and Latin1 characters unchanged", () => {
+  assert.equal(injectConversationName({}, "hello world")["x-conversation-name"], "hello world");
+  assert.equal(injectConversationName({}, "my-chat")["x-conversation-name"], "my-chat");
+  // é = U+00E9 = 233 ≤ 255: legal in a ByteString header value
+  assert.equal(injectConversationName({}, "café")["x-conversation-name"], "café");
+});
+
+test("mixes plain and encoded characters", () => {
+  assert.equal(injectConversationName({}, "对话A")["x-conversation-name"], "%E5%AF%B9%E8%AF%9DA");
+});
+
+test("percent-encodes astral characters (surrogate pairs) safely", () => {
+  assert.equal(injectConversationName({}, "标题 😀 结束")["x-conversation-name"], "%E6%A0%87%E9%A2%98 %F0%9F%98%80 %E7%BB%93%E6%9D%9F");
 });
 
 test("handler wires the session id provider into the headers", () => {
@@ -64,7 +87,6 @@ test("handler wires the session id provider into the headers", () => {
   assert.equal(event.headers["x-conversation-id"], "uuid-9");
   assert.equal(event.headers.authorization, "Bearer x");
 });
-
 test("handler injects both conversation id and name from the provider", () => {
   const handler = makeBeforeProviderHeadersHandler((ctx) => ({
     id: ctx.sessionManager.getSessionId(),
@@ -80,7 +102,7 @@ test("handler injects both conversation id and name from the provider", () => {
   };
   handler(event, ctx);
   assert.equal(event.headers["x-conversation-id"], "uuid-9");
-  assert.equal(event.headers["x-conversation-name"], "对话A");
+  assert.equal(event.headers["x-conversation-name"], "%E5%AF%B9%E8%AF%9DA");
   assert.equal(event.headers.authorization, "Bearer x");
 });
 
@@ -109,7 +131,7 @@ test("handler falls back to the first user message when no explicit name", () =>
   };
   handler(event, ctx);
   assert.equal(event.headers["x-conversation-id"], "uuid-9");
-  assert.equal(event.headers["x-conversation-name"], "帮我修复 cost 计算");
+  assert.equal(event.headers["x-conversation-name"], "%E5%B8%AE%E6%88%91%E4%BF%AE%E5%A4%8D cost %E8%AE%A1%E7%AE%97");
   assert.equal(event.headers.authorization, "Bearer x");
 });
 
