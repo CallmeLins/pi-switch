@@ -349,6 +349,10 @@ fn cmp_ts_desc(a: &Option<String>, b: &Option<String>) -> std::cmp::Ordering {
 /// milliseconds, inclusive of `from`, exclusive of `to`; entries outside
 /// (or with missing/unparseable timestamps) are excluded from every
 /// aggregate. `None` keeps full-history behaviour.
+// The aggregation core is `aggregate_paged`; this convenience wrapper is used
+// by the test suite (and kept as the default-view entry point), so allow it
+// as dead code in non-test builds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn aggregate(
     entries: &[RequestLogEntry],
     circuit: &HashMap<String, CircuitBreakerEntry>,
@@ -713,7 +717,7 @@ pub fn aggregate_conversations_paged(
             conv.name = Some(name.to_string());
         }
         if let Some(ts) = entry.ts.as_deref() {
-            if conv.last_active.as_deref().map_or(true, |last| ts > last) {
+            if conv.last_active.as_deref().is_none_or(|last| ts > last) {
                 conv.last_active = Some(ts.to_string());
             }
         }
@@ -1110,8 +1114,8 @@ mod tests {
         let header = csv.lines().next().unwrap();
         assert!(header.ends_with("costTotal"), "header has costTotal column");
         let rows: Vec<&str> = csv.lines().skip(1).collect();
-        assert_eq!(rows[0].split(',').last(), Some("0.25"), "known cost exported");
-        assert_eq!(rows[1].split(',').last(), Some(""), "legacy row exports empty cost");
+        assert_eq!(rows[0].split(',').next_back(), Some("0.25"), "known cost exported");
+        assert_eq!(rows[1].split(',').next_back(), Some(""), "legacy row exports empty cost");
     }
 
     #[test]
