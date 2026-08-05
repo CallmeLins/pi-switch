@@ -449,7 +449,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                       <th className="pb-1 pr-2 text-right">{t("Output")}</th>
                       <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
                       <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
-                      <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                      <th className="pb-1 pr-2 text-right">{t("Cache rate")}</th>
                       <th className="pb-1 text-right">{t("Total")}</th>
                       <th className="pb-1 text-right">{t("Cost")}</th>
                     </tr>
@@ -574,7 +574,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                             <th className="pb-1 pr-2 text-right">{t("Output")}</th>
                             <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
                             <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
-                            <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                            <th className="pb-1 pr-2 text-right">{t("Cache rate")}</th>
                             <th className="pb-1 pr-2 text-right">{t("Total")}</th>
                             <th className="pb-1 text-right">{t("Cost")}</th>
                           </tr>
@@ -771,7 +771,7 @@ function RequestRow({ r, i }: { r: RecentRequest; i: number }) {
     ["Output", formatRequestToken(r.completionTokens)],
     ["Cached", formatRequestToken(r.cachedTokens)],
     ["Reasoning", formatRequestToken(r.reasoningTokens)],
-    ["Rate", r.cacheRate ?? "-"],
+    ["Cache rate", r.cacheRate ?? "-"],
     ["Total", formatRequestToken(r.totalTokens)],
     ["Cost", formatCost(r.cost)],
   ] as const;
@@ -873,7 +873,7 @@ function ExpandedConversationRequests({ conv }: { conv: ConversationStats }) {
                   <th className="pb-1 pr-2 text-right">{t("Output")}</th>
                   <th className="pb-1 pr-2 text-right">{t("Cached")}</th>
                   <th className="pb-1 pr-2 text-right">{t("Reasoning")}</th>
-                  <th className="pb-1 pr-2 text-right">{t("Rate")}</th>
+                  <th className="pb-1 pr-2 text-right">{t("Cache rate")}</th>
                   <th className="pb-1 text-right">{t("Total")}</th>
                   <th className="pb-1 text-right">{t("Cost")}</th>
                 </tr>
