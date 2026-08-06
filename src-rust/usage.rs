@@ -74,7 +74,7 @@ pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
 /// Position of the next SSE frame separator in `buf`, with its length.
 /// Accepts both `\n\n` (LF) and `\r\n\r\n` (CRLF) framing; CRLF wins when
 /// both are present so mixed streams still split on complete frames.
-fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
+pub(crate) fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
     if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
         return Some((pos, 4));
     }

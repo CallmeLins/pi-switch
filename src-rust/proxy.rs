@@ -541,6 +541,7 @@ async fn handle_chat_completions(
         "chat/completions",
         &headers,
         conversation_id.as_deref(),
+        true,
     )
     .await;
 
@@ -874,25 +875,10 @@ fn chat_response_to_responses(
         }
     }
 
-    let usage = chat.get("usage").cloned().map(|u| {
-        json!({
-            "input_tokens": u.get("prompt_tokens").unwrap_or(&Value::Null),
-            "output_tokens": u.get("completion_tokens").unwrap_or(&Value::Null),
-            "total_tokens": u.get("total_tokens").unwrap_or(&Value::Null),
-            "input_tokens_details": {
-                "cached_tokens": u
-                    .get("prompt_tokens_details")
-                    .and_then(|d| d.get("cached_tokens"))
-                    .unwrap_or(&Value::Null),
-            },
-            "output_tokens_details": {
-                "reasoning_tokens": u
-                    .get("completion_tokens_details")
-                    .and_then(|d| d.get("reasoning_tokens"))
-                    .unwrap_or(&Value::Null),
-            },
-        })
-    });
+    let usage = chat
+        .get("usage")
+        .cloned()
+        .map(|u| chat_usage_to_responses_usage(&u));
 
     let mut resp = json!({
         "object": "response",
@@ -911,6 +897,507 @@ fn chat_response_to_responses(
     resp["status"] = json!("completed");
 
     Ok(resp)
+}
+
+/// Map a Chat Completions `usage` object to the Responses API usage shape.
+fn chat_usage_to_responses_usage(usage: &Value) -> Value {
+    json!({
+        "input_tokens": usage.get("prompt_tokens").unwrap_or(&Value::Null),
+        "output_tokens": usage.get("completion_tokens").unwrap_or(&Value::Null),
+        "total_tokens": usage.get("total_tokens").unwrap_or(&Value::Null),
+        "input_tokens_details": {
+            "cached_tokens": usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .unwrap_or(&Value::Null),
+        },
+        "output_tokens_details": {
+            "reasoning_tokens": usage
+                .get("completion_tokens_details")
+                .and_then(|d| d.get("reasoning_tokens"))
+                .unwrap_or(&Value::Null),
+        },
+    })
+}
+
+struct ChatToolCallState {
+    index: usize,
+    call_id: String,
+    name: String,
+    arguments: String,
+    item_id: String,
+    output_index: usize,
+}
+
+/// Streaming state machine converting Chat Completions SSE frames into
+/// OpenAI Responses SSE events. Feed one parsed `data:` payload per
+/// `push_frame`; collected events are returned in emit order. `finish`
+/// emits the closing done/completed events once the stream ends.
+struct ChatSseToResponses {
+    response_id: String,
+    model: String,
+    created_at: u64,
+    /// Next output index to assign.
+    output_index: usize,
+    /// Whether response.created has been emitted.
+    response_started: bool,
+    /// Whether the assistant message item (and its content part) is open.
+    message_open: bool,
+    message_item_id: String,
+    message_output_index: usize,
+    text: String,
+    tool_calls: Vec<ChatToolCallState>,
+    usage: Option<Value>,
+}
+
+impl ChatSseToResponses {
+    fn new(model: &str) -> Self {
+        Self {
+            response_id: format!("resp_{}", Utc::now().timestamp()),
+            model: model.to_string(),
+            created_at: Utc::now().timestamp() as u64,
+            output_index: 0,
+            response_started: false,
+            message_open: false,
+            message_item_id: String::new(),
+            message_output_index: 0,
+            text: String::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+        }
+    }
+
+    fn push_frame(
+        &mut self,
+        data: &Value,
+    ) -> std::result::Result<Vec<Value>, ResponsesConversionError> {
+        let mut events = Vec::new();
+        let choices = data.get("choices").and_then(|v| v.as_array());
+
+        // Usage-only tail frame: `{"choices": [], "usage": {...}}`.
+        if let Some(usage) = data.get("usage") {
+            self.usage = Some(chat_usage_to_responses_usage(usage));
+        }
+        let Some(choices) = choices else {
+            return Ok(events);
+        };
+        if choices.is_empty() {
+            return Ok(events);
+        }
+        let choice = &choices[0];
+        let Some(delta) = choice.get("delta") else {
+            return Ok(events);
+        };
+        if !delta.is_object() {
+            return Err(ResponsesConversionError::Invalid(
+                "unexpected chat stream delta".to_string(),
+            ));
+        }
+
+        if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+            if !content.is_empty() {
+                if !self.response_started {
+                    self.response_started = true;
+                    events.push(self.emit_created());
+                }
+                if !self.message_open {
+                    self.message_open = true;
+                    events.push(self.emit_message_added());
+                    events.push(self.emit_content_part_added());
+                }
+                self.text.push_str(content);
+                events.push(self.emit_text_delta(content));
+            }
+        }
+
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            if !self.response_started {
+                self.response_started = true;
+                events.push(self.emit_created());
+            }
+            for call in tool_calls {
+                let index = call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let slot = match self.tool_calls.iter_mut().find(|t| t.index == index) {
+                    Some(slot) => slot,
+                    None => {
+                        let slot = ChatToolCallState {
+                            index,
+                            call_id: call
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            name: call
+                                .get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            arguments: String::new(),
+                            item_id: format!("fc_{}_{}", self.output_index, index),
+                            output_index: self.output_index,
+                        };
+                        self.output_index += 1;
+                        events.push(self.emit_function_call_added(&slot));
+                        self.tool_calls.push(slot);
+                        self.tool_calls.last_mut().unwrap()
+                    }
+                };
+                if let Some(arguments) = call
+                    .get("function")
+                    .and_then(|f| f.get("arguments"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !arguments.is_empty() {
+                        slot.arguments.push_str(arguments);
+                        events.push(Self::emit_arguments_delta(slot, arguments));
+                    }
+                }
+            }
+        }
+
+        Ok(events)
+    }
+
+    fn finish(&mut self) -> Vec<Value> {
+        let mut events = Vec::new();
+        if self.message_open && !self.text.is_empty() {
+            events.push(json!({
+                "type": "response.output_text.done",
+                "item_id": self.message_item_id,
+                "output_index": self.message_output_index,
+                "content_index": 0,
+                "text": self.text,
+            }));
+            events.push(json!({
+                "type": "response.content_part.done",
+                "item_id": self.message_item_id,
+                "output_index": self.message_output_index,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": self.text,
+                    "annotations": [],
+                },
+            }));
+            events.push(json!({
+                "type": "response.output_item.done",
+                "output_index": self.message_output_index,
+                "item": self.message_item("completed"),
+            }));
+        }
+        for call in &self.tool_calls {
+            events.push(json!({
+                "type": "response.function_call_arguments.done",
+                "item_id": call.item_id,
+                "output_index": call.output_index,
+                "arguments": call.arguments,
+            }));
+            events.push(json!({
+                "type": "response.output_item.done",
+                "output_index": call.output_index,
+                "item": Self::tool_call_item(call, "completed"),
+            }));
+        }
+
+        let mut response = json!({
+            "id": self.response_id,
+            "object": "response",
+            "created_at": self.created_at as f64,
+            "status": "completed",
+            "model": self.model,
+            "output": self.completed_output(),
+        });
+        if let Some(usage) = &self.usage {
+            response["usage"] = usage.clone();
+        }
+        events.push(json!({
+            "type": "response.completed",
+            "response": response,
+        }));
+        events
+    }
+
+    /// Structured failure event emitted when a chat frame cannot be converted,
+    /// so the client never sees a fake successful completion.
+    fn failed_event(&self, message: &str) -> Value {
+        json!({
+            "type": "response.failed",
+            "response": {
+                "id": self.response_id,
+                "object": "response",
+                "created_at": self.created_at as f64,
+                "status": "failed",
+                "model": self.model,
+                "error": {
+                    "message": message,
+                    "type": "conversion_error",
+                },
+            },
+        })
+    }
+
+    fn completed_output(&self) -> Vec<Value> {
+        let mut output = Vec::new();
+        if self.message_open && !self.text.is_empty() {
+            output.push(self.message_item("completed"));
+        }
+        for call in &self.tool_calls {
+            output.push(Self::tool_call_item(call, "completed"));
+        }
+        output
+    }
+
+    fn message_item(&self, status: &str) -> Value {
+        json!({
+            "id": self.message_item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": status,
+            "content": [{
+                "type": "output_text",
+                "text": self.text,
+                "annotations": [],
+            }],
+        })
+    }
+
+    fn tool_call_item(call: &ChatToolCallState, status: &str) -> Value {
+        json!({
+            "id": call.item_id,
+            "type": "function_call",
+            "call_id": call.call_id,
+            "name": call.name,
+            "arguments": call.arguments,
+            "status": status,
+        })
+    }
+
+    fn emit_created(&self) -> Value {
+        json!({
+            "type": "response.created",
+            "response": {
+                "id": self.response_id,
+                "object": "response",
+                "created_at": self.created_at as f64,
+                "status": "in_progress",
+                "model": self.model,
+                "output": [],
+            },
+        })
+    }
+
+    fn emit_message_added(&mut self) -> Value {
+        self.message_item_id = format!("msg_{}", self.output_index);
+        self.message_output_index = self.output_index;
+        self.output_index += 1;
+        json!({
+            "type": "response.output_item.added",
+            "output_index": self.message_output_index,
+            "item": {
+                "id": self.message_item_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [],
+            },
+        })
+    }
+
+    fn emit_content_part_added(&self) -> Value {
+        json!({
+            "type": "response.content_part.added",
+            "item_id": self.message_item_id,
+            "output_index": self.message_output_index,
+            "content_index": 0,
+            "part": { "type": "output_text", "text": "", "annotations": [] },
+        })
+    }
+
+    fn emit_text_delta(&self, delta: &str) -> Value {
+        json!({
+            "type": "response.output_text.delta",
+            "item_id": self.message_item_id,
+            "output_index": self.message_output_index,
+            "content_index": 0,
+            "delta": delta,
+        })
+    }
+
+    fn emit_function_call_added(&self, call: &ChatToolCallState) -> Value {
+        json!({
+            "type": "response.output_item.added",
+            "output_index": call.output_index,
+            "item": {
+                "id": call.item_id,
+                "type": "function_call",
+                "call_id": call.call_id,
+                "name": call.name,
+                "arguments": "",
+                "status": "in_progress",
+            },
+        })
+    }
+
+    fn emit_arguments_delta(call: &ChatToolCallState, delta: &str) -> Value {
+        json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": call.item_id,
+            "output_index": call.output_index,
+            "delta": delta,
+        })
+    }
+}
+
+/// Extract the `data:` payload of one SSE frame.
+fn frame_data(frame: &[u8]) -> Option<&str> {
+    for line in frame.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if let Some(data) = line.strip_prefix(b"data:") {
+            let data = std::str::from_utf8(data).ok()?.trim();
+            if !data.is_empty() {
+                return Some(data);
+            }
+        }
+    }
+    None
+}
+
+/// Serialize one Responses event as an SSE frame (`event:` + `data:`).
+fn encode_sse_event(event: &Value) -> Vec<u8> {
+    let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let json = serde_json::to_string(event).unwrap_or_default();
+    format!("event: {event_type}\ndata: {json}\n\n").into_bytes()
+}
+
+/// Whether the profile should serve Responses streams through the
+/// Chat→Responses SSE conversion path.
+fn is_chat_completions_convert(profile: &ProviderProfile) -> bool {
+    profile.api == "openai-completions"
+        && matches!(
+            profile.responses_mode,
+            crate::config::ResponsesMode::Auto | crate::config::ResponsesMode::Convert
+        )
+}
+
+/// Wrap an upstream Chat Completions SSE stream, converting each frame into
+/// OpenAI Responses SSE events as it flows. Usage is parsed on the side for
+/// the request log; the log line is written when the stream ends.
+struct ResponsesStreamTransform<S> {
+    inner: S,
+    converter: ChatSseToResponses,
+    buffer: Vec<u8>,
+    pending: std::collections::VecDeque<axum::body::Bytes>,
+    usage: Option<crate::usage::UsageSummary>,
+    fields: Option<StreamLogFields>,
+    finished: bool,
+    /// Set when a chat frame cannot be converted; the stream is then closed
+    /// with a structured `response.failed` event instead of a fake success.
+    conversion_error: Option<String>,
+}
+
+impl<S, E> futures_util::Stream for ResponsesStreamTransform<S>
+where
+    S: futures_util::Stream<Item = std::result::Result<axum::body::Bytes, E>> + Unpin,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Item = std::result::Result<axum::body::Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // Loop so a chunk that yields no output does not return Pending without
+        // a registered waker (which would stall the stream after the last frame).
+        loop {
+            if let Some(bytes) = self.pending.pop_front() {
+                return std::task::Poll::Ready(Some(Ok(bytes)));
+            }
+            if self.finished {
+                return std::task::Poll::Ready(None);
+            }
+            match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+                std::task::Poll::Ready(Some(Ok(chunk))) => {
+                    self.buffer.extend_from_slice(&chunk);
+                    self.drain_frames();
+                }
+                std::task::Poll::Ready(Some(Err(e))) => {
+                    self.flush_log(Some(e.to_string()));
+                    self.finished = true;
+                    return std::task::Poll::Ready(Some(Err(Box::new(e))));
+                }
+                std::task::Poll::Ready(None) => {
+                    if let Some(message) = self.conversion_error.take() {
+                        let event = self.converter.failed_event(&message);
+                        self.pending
+                            .push_back(axum::body::Bytes::from(encode_sse_event(&event)));
+                        self.flush_log(Some(message));
+                    } else {
+                        for event in self.converter.finish() {
+                            self.pending
+                                .push_back(axum::body::Bytes::from(encode_sse_event(&event)));
+                        }
+                        self.flush_log(None);
+                    }
+                    self.finished = true;
+                }
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<S> ResponsesStreamTransform<S> {
+    fn new(inner: S, converter: ChatSseToResponses, fields: StreamLogFields) -> Self {
+        Self {
+            inner,
+            converter,
+            buffer: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+            usage: None,
+            fields: Some(fields),
+            finished: false,
+            conversion_error: None,
+        }
+    }
+
+    fn drain_frames(&mut self) {
+        while let Some((end, separator_len)) = crate::usage::frame_end(&self.buffer) {
+            let frame: Vec<u8> = self.buffer[..end].to_vec();
+            self.buffer.drain(..end + separator_len);
+            let Some(data) = frame_data(&frame) else {
+                continue;
+            };
+            if data == "[DONE]" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if let Some(usage) = crate::usage::extract_usage(&value) {
+                self.usage = Some(usage);
+            }
+            match self.converter.push_frame(&value) {
+                Ok(events) => {
+                    for event in events {
+                        self.pending
+                            .push_back(axum::body::Bytes::from(encode_sse_event(&event)));
+                    }
+                }
+                Err(error) => {
+                    if self.conversion_error.is_none() {
+                        self.conversion_error = Some(error.message().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    fn flush_log(&mut self, error: Option<String>) {
+        if let Some(fields) = self.fields.take() {
+            append_log_line(&stream_log_entry(fields, self.usage.as_ref(), error));
+        }
+    }
 }
 
 async fn handle_responses(
@@ -941,17 +1428,8 @@ async fn handle_responses_with_config(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let (candidates, real_model) = resolve_route(config, requested_model);
-        let native_candidates: Vec<String> = candidates
-            .iter()
-            .filter(|name| {
-                config
-                    .profiles
-                    .get(*name)
-                    .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
-                    .is_some_and(|profile| is_native_responses_passthrough(&profile))
-            })
-            .cloned()
-            .collect();
+        let native_candidates =
+            filter_profiles(config, &candidates, is_native_responses_passthrough);
         if !native_candidates.is_empty() {
             let conversation_id = conversation_id_of(&headers, &body_value);
             let result = forward_responses_passthrough(
@@ -997,6 +1475,7 @@ async fn handle_responses_with_config(
             "chat/completions",
             &headers,
             conversation_id.as_deref(),
+            true,
         )
         .await;
         match result {
@@ -1038,44 +1517,123 @@ async fn handle_responses_with_config(
                 .into_response(),
         }
     } else {
-        // Streaming: route to the first openai-responses upstream and stream through.
-        // For openai-completions upstreams, Chat→Responses SSE conversion is possible
-        // but complex (different event names); skip for now.
+        // Streaming: prefer a native Responses passthrough; otherwise convert
+        // the request to Chat Completions and translate the upstream SSE into
+        // Responses events.
         let requested_model = body_value
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let (candidates, real_model) = resolve_route(config, requested_model);
-        let candidates: Vec<String> = candidates
-            .into_iter()
-            .filter(|name| {
-                config
-                    .profiles
-                    .get(name)
-                    .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
-                    .is_some_and(|profile| is_native_responses_passthrough(&profile))
-            })
-            .collect();
+        let conversation_id = conversation_id_of(&headers, &body_value);
 
-        if candidates.is_empty() {
-            return (StatusCode::NOT_IMPLEMENTED,
-                Json(json!({ "error": { "message": "Responses stream requires an openai-responses upstream (no Chat→Responses SSE conversion yet)", "type": "not_supported" } }))).into_response();
+        let native_candidates =
+            filter_profiles(config, &candidates, is_native_responses_passthrough);
+        if !native_candidates.is_empty() {
+            let result = forward_with_failover(
+                config,
+                &native_candidates,
+                &body_value,
+                &real_model,
+                "responses",
+                &headers,
+                conversation_id.as_deref(),
+                true,
+            )
+            .await;
+            return match result {
+                Ok(resp) => resp,
+                Err(e) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } })),
+                )
+                    .into_response(),
+            };
         }
 
-        let conversation_id = conversation_id_of(&headers, &body_value);
+        let convert_candidates = filter_profiles(config, &candidates, is_chat_completions_convert);
+        if convert_candidates.is_empty() {
+            return (StatusCode::NOT_IMPLEMENTED,
+                Json(json!({ "error": { "message": "Responses stream requires an openai-responses or openai-completions upstream", "type": "not_supported" } }))).into_response();
+        }
+
+        let chat_body = match responses_to_chat(&body_value) {
+            Ok(mut body) => {
+                body["stream"] = json!(true);
+                body
+            }
+            Err(error) => return conversion_error_response(&error),
+        };
 
         let result = forward_with_failover(
             config,
-            &candidates,
-            &body_value,
+            &convert_candidates,
+            &chat_body,
             &real_model,
-            "responses",
+            "chat/completions",
             &headers,
             conversation_id.as_deref(),
+            false,
         )
         .await;
         match result {
-            Ok(resp) => resp,
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                if !(200..300).contains(&status) {
+                    // Upstream errors pass through unchanged (never converted,
+                    // never rewritten into a fake success).
+                    let (parts, body) = resp.into_parts();
+                    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    return buffered_response(parts.status, &parts.headers, body_bytes.to_vec());
+                }
+                // A 2xx upstream that is not an SSE stream (e.g. a JSON error body)
+                // is passed through as-is: converting it would fabricate an empty
+                // completed response.
+                let is_sse = resp
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|t| t.contains("event-stream"));
+                if !is_sse {
+                    let (parts, body) = resp.into_parts();
+                    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    return buffered_response(parts.status, &parts.headers, body_bytes.to_vec());
+                }
+                let mut builder = Response::builder().status(200);
+                for (name, value) in forward_headers(resp.headers()) {
+                    builder = builder.header(name, value);
+                }
+                builder = builder.header("content-type", "text/event-stream");
+                let profile = convert_candidates.iter().find_map(|name| {
+                    let value = config.profiles.get(name)?;
+                    serde_json::from_value::<ProviderProfile>(value.clone()).ok()
+                });
+                let upstream_url = profile
+                    .as_ref()
+                    .map(|p| format!("{}/chat/completions", p.base_url.trim_end_matches('/')));
+                let mut fields = StreamLogFields::for_success(
+                    convert_candidates.first().map(String::as_str).unwrap_or(""),
+                    200,
+                    upstream_url.as_deref().unwrap_or(""),
+                    Some(&real_model),
+                    conversation_id.as_deref(),
+                    conversation_name_of(&headers).as_deref(),
+                );
+                fields.cost = profile
+                    .as_ref()
+                    .and_then(|p| lookup_model_cost(p, &real_model));
+                let converter = ChatSseToResponses::new(&real_model);
+                let transform = ResponsesStreamTransform::new(
+                    resp.into_body().into_data_stream(),
+                    converter,
+                    fields,
+                );
+                builder.body(Body::from_stream(transform)).unwrap()
+            }
             Err(e) => (
                 StatusCode::BAD_GATEWAY,
                 Json(
@@ -1430,6 +1988,25 @@ fn stream_log_entry(
     build_log_entry(&fields, usage)
 }
 
+/// Profiles in `names` whose declared mode keeps them in the given branch.
+fn filter_profiles(
+    config: &crate::config::PiSwitchConfig,
+    names: &[String],
+    keep: fn(&ProviderProfile) -> bool,
+) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            config
+                .profiles
+                .get(*name)
+                .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
+                .is_some_and(|profile| keep(&profile))
+        })
+        .cloned()
+        .collect()
+}
+
 fn is_native_responses_passthrough(profile: &ProviderProfile) -> bool {
     profile.api == "openai-responses"
         && matches!(
@@ -1682,6 +2259,7 @@ fn conversion_error_response(error: &ResponsesConversionError) -> Response {
         .into_response()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn forward_with_failover(
     config: &crate::config::PiSwitchConfig,
     candidates: &[String],
@@ -1690,6 +2268,7 @@ async fn forward_with_failover(
     target_path: &str,
     headers: &HeaderMap,
     conversation_id: Option<&str>,
+    log_stream: bool,
 ) -> Result<Response> {
     let conversation_name = conversation_name_of(headers);
     let circuit_settings = &config.settings.proxy.circuit_breaker;
@@ -1900,18 +2479,24 @@ async fn forward_with_failover(
                     if status.is_success() {
                         record_success(name, is_half_open).await;
                         // Stream straight through (preserves Content-Type + enables SSE).
-                        // The response stream is teed into the usage parser; the log line
-                        // (with token usage + conversation id) is written when it ends.
-                        let mut fields = StreamLogFields::for_success(
-                            name,
-                            status.as_u16(),
-                            &url,
-                            body.get("model").and_then(|v| v.as_str()),
-                            conversation_id,
-                            conversation_name.as_deref(),
-                        );
-                        fields.cost = lookup_model_cost(&profile, real_model);
-                        return Ok(stream_response(r, Some(fields)));
+                        // Unless log_stream is disabled (caller re-streams the body and
+                        // writes its own log), the response stream is teed into the usage
+                        // parser and the log line is written when it ends.
+                        let log = if log_stream {
+                            let mut fields = StreamLogFields::for_success(
+                                name,
+                                status.as_u16(),
+                                &url,
+                                body.get("model").and_then(|v| v.as_str()),
+                                conversation_id,
+                                conversation_name.as_deref(),
+                            );
+                            fields.cost = lookup_model_cost(&profile, real_model);
+                            Some(fields)
+                        } else {
+                            None
+                        };
+                        return Ok(stream_response(r, log));
                     } else if should_retry(status.as_u16()) {
                         let status_code = status.as_u16();
                         record_failure(
@@ -2614,7 +3199,7 @@ mod tests {
             "/v1/responses",
             post(move |body: String| {
                 let seen = seen_for_upstream.clone();
-                let upstream_sse = upstream_sse.clone();
+                let upstream_sse = upstream_sse;
                 async move {
                     *seen.lock().unwrap() = Some(body.clone());
                     axum::response::Response::builder()
@@ -2850,6 +3435,290 @@ mod tests {
 
         broken_server.abort();
         backup_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_conversion_emits_responses_events_end_to_end() {
+        let chat_sse = concat!(
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"content\":\"lo\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}},{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"get_time\",\"arguments\":\"\"}}]},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\\\"par\"}},{\"index\":1,\"function\":{\"arguments\":\"{\\\"tz\\\":\"}}]},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"is\\\"}\"}},{\"index\":1,\"function\":{\"arguments\":\"\\\"utc\\\"}\"}}]},\"finish_reason\":\"tool_calls\",\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-9\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":30,\"total_tokens\":130,\"prompt_tokens_details\":{\"cached_tokens\":40},\"completion_tokens_details\":{\"reasoning_tokens\":5}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: String| {
+                let chat_sse = chat_sse;
+                async move {
+                    let sent: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    assert_eq!(sent["stream"], true);
+                    assert_eq!(sent["model"], "model-a");
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(chat_sse))
+                        .unwrap()
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-id",
+            HeaderValue::from_static("conv-convert"),
+        );
+        let response = handle_responses_with_config(
+            &config,
+            headers,
+            serde_json::json!({ "model": "chat/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/event-stream",
+        );
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        let events: Vec<serde_json::Value> = text
+            .split("\n\n")
+            .filter_map(|frame| {
+                let data = frame.lines().find_map(|l| l.strip_prefix("data: "))?;
+                serde_json::from_str(data).ok()
+            })
+            .collect();
+        let types: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta",
+                "response.output_text.delta",
+                "response.output_item.added",
+                "response.output_item.added",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.delta",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.function_call_arguments.done",
+                "response.output_item.done",
+                "response.function_call_arguments.done",
+                "response.output_item.done",
+                "response.completed",
+            ],
+        );
+        let completed = events
+            .iter()
+            .find(|e| e["type"] == "response.completed")
+            .unwrap();
+        let output = completed["response"]["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[0]["content"][0]["text"], "Hello");
+        assert_eq!(output[1]["type"], "function_call");
+        assert_eq!(output[1]["call_id"], "call_1");
+        assert_eq!(output[1]["name"], "get_weather");
+        assert_eq!(output[1]["arguments"], "{\"city\":\"paris\"}");
+        assert_eq!(output[2]["call_id"], "call_2");
+        assert_eq!(output[2]["arguments"], "{\"tz\":\"utc\"}");
+        assert_eq!(completed["response"]["usage"]["input_tokens"], 100);
+        assert_eq!(completed["response"]["usage"]["output_tokens"], 30);
+        assert_eq!(
+            completed["response"]["usage"]["input_tokens_details"]["cached_tokens"],
+            40,
+        );
+        assert_eq!(
+            completed["response"]["usage"]["output_tokens_details"]["reasoning_tokens"],
+            5,
+        );
+
+        let log_dir = super::init_test_state_dir();
+        let log_text = std::fs::read_to_string(log_dir.join("requests.log")).expect("log written");
+        let entry = log_text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|value| value["conversationId"] == "conv-convert")
+            .expect("log entry for converted stream");
+        assert_eq!(entry["promptTokens"], 100);
+        assert_eq!(entry["completionTokens"], 30);
+        assert_eq!(entry["cachedTokens"], 40);
+        assert_eq!(entry["reasoningTokens"], 5);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_conversion_passes_upstream_errors_unchanged() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: String| async move {
+                assert!(!body.is_empty());
+                axum::response::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "error": { "message": "bad", "type": "invalid_request_error" } }).to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert_eq!(value["error"]["message"], "bad");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_conversion_fails_open_on_unmappable_frame() {
+        // Upstream 200 + SSE content-type, but the only frame cannot be mapped
+        // to a chat delta: the stream must end with a structured response.failed
+        // event, never a fake completed response.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: String| async move {
+                assert!(!body.is_empty());
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(
+                        "data: {\"choices\": [{\"delta\": 42}]}\n\ndata: [DONE]\n\n",
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("response.failed"), "body: {text}");
+        assert!(text.contains("conversion_error"), "body: {text}");
+        assert!(
+            !text.contains("response.completed"),
+            "must not fake completion: {text}"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_conversion_passes_non_sse_2xx_unchanged() {
+        // A 2xx upstream that returns JSON instead of SSE must be passed through
+        // untouched, not converted into an empty completed response.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: String| async move {
+                assert!(!body.is_empty());
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "error": { "message": "weird", "type": "upstream_odd" } })
+                            .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "upstream_odd");
+        server.abort();
     }
 
     #[tokio::test]
@@ -3716,13 +4585,7 @@ mod tests {
             "chunks pass through"
         );
 
-        let summary = slot
-            .lock()
-            .unwrap()
-            .take()
-            .map(|(s, _)| s)
-            .flatten()
-            .unwrap();
+        let summary = slot.lock().unwrap().take().and_then(|(s, _)| s).unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3755,13 +4618,7 @@ mod tests {
             .collect();
         assert_eq!(joined, stream, "chunks reassemble to the original stream");
 
-        let summary = slot
-            .lock()
-            .unwrap()
-            .take()
-            .map(|(s, _)| s)
-            .flatten()
-            .unwrap();
+        let summary = slot.lock().unwrap().take().and_then(|(s, _)| s).unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3834,13 +4691,7 @@ mod tests {
         assert_eq!(first, Bytes::from(stream));
         drop(tee);
 
-        let summary = slot
-            .lock()
-            .unwrap()
-            .take()
-            .map(|(s, _)| s)
-            .flatten()
-            .unwrap();
+        let summary = slot.lock().unwrap().take().and_then(|(s, _)| s).unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3878,6 +4729,135 @@ mod tests {
         assert_eq!(entry["ok"], false);
         assert_eq!(entry["error"], "upstream died");
         assert_eq!(entry["status"], 200);
+    }
+
+    #[test]
+    fn chat_sse_to_responses_emits_text_events_in_order() {
+        let mut converter = super::ChatSseToResponses::new("model-a");
+        let mut events = Vec::new();
+        for frame in [
+            serde_json::json!({ "choices": [{ "delta": { "role": "assistant", "content": "" } }] }),
+            serde_json::json!({ "choices": [{ "delta": { "content": "Hel" } }] }),
+            serde_json::json!({ "choices": [{ "delta": { "content": "lo" }, "finish_reason": "stop" }] }),
+        ] {
+            events.extend(converter.push_frame(&frame).unwrap());
+        }
+        events.extend(converter.finish());
+
+        let types: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            types,
+            [
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta",
+                "response.output_text.delta",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.completed",
+            ],
+        );
+        assert_eq!(events[0]["response"]["model"], "model-a");
+        assert_eq!(events[3]["delta"], "Hel");
+        assert_eq!(events[4]["delta"], "lo");
+        let completed = &events[8]["response"];
+        assert_eq!(completed["status"], "completed");
+        assert_eq!(completed["output"][0]["content"][0]["text"], "Hello");
+        assert!(completed.get("usage").is_none(), "no usage -> omitted");
+    }
+
+    #[test]
+    fn chat_sse_to_responses_tracks_parallel_tool_calls() {
+        let mut converter = super::ChatSseToResponses::new("model-a");
+        let mut events = Vec::new();
+        for frame in [
+            serde_json::json!({ "choices": [{ "delta": { "role": "assistant", "content": null } }] }),
+            serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "id": "call_1", "type": "function", "function": { "name": "get_weather", "arguments": "" } },
+                    { "index": 1, "id": "call_2", "type": "function", "function": { "name": "get_time", "arguments": "" } },
+                ] } }]
+            }),
+            serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "function": { "arguments": "{\"city\":\"par" } },
+                    { "index": 1, "function": { "arguments": "{\"tz\":" } },
+                ] } }]
+            }),
+            serde_json::json!({
+                "choices": [{ "delta": { "tool_calls": [
+                    { "index": 0, "function": { "arguments": "is\"}" } },
+                    { "index": 1, "function": { "arguments": "\"utc\"}" } },
+                ] }, "finish_reason": "tool_calls" }]
+            }),
+        ] {
+            events.extend(converter.push_frame(&frame).unwrap());
+        }
+        events.extend(converter.finish());
+
+        let function_call_added: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| {
+                e["type"] == "response.output_item.added" && e["item"]["type"] == "function_call"
+            })
+            .collect();
+        assert_eq!(function_call_added.len(), 2);
+        assert_eq!(function_call_added[0]["item"]["type"], "function_call");
+        assert_eq!(function_call_added[0]["item"]["call_id"], "call_1");
+        assert_eq!(function_call_added[0]["item"]["name"], "get_weather");
+        assert_eq!(function_call_added[1]["item"]["call_id"], "call_2");
+
+        let argument_deltas: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e["type"] == "response.function_call_arguments.delta")
+            .collect();
+        assert_eq!(argument_deltas.len(), 4);
+
+        let completed = events
+            .iter()
+            .find(|e| e["type"] == "response.completed")
+            .unwrap();
+        let output = completed["response"]["output"].as_array().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["type"], "function_call");
+        assert_eq!(output[0]["call_id"], "call_1");
+        assert_eq!(output[0]["name"], "get_weather");
+        assert_eq!(output[0]["arguments"], "{\"city\":\"paris\"}");
+        assert_eq!(output[1]["call_id"], "call_2");
+        assert_eq!(output[1]["arguments"], "{\"tz\":\"utc\"}");
+    }
+
+    #[test]
+    fn chat_sse_to_responses_maps_usage_and_omits_when_absent() {
+        let mut converter = super::ChatSseToResponses::new("model-a");
+        let mut events = Vec::new();
+        for frame in [
+            serde_json::json!({ "choices": [{ "delta": { "role": "assistant", "content": "hi" } }] }),
+            serde_json::json!({
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 30,
+                    "total_tokens": 130,
+                    "prompt_tokens_details": { "cached_tokens": 40 },
+                    "completion_tokens_details": { "reasoning_tokens": 5 }
+                },
+            }),
+        ] {
+            events.extend(converter.push_frame(&frame).unwrap());
+        }
+        events.extend(converter.finish());
+        let completed = events
+            .iter()
+            .find(|e| e["type"] == "response.completed")
+            .unwrap();
+        let usage = &completed["response"]["usage"];
+        assert_eq!(usage["input_tokens"], 100);
+        assert_eq!(usage["output_tokens"], 30);
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], 40);
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 5);
     }
     #[test]
     fn compute_cost_converts_cached_subset_at_cache_read_price() {
