@@ -1,0 +1,3 @@
+# Use provider-declared Responses passthrough with conversion fallback
+
+Responses API requests use a provider-level `responsesMode` with `auto`, `passthrough`, and `convert` values. Native `openai-responses` providers default to passthrough so Responses request bodies, response bodies, and streaming events retain their upstream semantics; `openai-completions` providers default to conversion through the existing Responses ↔ Chat Completions adapter. This preserves native Responses capabilities while allowing failover across heterogeneous providers without runtime capability probes or silent format degradation.
