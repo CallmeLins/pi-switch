@@ -1,4 +1,4 @@
-use crate::config::{config_dir, CircuitBreakerSettings, ProviderProfile};
+use crate::config::{CircuitBreakerSettings, ProviderProfile};
 use crate::error::{AppError, Result};
 use axum::{
     body::Body,
@@ -138,7 +138,7 @@ fn state_dir() -> PathBuf {
     }
     #[cfg(not(test))]
     {
-        config_dir()
+        crate::config::config_dir()
     }
 }
 
@@ -1052,8 +1052,8 @@ async fn handle_responses_with_config(
                 config
                     .profiles
                     .get(name)
-                    .and_then(|p| p.get("api").and_then(|v| v.as_str()))
-                    == Some("openai-responses")
+                    .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
+                    .is_some_and(|profile| is_native_responses_passthrough(&profile))
             })
             .collect();
 
@@ -1259,8 +1259,14 @@ fn conversation_name_of(headers: &HeaderMap) -> Option<String> {
 struct StreamTee<S> {
     inner: S,
     parser: crate::usage::SseUsageParser,
-    on_finish: Option<Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>>,
+    on_finish: Option<StreamFinish>,
+    /// Set when the upstream stream ends with an error; passed to `on_finish`
+    /// so an interrupted stream is logged as a failure, not a success.
+    error: Option<String>,
 }
+
+/// Callback run once when the stream ends: (parsed usage, upstream error).
+type StreamFinish = Box<dyn FnOnce(Option<crate::usage::UsageSummary>, Option<String>) + Send>;
 
 impl<S, E> futures_util::Stream for StreamTee<S>
 where
@@ -1279,6 +1285,7 @@ where
                 std::task::Poll::Ready(Some(Ok(bytes)))
             }
             std::task::Poll::Ready(Some(Err(e))) => {
+                self.error = Some(e.to_string());
                 self.flush_log();
                 std::task::Poll::Ready(Some(Err(Box::new(e))))
             }
@@ -1298,20 +1305,18 @@ impl<S> Drop for StreamTee<S> {
 }
 
 impl<S> StreamTee<S> {
-    fn new(
-        inner: S,
-        on_finish: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
-    ) -> Self {
+    fn new(inner: S, on_finish: StreamFinish) -> Self {
         Self {
             inner,
             parser: crate::usage::SseUsageParser::new(),
             on_finish: Some(on_finish),
+            error: None,
         }
     }
 
     fn flush_log(&mut self) {
         if let Some(cb) = self.on_finish.take() {
-            cb(self.parser.finish());
+            cb(self.parser.finish(), self.error.take());
         }
     }
 }
@@ -1394,9 +1399,8 @@ fn stream_response(r: reqwest::Response, log: Option<StreamLogFields>) -> Respon
         Some(fields) => {
             let tee = StreamTee::new(
                 r.bytes_stream(),
-                Box::new(move |usage| {
-                    let entry = build_log_entry(&fields, usage.as_ref());
-                    append_log_line(&entry);
+                Box::new(move |usage, error| {
+                    append_log_line(&stream_log_entry(fields, usage.as_ref(), error));
                 }),
             );
             Body::from_stream(tee)
@@ -1410,6 +1414,20 @@ fn stream_response(r: reqwest::Response, log: Option<StreamLogFields>) -> Respon
             .body(Body::empty())
             .unwrap()
     })
+}
+
+/// Build the log entry for a streamed passthrough response; an upstream error
+/// mid-stream marks the request as failed so truncated streams are diagnosable.
+fn stream_log_entry(
+    mut fields: StreamLogFields,
+    usage: Option<&crate::usage::UsageSummary>,
+    error: Option<String>,
+) -> Value {
+    if let Some(error) = error {
+        fields.ok = false;
+        fields.error = Some(error);
+    }
+    build_log_entry(&fields, usage)
 }
 
 fn is_native_responses_passthrough(profile: &ProviderProfile) -> bool {
@@ -2577,6 +2595,261 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_streaming_preserves_sse_and_records_usage() {
+        let upstream_sse = concat!(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":30,\"total_tokens\":130,\"input_tokens_details\":{\"cached_tokens\":40},\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let seen_body = Arc::new(Mutex::new(None::<String>));
+        let seen_for_upstream = seen_body.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/responses",
+            post(move |body: String| {
+                let seen = seen_for_upstream.clone();
+                let upstream_sse = upstream_sse.clone();
+                async move {
+                    *seen.lock().unwrap() = Some(body.clone());
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(upstream_sse))
+                        .unwrap()
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "auto",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "upstream-key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-id", HeaderValue::from_static("conv-stream"));
+        let response = handle_responses_with_config(
+            &config,
+            headers,
+            serde_json::json!({
+                "model": "native/model-a",
+                "input": "hi",
+                "stream": true
+            })
+            .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/event-stream",
+        );
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), upstream_sse);
+
+        // The stream:true request body must reach the upstream unchanged,
+        // apart from the namespaced model id rewrite.
+        let sent: serde_json::Value =
+            serde_json::from_str(seen_body.lock().unwrap().as_ref().unwrap()).unwrap();
+        assert_eq!(sent["stream"], true);
+        assert_eq!(sent["input"], "hi");
+        assert_eq!(sent["model"], "model-a");
+        let log_dir = super::init_test_state_dir();
+        let log_text = std::fs::read_to_string(log_dir.join("requests.log")).expect("log written");
+        let entry = log_text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|value| value["conversationId"] == "conv-stream")
+            .expect("log entry for stream");
+        assert_eq!(entry["ok"], true);
+        assert_eq!(entry["promptTokens"], 100);
+        assert_eq!(entry["completionTokens"], 30);
+        assert_eq!(entry["cachedTokens"], 40);
+        assert_eq!(entry["reasoningTokens"], 5);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_fails_over_before_headers() {
+        let ok_sse = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let fail_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let fail_address = fail_listener.local_addr().unwrap();
+        let fail_upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let fail_server = tokio::spawn(async move {
+            axum::serve(fail_listener, fail_upstream).await.unwrap();
+        });
+        let ok_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ok_address = ok_listener.local_addr().unwrap();
+        let ok_upstream = Router::new().route(
+            "/v1/responses",
+            post(move || async move {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(ok_sse))
+                    .unwrap()
+            }),
+        );
+        let ok_server = tokio::spawn(async move {
+            axum::serve(ok_listener, ok_upstream).await.unwrap();
+        });
+        // Two candidates sharing the model; the first returns 503 (retryable
+        // before any SSE headers reach the client), the second succeeds.
+        let config = cfg(
+            serde_json::json!({
+                "fail": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", fail_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "ok": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", ok_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["ok"],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "fail/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), ok_sse);
+        fail_server.abort();
+        ok_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_does_not_replay_after_stream_starts() {
+        use axum::body::Bytes;
+        use futures_util::stream;
+
+        // Primary candidate: sends part of the SSE stream (the response is
+        // already streaming to the client), then the stream ends. The proxy
+        // must not replay the request against the backup candidate once the
+        // upstream response has started.
+        let broken_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let broken_address = broken_listener.local_addr().unwrap();
+        let broken_upstream = Router::new().route(
+            "/v1/responses",
+            post(move |body: String| async move {
+                assert!(!body.is_empty());
+                let body_stream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(
+                    b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"part\"}\n\n",
+                ))]);
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from_stream(body_stream))
+                    .unwrap()
+            }),
+        );
+        let broken_server = tokio::spawn(async move {
+            axum::serve(broken_listener, broken_upstream).await.unwrap();
+        });
+
+        // Backup candidate that must never be contacted.
+        let seen = Arc::new(Mutex::new(0usize));
+        let seen_for_upstream = seen.clone();
+        let backup_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backup_address = backup_listener.local_addr().unwrap();
+        let backup_upstream = Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let seen = seen_for_upstream.clone();
+                async move {
+                    *seen.lock().unwrap() += 1;
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Body::from("should not be reached"))
+                        .unwrap()
+                }
+            }),
+        );
+        let backup_server = tokio::spawn(async move {
+            axum::serve(backup_listener, backup_upstream).await.unwrap();
+        });
+
+        let config = cfg(
+            serde_json::json!({
+                "broken": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", broken_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "backup": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", backup_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["backup"],
+        );
+
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "broken/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // Drain whatever the transport delivers; the mid-stream failure may
+        // surface as an Err or as a truncated/empty body depending on how the
+        // HTTP stack propagates it. The behaviour under test is that the proxy
+        // never replays the request against the backup candidate.
+        let _ = to_bytes(response.into_body(), 1024 * 1024).await;
+        assert_eq!(*seen.lock().unwrap(), 0, "backup must not be contacted");
+
+        let log_dir = super::init_test_state_dir();
+        let log_text = std::fs::read_to_string(log_dir.join("requests.log")).expect("log written");
+        let entry = log_text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|value| value["provider"] == "broken")
+            .expect("log entry for the broken stream");
+        assert_eq!(entry["ok"], true);
+
+        broken_server.abort();
+        backup_server.abort();
+    }
+
+    #[tokio::test]
     async fn native_responses_records_usage_and_conversation_in_log() {
         let log_dir = super::init_test_state_dir().clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3406,16 +3679,18 @@ mod tests {
     }
 
     type TeeSlot = (
-        std::sync::Arc<std::sync::Mutex<Option<Option<crate::usage::UsageSummary>>>>,
-        Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send>,
+        std::sync::Arc<
+            std::sync::Mutex<Option<(Option<crate::usage::UsageSummary>, Option<String>)>>,
+        >,
+        Box<dyn FnOnce(Option<crate::usage::UsageSummary>, Option<String>) + Send>,
     );
 
     fn tee_slot() -> TeeSlot {
         let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
         let handle = slot.clone();
-        let cb: Box<dyn FnOnce(Option<crate::usage::UsageSummary>) + Send> =
-            Box::new(move |summary| {
-                *handle.lock().unwrap() = Some(summary);
+        let cb: Box<dyn FnOnce(Option<crate::usage::UsageSummary>, Option<String>) + Send> =
+            Box::new(move |summary, error| {
+                *handle.lock().unwrap() = Some((summary, error));
             });
         (slot, cb)
     }
@@ -3446,7 +3721,13 @@ mod tests {
             "chunks pass through"
         );
 
-        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        let summary = slot
+            .lock()
+            .unwrap()
+            .take()
+            .map(|(s, _)| s)
+            .flatten()
+            .unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3479,7 +3760,13 @@ mod tests {
             .collect();
         assert_eq!(joined, stream, "chunks reassemble to the original stream");
 
-        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        let summary = slot
+            .lock()
+            .unwrap()
+            .take()
+            .map(|(s, _)| s)
+            .flatten()
+            .unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3506,7 +3793,7 @@ mod tests {
         tee.try_collect::<Vec<Bytes>>().await.unwrap();
         assert_eq!(
             *slot.lock().unwrap(),
-            Some(None),
+            Some((None, None)),
             "callback runs with no usage"
         );
     }
@@ -3529,7 +3816,7 @@ mod tests {
         assert!(err.to_string().contains("upstream died"));
         assert_eq!(
             *slot.lock().unwrap(),
-            Some(None),
+            Some((None, Some("upstream died".to_string()))),
             "error end still triggers the callback"
         );
     }
@@ -3552,7 +3839,13 @@ mod tests {
         assert_eq!(first, Bytes::from(stream));
         drop(tee);
 
-        let summary = slot.lock().unwrap().take().flatten().unwrap();
+        let summary = slot
+            .lock()
+            .unwrap()
+            .take()
+            .map(|(s, _)| s)
+            .flatten()
+            .unwrap();
         assert_eq!(
             (
                 summary.prompt_tokens,
@@ -3574,7 +3867,22 @@ mod tests {
         let tee = super::StreamTee::new(futures_util::stream::iter(chunks), cb);
 
         drop(tee);
-        assert_eq!(*slot.lock().unwrap(), Some(None));
+        assert_eq!(*slot.lock().unwrap(), Some((None, None)));
+    }
+    #[test]
+    fn stream_log_entry_marks_interrupted_stream_as_failed() {
+        let fields = super::StreamLogFields::for_success(
+            "native",
+            200,
+            "http://upstream/v1/responses",
+            Some("model-a"),
+            None,
+            None,
+        );
+        let entry = super::stream_log_entry(fields, None, Some("upstream died".to_string()));
+        assert_eq!(entry["ok"], false);
+        assert_eq!(entry["error"], "upstream died");
+        assert_eq!(entry["status"], 200);
     }
     #[test]
     fn compute_cost_converts_cached_subset_at_cache_read_price() {

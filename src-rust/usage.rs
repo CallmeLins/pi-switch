@@ -166,7 +166,24 @@ impl SseUsageParser {
                         }
                     }
                 }
-                Some(_) => {}
+                Some(_) => {
+                    // Typed frames (OpenAI Responses events, e.g.
+                    // `response.completed`) may carry a usage object; probe it
+                    // like the untyped chat usage frame. Responses events nest
+                    // usage inside the `response` object; other events without
+                    // usage are skipped.
+                    let usage_source: &serde_json::Value = if value.get("usage").is_some() {
+                        &value
+                    } else {
+                        match value.get("response") {
+                            Some(response) if response.get("usage").is_some() => response,
+                            _ => continue,
+                        }
+                    };
+                    if let Some(summary) = extract_usage(usage_source) {
+                        self.summary = Some(summary);
+                    }
+                }
                 None => {
                     if let Some(summary) = extract_usage(&value) {
                         self.summary = Some(summary);
@@ -627,6 +644,27 @@ mod tests {
                 completion_tokens: 0,
                 cached_tokens: 40,
                 reasoning_tokens: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn sse_parser_extracts_responses_usage_from_completed_event() {
+        let stream = concat!(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":100,\"output_tokens\":30,\"total_tokens\":130,\"input_tokens_details\":{\"cached_tokens\":40},\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let mut parser = SseUsageParser::new();
+        parser.push(stream.as_bytes());
+        assert_eq!(
+            parser.finish(),
+            Some(UsageSummary {
+                prompt_tokens: 100,
+                completion_tokens: 30,
+                cached_tokens: 40,
+                reasoning_tokens: 5,
             })
         );
     }
