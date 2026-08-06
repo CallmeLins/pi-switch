@@ -734,6 +734,14 @@ async fn handle_responses(
     body: String,
 ) -> Response {
     let config = crate::config::load_config().unwrap_or_default();
+    handle_responses_with_config(&config, headers, body).await
+}
+
+async fn handle_responses_with_config(
+    config: &crate::config::PiSwitchConfig,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
     let body_value: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     let body_value = filter_private_params(body_value);
     let is_stream = body_value
@@ -743,12 +751,48 @@ async fn handle_responses(
 
     // Non-streaming: convert to Chat Completions, route, convert response back.
     if !is_stream {
+        let requested_model = body_value
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let (candidates, real_model) = resolve_route(config, requested_model);
+        let native_candidates: Vec<String> = candidates
+            .iter()
+            .filter(|name| {
+                config
+                    .profiles
+                    .get(*name)
+                    .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
+                    .is_some_and(|profile| is_native_responses_passthrough(&profile))
+            })
+            .cloned()
+            .collect();
+        if !native_candidates.is_empty() {
+            let conversation_id = conversation_id_of(&headers, &body_value);
+            let result = forward_responses_passthrough(
+                config,
+                &native_candidates,
+                &body_value,
+                &real_model,
+                &headers,
+                conversation_id.as_deref(),
+            )
+            .await;
+            return match result {
+                Ok(response) => response,
+                Err(error) => (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({ "error": { "message": error.to_string(), "type": "failover_exhausted" } })),
+                ).into_response(),
+            };
+        }
+        // Non-streaming conversion path for non-native providers.
         let chat_body = responses_to_chat(&body_value);
         let requested_model = chat_body
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let (candidates, real_model) = resolve_route(&config, requested_model);
+        let (candidates, real_model) = resolve_route(config, requested_model);
 
         if candidates.is_empty() {
             return (StatusCode::BAD_GATEWAY,
@@ -758,7 +802,7 @@ async fn handle_responses(
         let conversation_id = conversation_id_of(&headers, &body_value);
 
         let result = forward_with_failover(
-            &config,
+            config,
             &candidates,
             &chat_body,
             &real_model,
@@ -809,7 +853,7 @@ async fn handle_responses(
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let (candidates, real_model) = resolve_route(&config, requested_model);
+        let (candidates, real_model) = resolve_route(config, requested_model);
         let candidates: Vec<String> = candidates
             .into_iter()
             .filter(|name| {
@@ -829,7 +873,7 @@ async fn handle_responses(
         let conversation_id = conversation_id_of(&headers, &body_value);
 
         let result = forward_with_failover(
-            &config,
+            config,
             &candidates,
             &body_value,
             &real_model,
@@ -1174,6 +1218,243 @@ fn stream_response(r: reqwest::Response, log: Option<StreamLogFields>) -> Respon
             .body(Body::empty())
             .unwrap()
     })
+}
+
+fn is_native_responses_passthrough(profile: &ProviderProfile) -> bool {
+    profile.api == "openai-responses"
+        && matches!(
+            profile.responses_mode,
+            crate::config::ResponsesMode::Auto | crate::config::ResponsesMode::Passthrough
+        )
+}
+
+fn is_hop_by_hop_request_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "host"
+            | "connection"
+            | "content-length"
+            | "transfer-encoding"
+            | "upgrade"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+    )
+}
+
+fn build_upstream_headers(
+    client_headers: &HeaderMap,
+    profile: &ProviderProfile,
+    api_key: &str,
+    user_agent: Option<&String>,
+    disguise: &[(&'static str, &'static str)],
+) -> HeaderMap {
+    let mut output = HeaderMap::new();
+    for (name, value) in client_headers {
+        if is_hop_by_hop_request_header(name.as_str())
+            || name.as_str().eq_ignore_ascii_case("authorization")
+        {
+            continue;
+        }
+        output.append(name.clone(), value.clone());
+    }
+    if let Some(custom) = &profile.headers {
+        for (name, value) in custom {
+            let Some(value) = value.as_str() else {
+                continue;
+            };
+            let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+                continue;
+            };
+            let Ok(value) =
+                reqwest::header::HeaderValue::from_str(&crate::config::resolve_env(value))
+            else {
+                continue;
+            };
+            output.insert(name, value);
+        }
+    }
+    output.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}"))
+            .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("Bearer")),
+    );
+    output
+        .entry(reqwest::header::CONTENT_TYPE)
+        .or_insert_with(|| reqwest::header::HeaderValue::from_static("application/json"));
+    if let Some(user_agent) = user_agent {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(user_agent) {
+            output.insert(reqwest::header::USER_AGENT, value);
+        }
+    }
+    for (name, value) in disguise {
+        output.insert(*name, reqwest::header::HeaderValue::from_static(value));
+    }
+    output
+}
+
+fn buffered_response(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: Vec<u8>,
+) -> Response {
+    let mut builder = Response::builder().status(status.as_u16());
+    for (name, value) in forward_headers(headers) {
+        builder = builder.header(name, value);
+    }
+    builder.body(Body::from(body)).unwrap_or_else(|_| {
+        Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .body(Body::empty())
+            .unwrap()
+    })
+}
+
+async fn forward_responses_passthrough(
+    config: &crate::config::PiSwitchConfig,
+    candidates: &[String],
+    body: &Value,
+    real_model: &str,
+    headers: &HeaderMap,
+    conversation_id: Option<&str>,
+) -> Result<Response> {
+    let conversation_name = conversation_name_of(headers);
+    let circuit_settings = &config.settings.proxy.circuit_breaker;
+    let mut circuit_state = read_circuit_state().await;
+    let global_spoof = config.settings.proxy.user_agent.as_deref();
+    let mut half_open_used = false;
+    let mut out_body = body.clone();
+    if !real_model.is_empty() {
+        out_body["model"] = json!(real_model);
+    }
+    let body = &out_body;
+
+    for name in candidates {
+        let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
+        if is_open || (is_half_open && half_open_used) {
+            continue;
+        }
+        if is_half_open {
+            half_open_used = true;
+        }
+        let Some(profile_value) = config.profiles.get(name) else {
+            continue;
+        };
+        let Ok(profile) = serde_json::from_value::<ProviderProfile>(profile_value.clone()) else {
+            continue;
+        };
+        if !is_native_responses_passthrough(&profile) {
+            continue;
+        }
+        let effective_spoof = profile.spoof.as_deref().or(global_spoof);
+        let (client, user_agent, disguise) = build_disguised_client(effective_spoof);
+        let api_key = crate::config::resolve_env(&profile.api_key);
+        let url = format!("{}/responses", profile.base_url.trim_end_matches('/'));
+        let request_headers =
+            build_upstream_headers(headers, &profile, &api_key, user_agent.as_ref(), &disguise);
+        let response = client
+            .post(&url)
+            .headers(request_headers)
+            .json(body)
+            .send()
+            .await;
+
+        match response {
+            Ok(upstream) if upstream.status().is_success() => {
+                let status = upstream.status();
+                let response_headers = upstream.headers().clone();
+                let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
+                let usage = serde_json::from_slice::<Value>(&body_bytes)
+                    .ok()
+                    .and_then(|value| crate::usage::extract_usage(&value));
+                record_success(name, is_half_open).await;
+                log_request(
+                    name,
+                    true,
+                    None,
+                    Some(status.as_u16()),
+                    Some(&url),
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    usage,
+                    conversation_id,
+                    conversation_name.as_deref(),
+                    lookup_model_cost(&profile, real_model),
+                )
+                .await;
+                return Ok(buffered_response(status, &response_headers, body_bytes));
+            }
+            Ok(upstream) if should_retry(upstream.status().as_u16()) => {
+                let status = upstream.status().as_u16();
+                record_failure(
+                    name,
+                    circuit_settings,
+                    &format!("HTTP {status}"),
+                    is_half_open,
+                )
+                .await;
+                log_request(
+                    name,
+                    false,
+                    Some(&format!("HTTP {status}")),
+                    Some(status),
+                    Some(&url),
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    None,
+                    conversation_id,
+                    conversation_name.as_deref(),
+                    None,
+                )
+                .await;
+                circuit_state = read_circuit_state().await;
+            }
+            Ok(upstream) => {
+                let status = upstream.status();
+                let response_headers = upstream.headers().clone();
+                let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
+                log_request(
+                    name,
+                    false,
+                    None,
+                    Some(status.as_u16()),
+                    Some(&url),
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    None,
+                    conversation_id,
+                    conversation_name.as_deref(),
+                    None,
+                )
+                .await;
+                return Ok(buffered_response(status, &response_headers, body_bytes));
+            }
+            Err(error) => {
+                let message = error.to_string();
+                record_failure(name, circuit_settings, &message, is_half_open).await;
+                log_request(
+                    name,
+                    false,
+                    Some(&message),
+                    None,
+                    None,
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    None,
+                    conversation_id,
+                    conversation_name.as_deref(),
+                    None,
+                )
+                .await;
+                circuit_state = read_circuit_state().await;
+            }
+        }
+    }
+    Err(AppError::proxy(
+        "All Responses upstream attempts failed".to_string(),
+    ))
 }
 
 async fn forward_with_failover(
@@ -1682,6 +1963,13 @@ fn build_log_entry(fields: &StreamLogFields, usage: Option<&crate::usage::UsageS
 /// parent directory as needed). Synchronous: callable from stream teardown
 /// paths where awaiting is not possible.
 fn append_log_line(entry: &Value) {
+    // Concurrent requests append from multiple tasks; serialize the
+    // open+write so lines never interleave or lose their trailing newline.
+    static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
     let log_path = config_dir().join("requests.log");
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).ok();
@@ -1730,13 +2018,18 @@ async fn log_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_private_params, make_router, resolve_route, ProxyState};
+    use super::{
+        filter_private_params, handle_responses_with_config, make_router, resolve_route, ProxyState,
+    };
     use crate::config::PiSwitchConfig;
     use axum::{
         body::{to_bytes, Body},
         http::{HeaderMap, HeaderValue, Request, StatusCode},
+        routing::post,
+        Router,
     };
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use tokio::net::TcpListener;
     use tower::ServiceExt;
 
     fn cfg(profiles: serde_json::Value, failover: Vec<&str>) -> PiSwitchConfig {
@@ -1746,6 +2039,226 @@ mod tests {
         }
         c.settings.proxy.failover = failover.into_iter().map(String::from).collect();
         c
+    }
+    #[tokio::test]
+    async fn native_responses_non_streaming_preserves_body_and_response() {
+        let seen = Arc::new(Mutex::new(None::<String>));
+        let seen_headers = Arc::new(Mutex::new(None::<HeaderMap>));
+        let seen_for_upstream = seen.clone();
+        let seen_headers_for_upstream = seen_headers.clone();
+        let upstream = Router::new().route(
+            "/v1/responses",
+            post(move |request: Request<Body>| {
+                let seen = seen_for_upstream.clone();
+                let seen_headers = seen_headers_for_upstream.clone();
+                async move {
+                    let headers = request.headers().clone();
+                    let body = to_bytes(request.into_body(), 1024 * 1024).await.unwrap();
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    *seen.lock().unwrap() = Some(body.clone());
+                    *seen_headers.lock().unwrap() = Some(headers);
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .header("x-upstream", "preserved")
+                        .body(Body::from(body))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "auto",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "upstream-key",
+                    "headers": { "x-provider": "provider-value", "x-client-request-id": "provider-request" },
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let request_body = serde_json::json!({
+            "model": "native/model-a",
+            "input": [{ "role": "user", "content": "hello" }],
+            "metadata": { "keep": true },
+            "store": false
+        })
+        .to_string();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-client-request-id", HeaderValue::from_static("client-1"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer client-key"),
+        );
+
+        let response = handle_responses_with_config(&config, headers, request_body).await;
+        let status = response.status();
+        let upstream_header = response.headers().get("x-upstream").cloned();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let returned: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let sent: serde_json::Value =
+            serde_json::from_str(seen.lock().unwrap().as_ref().unwrap()).unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(upstream_header.unwrap(), "preserved");
+        assert_eq!(sent["model"], "model-a");
+        assert_eq!(sent["input"][0]["content"], "hello");
+        assert_eq!(sent["metadata"]["keep"], true);
+        assert_eq!(returned, sent);
+        let upstream_headers = seen_headers.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            upstream_headers.get("x-provider").unwrap(),
+            "provider-value"
+        );
+        assert_eq!(
+            upstream_headers.get("x-client-request-id").unwrap(),
+            "provider-request"
+        );
+        assert_eq!(
+            upstream_headers.get("authorization").unwrap(),
+            "Bearer upstream-key"
+        );
+        assert!(!upstream_headers.contains_key("connection"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_responses_preserves_error_status_and_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "error": { "message": "invalid request", "type": "invalid_request_error" } }).to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "upstream-key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "native/model-a" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert_eq!(value["error"]["message"], "invalid request");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_responses_records_usage_and_conversation_in_log() {
+        let log_dir = std::env::temp_dir().join(format!("pi-switch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&log_dir);
+        std::env::set_var("PI_SWITCH_CONFIG_DIR", &log_dir);
+        std::env::set_var("PI_SWITCH_CIRCUIT_DIR", &log_dir);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "resp-1",
+                            "object": "response",
+                            "model": "model-a",
+                            "output": [{ "type": "message", "role": "assistant", "content": [{"type":"output_text","text":"hi"}] }],
+                            "usage": {
+                                "input_tokens": 100,
+                                "output_tokens": 30,
+                                "total_tokens": 130,
+                                "input_tokens_details": { "cached_tokens": 40 },
+                                "output_tokens_details": { "reasoning_tokens": 5 }
+                            }
+                        }).to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "auto",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "upstream-key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-conversation-id", HeaderValue::from_static("conv-42"));
+        let response = handle_responses_with_config(
+            &config,
+            headers,
+            serde_json::json!({ "model": "native/model-a" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        // Drain the body so the request completes before reading the log.
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["usage"]["input_tokens"], 100);
+        assert_eq!(value["usage"]["output_tokens"], 30);
+        assert_eq!(value["usage"]["input_tokens_details"]["cached_tokens"], 40);
+        assert_eq!(
+            value["usage"]["output_tokens_details"]["reasoning_tokens"],
+            5
+        );
+        let log_path = log_dir.join("requests.log");
+        let log_text = std::fs::read_to_string(&log_path).expect("log file written");
+        let entry = log_text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|value| value["conversationId"] == "conv-42")
+            .expect("log entry for this conversation");
+        assert_eq!(entry["ok"], true);
+        assert_eq!(entry["conversationId"], "conv-42");
+        assert_eq!(entry["model"], "model-a");
+        assert_eq!(entry["promptTokens"], 100);
+        assert_eq!(entry["completionTokens"], 30);
+        assert_eq!(entry["cachedTokens"], 40);
+        assert_eq!(entry["reasoningTokens"], 5);
+        server.abort();
+        let _ = std::fs::remove_dir_all(&log_dir);
+        std::env::remove_var("PI_SWITCH_CONFIG_DIR");
+        std::env::remove_var("PI_SWITCH_CIRCUIT_DIR");
     }
 
     #[tokio::test]
