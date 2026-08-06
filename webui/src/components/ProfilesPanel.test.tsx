@@ -53,6 +53,21 @@ describe("provider Responses mode form", () => {
     expect(screen.getByText("Responses mode")).toBeInTheDocument();
   });
 
+  it("saves the selected Responses mode through the profile API", async () => {
+    const update = vi.spyOn(api, "updateProfile").mockResolvedValue({});
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await waitFor(() => expect(screen.getAllByRole("combobox")).toHaveLength(4));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        "native",
+        expect.objectContaining({ responsesMode: "passthrough" }),
+        undefined,
+      ),
+    );
+  });
+
   it("blocks a passthrough mode on a Chat Completions provider", async () => {
     const update = vi.spyOn(api, "updateProfile").mockResolvedValue({});
     renderPanel();
