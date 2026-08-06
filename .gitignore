@@ -2,8 +2,8 @@ node_modules/
 target/
 *.node
 *.tar.gz
+*.tgz
 .env
-.idea/
 .vscode/
 *.log
 pi-session-*.html
