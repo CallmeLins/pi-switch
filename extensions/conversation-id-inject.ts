@@ -183,6 +183,7 @@ export type SessionInfo = {
 export type RequestEnv = {
   PI_SUBAGENT_DEPTH?: string;
   PI_PARENT_SESSION_ID?: string;
+  MAGIC_CONTEXT_PI_SUBAGENT?: string;
 };
 
 export type RequestInjection = {
@@ -207,6 +208,13 @@ export function resolveRequestInjection(
       ? { conversationId: env.PI_PARENT_SESSION_ID }
       : {};
   }
+  // Magic Context 后台任务（dreamer 等）以 --no-session 子进程运行：session 只在
+  // 内存、不落盘，pi 从未持久化它。注入其 id 会把后台任务伪造成独立会话（webui
+  // 会话统计里出现 pi 无记录的幽灵会话），因此这类进程不携带任何会话标识——
+  // 请求三源皆空，代理端按 ADR-0002 兜底归入 unlabeled。
+  if (env.MAGIC_CONTEXT_PI_SUBAGENT === "1") {
+    return {};
+  }
   return {
     ...(ownId ? { conversationId: ownId } : {}),
     ...(ownName ? { conversationName: ownName } : {}),
@@ -229,9 +237,15 @@ export function makeBeforeProviderHeadersHandler(
     const sessionName = resolveSessionName(name, ctx.sessionManager.getEntries());
     const env = process.env as RequestEnv;
     const { conversationId, conversationName } = resolveRequestInjection(id, sessionName, env);
-    const isParent = (Number.parseInt(env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0) === 0;
+    const depth = Number.parseInt(env.PI_SUBAGENT_DEPTH ?? "0", 10) || 0;
+    const isParent = depth === 0;
     if (isParent && conversationId) {
       process.env.PI_PARENT_SESSION_ID = conversationId;
+    }
+    // 后台 ephemeral 进程（如 Magic Context dreamer）：剥离 pi 核心注入的
+    // x-opencode-session，否则代理端仍会把 in-memory session id 记为会话。
+    if (env.MAGIC_CONTEXT_PI_SUBAGENT === "1") {
+      delete event.headers["x-opencode-session"];
     }
     Object.assign(event.headers, injectConversationId(event.headers, conversationId));
     Object.assign(event.headers, injectConversationName(event.headers, conversationName));

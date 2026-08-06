@@ -1,11 +1,11 @@
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { injectConversationId, injectConversationName, makeBeforeProviderHeadersHandler, firstUserMessageText, resolveSessionName, resolveRequestInjection, TITLE_MAX_LEN, type SessionIdProvider } from "./conversation-id-inject.ts";
-
 // Subagent folding relies on process.env; keep it clean between tests.
 afterEach(() => {
   delete process.env.PI_SUBAGENT_DEPTH;
   delete process.env.PI_PARENT_SESSION_ID;
+  delete process.env.MAGIC_CONTEXT_PI_SUBAGENT;
 });
 
 test("injects a non-empty session id and overrides an existing header", () => {
@@ -286,6 +286,58 @@ test("resolveRequestInjection skips injection for a subagent without a parent id
 test("resolveRequestInjection uses the own id and name for the parent process", () => {
   const injection = resolveRequestInjection("own-id", "my title", {});
   assert.deepEqual(injection, { conversationId: "own-id", conversationName: "my title" });
+});
+
+test("resolveRequestInjection skips injection for Magic Context background processes", () => {
+  // dreamer 夜间任务以 --no-session 子进程运行（MAGIC_CONTEXT_PI_SUBAGENT=1）：
+  // session 只在内存、不落盘，注入其 id 会在会话统计里产生 pi 从未记录的
+  // 幽灵会话；这类进程不应携带任何会话标识（代理端归 unlabeled，ADR-0002）。
+  const injection = resolveRequestInjection("bg-session-id", "## Task: Classify Project Memories", {
+    MAGIC_CONTEXT_PI_SUBAGENT: "1",
+  });
+  assert.deepEqual(injection, {});
+});
+
+test("handler strips conversation identity for Magic Context background processes", () => {
+  // pi 核心（provider-attribution）对所有进程注入 x-opencode-session；后台进程的
+  // in-memory session id 若留在请求里，代理端仍会把它当会话记录。扩展钩子在核心
+  // 注入之后运行，必须一并剥离该 header，请求才真正三源皆空（归 unlabeled）。
+  process.env.MAGIC_CONTEXT_PI_SUBAGENT = "1";
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const event = { headers: { authorization: "Bearer x", "x-opencode-session": "bg-session-id" } };
+  const ctx: SessionIdProvider = {
+    sessionManager: {
+      getSessionId: () => "bg-session-id",
+      getSessionName: () => "## Task: Classify Project Memories",
+      getEntries: () => [],
+    },
+  };
+  handler(event, ctx);
+  assert.equal(event.headers["x-conversation-id"], undefined);
+  assert.equal(event.headers["x-conversation-name"], undefined);
+  assert.equal(event.headers["x-opencode-session"], undefined);
+  assert.equal(event.headers.authorization, "Bearer x");
+});
+
+test("handler keeps x-opencode-session for normal parent processes", () => {
+  const handler = makeBeforeProviderHeadersHandler((ctx) => ({
+    id: ctx.sessionManager.getSessionId(),
+    name: ctx.sessionManager.getSessionName(),
+  }));
+  const event = { headers: { authorization: "Bearer x", "x-opencode-session": "persisted-session-id" } };
+  const ctx: SessionIdProvider = {
+    sessionManager: {
+      getSessionId: () => "persisted-session-id",
+      getSessionName: () => undefined,
+      getEntries: () => [],
+    },
+  };
+  handler(event, ctx);
+  assert.equal(event.headers["x-conversation-id"], "persisted-session-id");
+  assert.equal(event.headers["x-opencode-session"], "persisted-session-id");
 });
 
 test("handler folds subagent requests into the parent conversation and skips the name", () => {
