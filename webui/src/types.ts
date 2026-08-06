@@ -28,9 +28,12 @@ export interface ModelEntry {
   [key: string]: unknown;
 }
 
+export type ResponsesMode = "auto" | "passthrough" | "convert";
+
 export interface ProviderProfile {
   name?: string;
   api: string;
+  responsesMode?: ResponsesMode;
   baseUrl: string;
   apiKey: string;
   models: ModelEntry[];

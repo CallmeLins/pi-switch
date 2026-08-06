@@ -5,6 +5,15 @@ use std::path::PathBuf;
 
 // ─── Types matching pi-switch JS config ───────────────────
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponsesMode {
+    #[default]
+    Auto,
+    Passthrough,
+    Convert,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub id: String,
@@ -97,6 +106,8 @@ pub struct ProviderProfile {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api: String,
+    #[serde(default, rename = "responsesMode")]
+    pub responses_mode: ResponsesMode,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     #[serde(rename = "baseUrl")]
     pub base_url: String,
@@ -655,6 +666,16 @@ fn validate_model_override(value: &Value, path: &str) -> std::result::Result<(),
     Ok(())
 }
 
+fn validate_responses_mode(profile: &ProviderProfile) -> std::result::Result<(), String> {
+    match profile.responses_mode {
+        ResponsesMode::Auto => Ok(()),
+        ResponsesMode::Passthrough if profile.api == "openai-responses" => Ok(()),
+        ResponsesMode::Convert if profile.api == "openai-completions" => Ok(()),
+        ResponsesMode::Passthrough => Err("passthrough requires openai-responses api".into()),
+        ResponsesMode::Convert => Err("convert requires openai-completions api".into()),
+    }
+}
+
 pub fn validate_provider_profile(
     name: &str,
     profile: &ProviderProfile,
@@ -670,6 +691,7 @@ pub fn validate_provider_profile(
     if !profile.api.is_empty() && !SUPPORTED_APIS.contains(&profile.api.as_str()) {
         return Err(format!("api is not supported: {}", profile.api));
     }
+    validate_responses_mode(profile)?;
     if !profile.base_url.is_empty()
         && !profile.base_url.starts_with("http://")
         && !profile.base_url.starts_with("https://")
@@ -856,7 +878,7 @@ pub fn resolve_env(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_provider_wrapper, parse_provider_wrapper};
+    use super::{format_provider_wrapper, parse_provider_wrapper, ResponsesMode};
 
     #[test]
     fn parses_full_pi_provider_wrapper_without_losing_fields() {
@@ -966,5 +988,46 @@ mod tests {
         assert!(parse_provider_wrapper(input)
             .unwrap_err()
             .contains("invalid profile structure"));
+    }
+
+    #[test]
+    fn missing_responses_mode_defaults_to_auto() {
+        let (_, profile) = parse_provider_wrapper(
+            r#"{"custom":{"baseUrl":"https://example.com/v1","api":"openai-responses"}}"#,
+        )
+        .expect("valid provider");
+        assert_eq!(profile.responses_mode, ResponsesMode::Auto);
+    }
+
+    #[test]
+    fn rejects_incompatible_responses_mode() {
+        let input = r#"{"custom":{"baseUrl":"https://example.com/v1","api":"openai-completions","responsesMode":"passthrough"}}"#;
+        let error = parse_provider_wrapper(input).unwrap_err();
+        assert!(error.contains("passthrough requires openai-responses"));
+    }
+
+    #[test]
+    fn accepts_compatible_responses_modes() {
+        for (api, mode) in [
+            ("openai-responses", "passthrough"),
+            ("openai-completions", "convert"),
+            ("openai-responses", "auto"),
+            ("openai-completions", "auto"),
+        ] {
+            let input = format!(
+                r#"{{"custom":{{"baseUrl":"https://example.com/v1","api":"{api}","responsesMode":"{mode}"}}}}"#,
+            );
+            parse_provider_wrapper(&input).expect("compatible mode");
+        }
+    }
+
+    #[test]
+    fn responses_mode_round_trips_as_camel_case_json() {
+        let (_, profile) = parse_provider_wrapper(
+            r#"{"custom":{"baseUrl":"https://example.com/v1","api":"openai-responses","responsesMode":"passthrough"}}"#,
+        )
+        .expect("valid provider");
+        let value = serde_json::to_value(profile).expect("serializable provider");
+        assert_eq!(value["responsesMode"], "passthrough");
     }
 }
