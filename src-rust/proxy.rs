@@ -617,18 +617,27 @@ async fn handle_messages(
 // for routing, then converts the upstream Chat Completions response
 // back to Responses format for Pi.
 
+/// Errors produced while converting between the Responses API and Chat
+/// Completions payloads. `NotSupported` maps to the `not_supported` error
+/// type; anything else maps to `conversion_error`.
+#[derive(Debug, Clone, PartialEq)]
+enum ResponsesConversionError {
+    NotSupported(String),
+    Invalid(String),
+}
+
+impl ResponsesConversionError {
+    fn message(&self) -> &str {
+        match self {
+            Self::NotSupported(message) | Self::Invalid(message) => message,
+        }
+    }
+}
+
 /// Convert Responses-format body to Chat Completions body for upstream routing.
-fn responses_to_chat(body: &Value) -> Value {
-    // Map `input` (string or array of messages) → `messages` array
+fn responses_to_chat(body: &Value) -> std::result::Result<Value, ResponsesConversionError> {
     let messages = match body.get("input") {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| {
-                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-                let content = item.get("content").cloned().unwrap_or(Value::Null);
-                json!({ "role": role, "content": content })
-            })
-            .collect::<Vec<_>>(),
+        Some(Value::Array(items)) => convert_responses_input(items)?,
         Some(Value::String(s)) => {
             vec![json!({ "role": "user", "content": s })]
         }
@@ -658,21 +667,30 @@ fn responses_to_chat(body: &Value) -> Value {
     if let Some(v) = body.get("stop") {
         chat_body["stop"] = v.clone();
     }
-    // Tools: map Responses tool format (name→function.name, description→function.description)
+    // Tools: map Responses tool format (name→function.name, description→function.description).
+    // Only function tools can be represented in Chat Completions; anything
+    // else (web_search, file_search, computer use, ...) is rejected explicitly.
     if let Some(tools) = body.get("tools").and_then(|v| v.as_array()) {
-        let chat_tools: Vec<Value> = tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.get("name").unwrap_or(&Value::Null),
-                        "description": t.get("description").unwrap_or(&Value::Null),
-                        "parameters": t.get("parameters").unwrap_or(&json!({})),
-                    }
-                })
-            })
-            .collect();
+        let mut chat_tools = Vec::new();
+        for tool in tools {
+            let tool_type = tool
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("function");
+            if tool_type != "function" {
+                return Err(ResponsesConversionError::NotSupported(format!(
+                    "tool type '{tool_type}' is not supported in conversion mode",
+                )));
+            }
+            chat_tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": tool.get("name").unwrap_or(&Value::Null),
+                    "description": tool.get("description").unwrap_or(&Value::Null),
+                    "parameters": tool.get("parameters").unwrap_or(&json!({})),
+                },
+            }));
+        }
         chat_body["tools"] = Value::Array(chat_tools);
         if let Some(v) = body.get("tool_choice") {
             chat_body["tool_choice"] = v.clone();
@@ -690,31 +708,171 @@ fn responses_to_chat(body: &Value) -> Value {
         }
     }
 
-    chat_body
+    Ok(chat_body)
+}
+
+/// Convert a Responses `input` array into Chat Completions `messages`,
+/// preserving tool-call/tool-result correlation (`call_id` ↔ `tool_call_id`).
+fn convert_responses_input(
+    items: &[Value],
+) -> std::result::Result<Vec<Value>, ResponsesConversionError> {
+    let mut messages: Vec<Value> = Vec::new();
+    for item in items {
+        match item.get("type").and_then(|v| v.as_str()) {
+            Some("function_call_output") => {
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let output = item.get("output").cloned().unwrap_or(Value::Null);
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
+                }));
+            }
+            Some("function_call") => {
+                // Standalone assistant function-call item: attach to the last
+                // assistant message, or create one when none precedes it.
+                let call = json!({
+                    "id": item.get("call_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name").unwrap_or(&Value::Null),
+                        "arguments": item
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(Value::String(String::new())),
+                    },
+                });
+                if let Some(last) = messages.last_mut() {
+                    if last.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+                        if last.get("tool_calls").is_some() {
+                            last["tool_calls"]
+                                .as_array_mut()
+                                .expect("tool_calls is an array")
+                                .push(call);
+                        } else {
+                            last["tool_calls"] = json!([call]);
+                        }
+                        continue;
+                    }
+                }
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": Value::Null,
+                    "tool_calls": [call],
+                }));
+            }
+            _ => {
+                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                let content = item.get("content").cloned().unwrap_or(Value::Null);
+                let mut message = json!({ "role": role, "content": content });
+                // An assistant message may embed function_call parts in its
+                // content array (e.g. when a previous response.output was fed
+                // back as input); pull them out into tool_calls.
+                if role == "assistant" {
+                    if let Some(calls) = extract_embedded_function_calls(&mut message)? {
+                        message["tool_calls"] = calls;
+                    }
+                }
+                messages.push(message);
+            }
+        }
+    }
+    Ok(messages)
+}
+
+/// Pull `{"type":"function_call",...}` parts out of an assistant message's
+/// content array into the Chat Completions `tool_calls` shape; remaining text
+/// parts become the message's string content.
+fn extract_embedded_function_calls(
+    message: &mut Value,
+) -> std::result::Result<Option<Value>, ResponsesConversionError> {
+    let Some(content) = message.get("content").and_then(|v| v.as_array()) else {
+        return Ok(None);
+    };
+    let mut calls = Vec::new();
+    let mut texts = Vec::new();
+    for part in content {
+        match part.get("type").and_then(|v| v.as_str()) {
+            Some("function_call") => {
+                calls.push(json!({
+                    "id": part.get("call_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "type": "function",
+                    "function": {
+                        "name": part.get("name").unwrap_or(&Value::Null),
+                        "arguments": part
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(Value::String(String::new())),
+                    },
+                }));
+            }
+            Some("output_text") | Some("text") | None => {
+                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                    texts.push(text);
+                }
+            }
+            _ => {}
+        }
+    }
+    if calls.is_empty() {
+        return Ok(None);
+    }
+    message["content"] = json!(texts.join(""));
+    Ok(Some(Value::Array(calls)))
 }
 
 /// Convert a Chat Completions response body back to the Responses API format.
-fn chat_response_to_responses(chat: Value, model: &str, created: Option<u64>) -> Value {
-    let output: Vec<Value> = chat
+fn chat_response_to_responses(
+    chat: Value,
+    model: &str,
+    created: Option<u64>,
+) -> std::result::Result<Value, ResponsesConversionError> {
+    let choices = chat
         .get("choices")
         .and_then(|v| v.as_array())
-        .map(|choices| {
-            choices.iter().map(|c| {
-                let msg = c.get("message").unwrap_or(&Value::Null);
-                let content = msg.get("content").cloned().unwrap_or(Value::String(String::new()));
-                json!({
+        .ok_or_else(|| {
+            ResponsesConversionError::Invalid("chat response has no choices array".to_string())
+        })?;
+
+    let mut output = Vec::new();
+    for choice in choices {
+        let message = choice.get("message").unwrap_or(&Value::Null);
+        // Text part becomes a Responses message output item.
+        if let Some(content) = message.get("content") {
+            if !content.is_null() {
+                output.push(json!({
                     "type": "message",
                     "role": "assistant",
                     "content": [{
                         "type": "output_text",
-                        "text": match &content { Value::String(s) => s.clone(), v => v.to_string() },
+                        "text": match content {
+                            Value::String(s) => s.clone(),
+                            value => value.to_string(),
+                        },
                         "annotations": [],
                     }],
                     "status": "completed",
-                })
-            }).collect()
-        })
-        .unwrap_or_default();
+                }));
+            }
+        }
+        // Tool calls become Responses function_call output items, preserving
+        // call_id / name / arguments for correlation with tool results.
+        if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array()) {
+            for call in tool_calls {
+                let function = call.get("function").unwrap_or(&Value::Null);
+                output.push(json!({
+                    "type": "function_call",
+                    "call_id": call.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "name": function.get("name").cloned().unwrap_or(Value::Null),
+                    "arguments": function
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(Value::String(String::new())),
+                    "status": "completed",
+                }));
+            }
+        }
+    }
 
     let usage = chat.get("usage").cloned().map(|u| {
         json!({
@@ -752,7 +910,7 @@ fn chat_response_to_responses(chat: Value, model: &str, created: Option<u64>) ->
     }
     resp["status"] = json!("completed");
 
-    resp
+    Ok(resp)
 }
 
 async fn handle_responses(
@@ -814,7 +972,10 @@ async fn handle_responses_with_config(
             };
         }
         // Non-streaming conversion path for non-native providers.
-        let chat_body = responses_to_chat(&body_value);
+        let chat_body = match responses_to_chat(&body_value) {
+            Ok(body) => body,
+            Err(error) => return conversion_error_response(&error),
+        };
         let requested_model = chat_body
             .get("model")
             .and_then(|v| v.as_str())
@@ -847,17 +1008,21 @@ async fn handle_responses_with_config(
                     .unwrap_or_default();
                 if (200..300).contains(&status) {
                     if let Ok(chat) = serde_json::from_slice::<Value>(&body_bytes) {
-                        let responses_body = chat_response_to_responses(
+                        match chat_response_to_responses(
                             chat,
                             &real_model,
                             Some(chrono::Utc::now().timestamp() as u64),
-                        );
-                        let s = serde_json::to_string(&responses_body).unwrap_or_default();
-                        return Response::builder()
-                            .status(200)
-                            .header("content-type", "application/json")
-                            .body(Body::from(s))
-                            .unwrap();
+                        ) {
+                            Ok(responses_body) => {
+                                let s = serde_json::to_string(&responses_body).unwrap_or_default();
+                                return Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/json")
+                                    .body(Body::from(s))
+                                    .unwrap();
+                            }
+                            Err(error) => return conversion_error_response(&error),
+                        }
                     }
                 }
                 let mut builder = Response::builder().status(status);
@@ -1482,6 +1647,21 @@ async fn forward_responses_passthrough(
     Err(AppError::proxy(
         "All Responses upstream attempts failed".to_string(),
     ))
+}
+
+/// Convert a conversion failure into the Responses-style error contract.
+fn conversion_error_response(error: &ResponsesConversionError) -> Response {
+    let (status, error_type) = match error {
+        ResponsesConversionError::NotSupported(_) => (StatusCode::NOT_IMPLEMENTED, "not_supported"),
+        ResponsesConversionError::Invalid(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "conversion_error")
+        }
+    };
+    (
+        status,
+        Json(json!({ "error": { "message": error.message(), "type": error_type } })),
+    )
+        .into_response()
 }
 
 async fn forward_with_failover(
@@ -2203,6 +2383,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_conversion_round_trips_tools_end_to_end() {
+        let seen = Arc::new(Mutex::new(None::<String>));
+        let seen_for_upstream = seen.clone();
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move |body: String| {
+                let seen = seen_for_upstream.clone();
+                async move {
+                    *seen.lock().unwrap() = Some(body.clone());
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "id": "chatcmpl-200",
+                                "choices": [{
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "checking...",
+                                        "tool_calls": [
+                                            { "id": "call_1", "type": "function", "function": { "name": "get_weather", "arguments": "{\"city\":\"paris\"}" } },
+                                            { "id": "call_2", "type": "function", "function": { "name": "get_time", "arguments": "{}" } }
+                                        ]
+                                    },
+                                    "finish_reason": "tool_calls"
+                                }],
+                                "usage": {
+                                    "prompt_tokens": 100,
+                                    "completion_tokens": 30,
+                                    "total_tokens": 130,
+                                    "prompt_tokens_details": { "cached_tokens": 40 },
+                                    "completion_tokens_details": { "reasoning_tokens": 5 }
+                                }
+                            }).to_string(),
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "upstream-key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let request_body = serde_json::json!({
+            "model": "chat/model-a",
+            "input": [
+                { "role": "user", "content": "weather?" },
+                { "type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"paris\"}" },
+                { "type": "function_call_output", "call_id": "call_1", "output": "{\"temp\":20}" }
+            ],
+            "tools": [{ "type": "function", "name": "get_weather", "description": "weather", "parameters": {} }],
+            "tool_choice": "auto",
+            "instructions": "Be brief."
+        })
+        .to_string();
+
+        let response = handle_responses_with_config(&config, HeaderMap::new(), request_body).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        let sent: serde_json::Value =
+            serde_json::from_str(seen.lock().unwrap().as_ref().unwrap()).unwrap();
+        let messages = sent["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["name"],
+            "get_weather"
+        );
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_1");
+        assert_eq!(messages[3]["content"], "{\"temp\":20}");
+        assert_eq!(sent["tool_choice"], "auto");
+        assert_eq!(sent["tools"][0]["function"]["name"], "get_weather");
+        assert_eq!(sent["model"], "model-a");
+
+        let output = value["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[0]["content"][0]["text"], "checking...");
+        assert_eq!(output[1]["type"], "function_call");
+        assert_eq!(output[1]["call_id"], "call_1");
+        assert_eq!(output[1]["name"], "get_weather");
+        assert_eq!(output[2]["type"], "function_call");
+        assert_eq!(output[2]["call_id"], "call_2");
+        assert_eq!(output[2]["name"], "get_time");
+        assert_eq!(value["usage"]["input_tokens"], 100);
+        assert_eq!(value["usage"]["output_tokens"], 30);
+        assert_eq!(value["usage"]["input_tokens_details"]["cached_tokens"], 40);
+        assert_eq!(
+            value["usage"]["output_tokens_details"]["reasoning_tokens"],
+            5
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_conversion_rejects_non_function_tools() {
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "auto",
+                    "baseUrl": "http://127.0.0.1:1/v1",
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let request_body = serde_json::json!({
+            "model": "chat/model-a",
+            "input": [{ "role": "user", "content": "hi" }],
+            "tools": [{ "type": "web_search" }]
+        })
+        .to_string();
+        let response = handle_responses_with_config(&config, HeaderMap::new(), request_body).await;
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "not_supported");
+    }
+
+    #[tokio::test]
+    async fn responses_conversion_unmappable_upstream_returns_conversion_error() {
+        let upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{\"id\":\"x\"}"))
+                    .unwrap()
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": [{ "role": "user", "content": "hi" }] }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "conversion_error");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_conversion_no_route_uses_responses_error_shape() {
+        let config = cfg(serde_json::json!({}), vec![]);
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "missing/model", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["type"], "no_route");
+    }
+
+    #[tokio::test]
     async fn native_responses_records_usage_and_conversation_in_log() {
         let log_dir = super::init_test_state_dir().clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2437,13 +2814,71 @@ mod tests {
             "temperature": 0.7,
             "stream": false
         });
-        let chat = super::responses_to_chat(&responses);
+        let chat = super::responses_to_chat(&responses).expect("convert");
         assert_eq!(chat["model"], "gpt-5.4");
         assert_eq!(chat["messages"][0]["role"], "user");
         assert_eq!(chat["messages"][0]["content"], "hello");
         assert_eq!(chat["max_tokens"], 100);
         assert_eq!(chat["temperature"], 0.7);
         assert!(chat.get("max_output_tokens").is_none());
+    }
+    #[test]
+    fn responses_to_chat_converts_tool_results_to_tool_messages() {
+        let responses = serde_json::json!({
+            "model": "gpt-5",
+            "input": [
+                { "role": "user", "content": "weather?" },
+                { "type": "function_call_output", "call_id": "call_1", "output": "{\"temp\":20}" }
+            ]
+        });
+        let chat = super::responses_to_chat(&responses).expect("convert");
+        let msgs = chat["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[1]["role"], "tool");
+        assert_eq!(msgs[1]["tool_call_id"], "call_1");
+        assert_eq!(msgs[1]["content"], "{\"temp\":20}");
+    }
+
+    #[test]
+    fn responses_to_chat_merges_assistant_function_calls_into_tool_calls() {
+        let responses = serde_json::json!({
+            "model": "gpt-5",
+            "input": [
+                { "role": "user", "content": "weather?" },
+                { "type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"paris\"}" },
+                { "type": "function_call_output", "call_id": "call_1", "output": "{\"temp\":20}" }
+            ]
+        });
+        let chat = super::responses_to_chat(&responses).expect("convert");
+        let msgs = chat["messages"].as_array().unwrap();
+        let assistant = &msgs[1];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+        assert_eq!(assistant["tool_calls"][0]["type"], "function");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"],
+            "{\"city\":\"paris\"}"
+        );
+        assert_eq!(msgs[2]["role"], "tool");
+        assert_eq!(msgs[2]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn responses_to_chat_rejects_non_function_tools() {
+        let responses = serde_json::json!({
+            "model": "gpt-5",
+            "input": [{ "role": "user", "content": "hi" }],
+            "tools": [{ "type": "web_search", "name": "web" }]
+        });
+        let err = super::responses_to_chat(&responses).expect_err("must reject");
+        assert!(matches!(
+            err,
+            super::ResponsesConversionError::NotSupported(_)
+        ));
     }
 
     #[test]
@@ -2453,7 +2888,7 @@ mod tests {
             "input": [{ "role": "user", "content": "hi" }],
             "instructions": "You are helpful."
         });
-        let chat = super::responses_to_chat(&responses);
+        let chat = super::responses_to_chat(&responses).expect("convert");
         let msgs = chat["messages"].as_array().unwrap();
         assert_eq!(msgs[0]["role"], "system");
         assert_eq!(msgs[0]["content"], "You are helpful.");
@@ -2470,7 +2905,7 @@ mod tests {
             }],
             "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
         });
-        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None).expect("convert");
         assert_eq!(resp["object"], "response");
         assert_eq!(resp["model"], "gpt-5.4");
         let output = &resp["output"][0];
@@ -2495,7 +2930,7 @@ mod tests {
                 "completion_tokens_details": { "reasoning_tokens": 20 },
             },
         });
-        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None).expect("convert");
         let usage = &resp["usage"];
         assert_eq!(usage["input_tokens"], 100);
         assert_eq!(usage["output_tokens"], 50);
@@ -2513,7 +2948,7 @@ mod tests {
             }],
             "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 },
         });
-        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None);
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None).expect("convert");
         let usage = &resp["usage"];
         assert_eq!(usage["input_tokens"], 10);
         assert_eq!(usage["output_tokens"], 5);
@@ -2526,6 +2961,63 @@ mod tests {
             usage["output_tokens_details"]["reasoning_tokens"],
             serde_json::Value::Null
         );
+    }
+
+    #[test]
+    fn chat_response_to_responses_maps_tool_calls_to_function_call_output() {
+        let chat = serde_json::json!({
+            "id": "chatcmpl-126",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        { "id": "call_1", "type": "function", "function": { "name": "get_weather", "arguments": "{\"city\":\"paris\"}" } },
+                        { "id": "call_2", "type": "function", "function": { "name": "get_time", "arguments": "{}" } }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
+        });
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None).expect("convert");
+        let output = resp["output"].as_array().unwrap();
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["type"], "function_call");
+        assert_eq!(output[0]["call_id"], "call_1");
+        assert_eq!(output[0]["name"], "get_weather");
+        assert_eq!(output[0]["arguments"], "{\"city\":\"paris\"}");
+        assert_eq!(output[0]["status"], "completed");
+        assert_eq!(output[1]["call_id"], "call_2");
+        assert_eq!(output[1]["name"], "get_time");
+    }
+
+    #[test]
+    fn chat_response_to_responses_keeps_text_and_tool_calls_together() {
+        let chat = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "checking...",
+                    "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "f", "arguments": "{}" } }]
+                }
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        });
+        let resp = super::chat_response_to_responses(chat, "gpt-5.4", None).expect("convert");
+        let output = resp["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[0]["content"][0]["text"], "checking...");
+        assert_eq!(output[1]["type"], "function_call");
+        assert_eq!(output[1]["call_id"], "call_1");
+    }
+
+    #[test]
+    fn chat_response_to_responses_rejects_unmappable_choices() {
+        let chat = serde_json::json!({ "id": "chatcmpl-127", "usage": {} });
+        let err =
+            super::chat_response_to_responses(chat, "gpt-5.4", None).expect_err("must reject");
+        assert!(matches!(err, super::ResponsesConversionError::Invalid(_)));
     }
 
     #[test]
