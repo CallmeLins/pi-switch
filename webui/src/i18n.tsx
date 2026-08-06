@@ -183,6 +183,14 @@ const zh: Record<string, string> = {
   "Nothing imported (already exist or skipped).": "未导入任何内容（已存在或已跳过）。",
   "Imported {{n}} provider(s) from cc-switch": "已从 cc-switch 导入 {{n}} 个 provider",
   "Provider name": "供应商名称",
+  Responses: "Responses",
+  "Responses mode": "Responses 模式",
+  "automatic by API type": "按 API 类型自动选择",
+  "native Responses only": "仅原生 Responses",
+  "Chat Completions only": "仅 Chat Completions",
+  "passthrough requires openai-responses": "passthrough 需要 openai-responses",
+  "convert requires openai-completions": "convert 需要 openai-completions",
+
 
   // ui.tsx
   OK: "确定",

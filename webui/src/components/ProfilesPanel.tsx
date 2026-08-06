@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AppState, CcsProvider, ModelEntry, PresetInfo, ProviderProfile } from "../types";
+import type { AppState, CcsProvider, ModelEntry, PresetInfo, ProviderProfile, ResponsesMode } from "../types";
+import { effectiveResponsesMode, responsesModeError } from "../lib/responsesMode";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
@@ -78,6 +79,7 @@ export function ProfilesPanel({
                   {isCurrent && <Badge tone="indigo">{t("current")}</Badge>}
                   {p.proxy && <Badge tone="amber">{t("proxy")}</Badge>}
                   <Badge>{p.api || "?"}</Badge>
+                  <Badge tone="indigo">{t("Responses")}: {effectiveResponsesMode(p)}</Badge>
                   {exposed > 0 && <Badge tone="green">{exposed} {t("exposed")}</Badge>}
                 </div>
                 <div className="mt-0.5 truncate text-xs text-zinc-500">
@@ -193,6 +195,7 @@ function ProfileForm({
 
   const [name, setName] = useState(original ?? "");
   const [apiType, setApiType] = useState(existing?.api ?? "openai-completions");
+  const [responsesMode, setResponsesMode] = useState<ResponsesMode>(existing?.responsesMode ?? "auto");
   const [baseUrl, setBaseUrl] = useState(existing?.baseUrl ?? "");
   const [apiKey, setApiKey] = useState(existing?.apiKey ?? "");
   const [spoof, setSpoof] = useState(existing?.userAgent ?? "");
@@ -223,6 +226,7 @@ function ProfileForm({
     return {
       ...(existing ?? {}),
       api: apiType,
+      responsesMode,
       baseUrl: baseUrl.trim(),
       apiKey: apiKey.trim(),
       models,
@@ -237,6 +241,8 @@ function ProfileForm({
   async function save() {
     const trimmed = name.trim();
     if (!trimmed) throw new Error(t("name required"));
+    const modeError = responsesModeError(apiType, responsesMode);
+    if (modeError) throw new Error(t(modeError));
     const profile = build();
     if (original) {
       await api.updateProfile(trimmed, profile, original !== trimmed ? original : undefined);
@@ -268,6 +274,13 @@ function ProfileForm({
                 {a}
               </option>
             ))}
+          </Select>
+        </Field>
+        <Field label={t("Responses mode")}>
+          <Select value={responsesMode} onChange={(e) => setResponsesMode(e.target.value as ResponsesMode)}>
+            <option value="auto">auto — {t("automatic by API type")}</option>
+            <option value="passthrough">passthrough — {t("native Responses only")}</option>
+            <option value="convert">convert — {t("Chat Completions only")}</option>
           </Select>
         </Field>
         <Field label={t("Disguise (User-Agent)")}>
