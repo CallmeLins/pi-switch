@@ -1421,219 +1421,61 @@ async fn handle_responses_with_config(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Non-streaming: convert to Chat Completions, route, convert response back.
+    // Non-streaming: route through candidates in order, dispatching each by its
+    // declared responses mode (native passthrough or Chat conversion), so
+    // failover can move across modes.
     if !is_stream {
         let requested_model = body_value
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let (candidates, real_model) = resolve_route(config, requested_model);
-        let native_candidates =
-            filter_profiles(config, &candidates, is_native_responses_passthrough);
-        if !native_candidates.is_empty() {
-            let conversation_id = conversation_id_of(&headers, &body_value);
-            let result = forward_responses_passthrough(
-                config,
-                &native_candidates,
-                &body_value,
-                &real_model,
-                &headers,
-                conversation_id.as_deref(),
-            )
-            .await;
-            return match result {
-                Ok(response) => response,
-                Err(error) => (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": { "message": error.to_string(), "type": "failover_exhausted" } })),
-                ).into_response(),
-            };
-        }
-        // Non-streaming conversion path for non-native providers.
-        let chat_body = match responses_to_chat(&body_value) {
-            Ok(body) => body,
-            Err(error) => return conversion_error_response(&error),
-        };
-        let requested_model = chat_body
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let (candidates, real_model) = resolve_route(config, requested_model);
-
         if candidates.is_empty() {
             return (StatusCode::BAD_GATEWAY,
                 Json(json!({ "error": { "message": format!("No upstream exposes model '{}'", requested_model), "type": "no_route" } }))).into_response();
         }
-
         let conversation_id = conversation_id_of(&headers, &body_value);
-
-        let result = forward_with_failover(
+        let result = forward_responses_mixed(
             config,
             &candidates,
-            &chat_body,
+            &body_value,
             &real_model,
-            "chat/completions",
             &headers,
             conversation_id.as_deref(),
-            true,
         )
         .await;
         match result {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let (_, body) = resp.into_parts();
-                let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
-                    .await
-                    .unwrap_or_default();
-                if (200..300).contains(&status) {
-                    if let Ok(chat) = serde_json::from_slice::<Value>(&body_bytes) {
-                        match chat_response_to_responses(
-                            chat,
-                            &real_model,
-                            Some(chrono::Utc::now().timestamp() as u64),
-                        ) {
-                            Ok(responses_body) => {
-                                let s = serde_json::to_string(&responses_body).unwrap_or_default();
-                                return Response::builder()
-                                    .status(200)
-                                    .header("content-type", "application/json")
-                                    .body(Body::from(s))
-                                    .unwrap();
-                            }
-                            Err(error) => return conversion_error_response(&error),
-                        }
-                    }
-                }
-                let mut builder = Response::builder().status(status);
-                builder = builder.header("content-type", "application/json");
-                builder.body(Body::from(body_bytes)).unwrap()
-            }
-            Err(e) => (
+            Ok(response) => response,
+            Err(error) => (
                 StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } }),
-                ),
-            )
-                .into_response(),
+                Json(json!({ "error": { "message": error.to_string(), "type": "failover_exhausted" } })),
+            ).into_response(),
         }
     } else {
-        // Streaming: prefer a native Responses passthrough; otherwise convert
-        // the request to Chat Completions and translate the upstream SSE into
-        // Responses events.
+        // Streaming: route through candidates in order, dispatching each by its
+        // declared responses mode (native passthrough or Chat→Responses SSE
+        // conversion), so failover can move across modes before any event is sent.
         let requested_model = body_value
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let (candidates, real_model) = resolve_route(config, requested_model);
         let conversation_id = conversation_id_of(&headers, &body_value);
-
-        let native_candidates =
-            filter_profiles(config, &candidates, is_native_responses_passthrough);
-        if !native_candidates.is_empty() {
-            let result = forward_with_failover(
-                config,
-                &native_candidates,
-                &body_value,
-                &real_model,
-                "responses",
-                &headers,
-                conversation_id.as_deref(),
-                true,
-            )
-            .await;
-            return match result {
-                Ok(resp) => resp,
-                Err(e) => (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({ "error": { "message": e.to_string(), "type": "failover_exhausted" } })),
-                )
-                    .into_response(),
-            };
-        }
-
-        let convert_candidates = filter_profiles(config, &candidates, is_chat_completions_convert);
-        if convert_candidates.is_empty() {
+        if candidates.is_empty() {
             return (StatusCode::NOT_IMPLEMENTED,
                 Json(json!({ "error": { "message": "Responses stream requires an openai-responses or openai-completions upstream", "type": "not_supported" } }))).into_response();
         }
-
-        let chat_body = match responses_to_chat(&body_value) {
-            Ok(mut body) => {
-                body["stream"] = json!(true);
-                body
-            }
-            Err(error) => return conversion_error_response(&error),
-        };
-
-        let result = forward_with_failover(
+        let result = forward_responses_mixed_stream(
             config,
-            &convert_candidates,
-            &chat_body,
+            &candidates,
+            &body_value,
             &real_model,
-            "chat/completions",
             &headers,
             conversation_id.as_deref(),
-            false,
         )
         .await;
         match result {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if !(200..300).contains(&status) {
-                    // Upstream errors pass through unchanged (never converted,
-                    // never rewritten into a fake success).
-                    let (parts, body) = resp.into_parts();
-                    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
-                        .await
-                        .unwrap_or_default();
-                    return buffered_response(parts.status, &parts.headers, body_bytes.to_vec());
-                }
-                // A 2xx upstream that is not an SSE stream (e.g. a JSON error body)
-                // is passed through as-is: converting it would fabricate an empty
-                // completed response.
-                let is_sse = resp
-                    .headers()
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .is_some_and(|t| t.contains("event-stream"));
-                if !is_sse {
-                    let (parts, body) = resp.into_parts();
-                    let body_bytes = axum::body::to_bytes(body, 10 * 1024 * 1024)
-                        .await
-                        .unwrap_or_default();
-                    return buffered_response(parts.status, &parts.headers, body_bytes.to_vec());
-                }
-                let mut builder = Response::builder().status(200);
-                for (name, value) in forward_headers(resp.headers()) {
-                    builder = builder.header(name, value);
-                }
-                builder = builder.header("content-type", "text/event-stream");
-                let profile = convert_candidates.iter().find_map(|name| {
-                    let value = config.profiles.get(name)?;
-                    serde_json::from_value::<ProviderProfile>(value.clone()).ok()
-                });
-                let upstream_url = profile
-                    .as_ref()
-                    .map(|p| format!("{}/chat/completions", p.base_url.trim_end_matches('/')));
-                let mut fields = StreamLogFields::for_success(
-                    convert_candidates.first().map(String::as_str).unwrap_or(""),
-                    200,
-                    upstream_url.as_deref().unwrap_or(""),
-                    Some(&real_model),
-                    conversation_id.as_deref(),
-                    conversation_name_of(&headers).as_deref(),
-                );
-                fields.cost = profile
-                    .as_ref()
-                    .and_then(|p| lookup_model_cost(p, &real_model));
-                let converter = ChatSseToResponses::new(&real_model);
-                let transform = ResponsesStreamTransform::new(
-                    resp.into_body().into_data_stream(),
-                    converter,
-                    fields,
-                );
-                builder.body(Body::from_stream(transform)).unwrap()
-            }
+            Ok(resp) => resp,
             Err(e) => (
                 StatusCode::BAD_GATEWAY,
                 Json(
@@ -1988,25 +1830,6 @@ fn stream_log_entry(
     build_log_entry(&fields, usage)
 }
 
-/// Profiles in `names` whose declared mode keeps them in the given branch.
-fn filter_profiles(
-    config: &crate::config::PiSwitchConfig,
-    names: &[String],
-    keep: fn(&ProviderProfile) -> bool,
-) -> Vec<String> {
-    names
-        .iter()
-        .filter(|name| {
-            config
-                .profiles
-                .get(*name)
-                .and_then(|value| serde_json::from_value::<ProviderProfile>(value.clone()).ok())
-                .is_some_and(|profile| keep(&profile))
-        })
-        .cloned()
-        .collect()
-}
-
 fn is_native_responses_passthrough(profile: &ProviderProfile) -> bool {
     profile.api == "openai-responses"
         && matches!(
@@ -2099,7 +1922,35 @@ fn buffered_response(
     })
 }
 
-async fn forward_responses_passthrough(
+/// Log a failed attempt against one candidate (retryable, non-retryable, or
+/// transport error) — shared by the mixed failover loops.
+#[allow(clippy::too_many_arguments)]
+async fn log_failed_attempt(
+    name: &str,
+    error: Option<&str>,
+    status: Option<u16>,
+    url: Option<&str>,
+    model: Option<&str>,
+    conversation_id: Option<&str>,
+    conversation_name: Option<&str>,
+) {
+    log_request(
+        name,
+        false,
+        error,
+        status,
+        url,
+        None,
+        model,
+        None,
+        conversation_id,
+        conversation_name,
+        None,
+    )
+    .await
+}
+
+async fn forward_responses_mixed(
     config: &crate::config::PiSwitchConfig,
     candidates: &[String],
     body: &Value,
@@ -2112,6 +1963,8 @@ async fn forward_responses_passthrough(
     let mut circuit_state = read_circuit_state().await;
     let global_spoof = config.settings.proxy.user_agent.as_deref();
     let mut half_open_used = false;
+    // Remembered so a conversion failure only surfaces if the whole chain fails.
+    let mut conversion_error: Option<ResponsesConversionError> = None;
     let mut out_body = body.clone();
     if !real_model.is_empty() {
         out_body["model"] = json!(real_model);
@@ -2120,10 +1973,33 @@ async fn forward_responses_passthrough(
 
     for name in candidates {
         let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
-        if is_open || (is_half_open && half_open_used) {
+        if is_open {
+            log_failed_attempt(
+                name,
+                Some("circuit_open"),
+                None,
+                None,
+                body.get("model").and_then(|v| v.as_str()),
+                conversation_id,
+                conversation_name.as_deref(),
+            )
+            .await;
             continue;
         }
         if is_half_open {
+            if half_open_used {
+                log_failed_attempt(
+                    name,
+                    Some("half_open_already_probing"),
+                    None,
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    conversation_id,
+                    conversation_name.as_deref(),
+                )
+                .await;
+                continue;
+            }
             half_open_used = true;
         }
         let Some(profile_value) = config.profiles.get(name) else {
@@ -2132,19 +2008,37 @@ async fn forward_responses_passthrough(
         let Ok(profile) = serde_json::from_value::<ProviderProfile>(profile_value.clone()) else {
             continue;
         };
-        if !is_native_responses_passthrough(&profile) {
+        let is_native = is_native_responses_passthrough(&profile);
+        let is_convert = is_chat_completions_convert(&profile);
+        if !is_native && !is_convert {
             continue;
         }
         let effective_spoof = profile.spoof.as_deref().or(global_spoof);
         let (client, user_agent, disguise) = build_disguised_client(effective_spoof);
         let api_key = crate::config::resolve_env(&profile.api_key);
-        let url = format!("{}/responses", profile.base_url.trim_end_matches('/'));
+        let base = profile.base_url.trim_end_matches('/');
+        let url = if is_native {
+            format!("{base}/responses")
+        } else {
+            format!("{base}/chat/completions")
+        };
         let request_headers =
             build_upstream_headers(headers, &profile, &api_key, user_agent.as_ref(), &disguise);
+        let send_body = if is_native {
+            body.clone()
+        } else {
+            match responses_to_chat(body) {
+                Ok(converted) => converted,
+                Err(error) => {
+                    conversion_error = Some(error);
+                    continue;
+                }
+            }
+        };
         let response = client
             .post(&url)
             .headers(request_headers)
-            .json(body)
+            .json(&send_body)
             .send()
             .await;
 
@@ -2153,25 +2047,98 @@ async fn forward_responses_passthrough(
                 let status = upstream.status();
                 let response_headers = upstream.headers().clone();
                 let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
-                let usage = serde_json::from_slice::<Value>(&body_bytes)
-                    .ok()
-                    .and_then(|value| crate::usage::extract_usage(&value));
                 record_success(name, is_half_open).await;
-                log_request(
-                    name,
-                    true,
-                    None,
-                    Some(status.as_u16()),
-                    Some(&url),
-                    None,
-                    body.get("model").and_then(|v| v.as_str()),
-                    usage,
-                    conversation_id,
-                    conversation_name.as_deref(),
-                    lookup_model_cost(&profile, real_model),
-                )
-                .await;
-                return Ok(buffered_response(status, &response_headers, body_bytes));
+                let model = body.get("model").and_then(|v| v.as_str());
+                if is_native {
+                    let usage = serde_json::from_slice::<Value>(&body_bytes)
+                        .ok()
+                        .and_then(|value| crate::usage::extract_usage(&value));
+                    log_request(
+                        name,
+                        true,
+                        None,
+                        Some(status.as_u16()),
+                        Some(&url),
+                        None,
+                        model,
+                        usage,
+                        conversation_id,
+                        conversation_name.as_deref(),
+                        lookup_model_cost(&profile, real_model),
+                    )
+                    .await;
+                    return Ok(buffered_response(status, &response_headers, body_bytes));
+                }
+                // Convert: map the chat body to Responses semantics.
+                match serde_json::from_slice::<Value>(&body_bytes) {
+                    Ok(chat) => {
+                        let usage = crate::usage::extract_usage(&chat);
+                        match chat_response_to_responses(
+                            chat,
+                            real_model,
+                            Some(chrono::Utc::now().timestamp() as u64),
+                        ) {
+                            Ok(responses_body) => {
+                                log_request(
+                                    name,
+                                    true,
+                                    None,
+                                    Some(status.as_u16()),
+                                    Some(&url),
+                                    None,
+                                    model,
+                                    usage,
+                                    conversation_id,
+                                    conversation_name.as_deref(),
+                                    lookup_model_cost(&profile, real_model),
+                                )
+                                .await;
+                                let s = serde_json::to_string(&responses_body).unwrap_or_default();
+                                return Ok(Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/json")
+                                    .body(Body::from(s))
+                                    .unwrap());
+                            }
+                            Err(error) => {
+                                log_request(
+                                    name,
+                                    false,
+                                    Some("conversion_error"),
+                                    Some(status.as_u16()),
+                                    Some(&url),
+                                    None,
+                                    model,
+                                    None,
+                                    conversation_id,
+                                    conversation_name.as_deref(),
+                                    None,
+                                )
+                                .await;
+                                conversion_error = Some(error);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // 2xx but not JSON: pass through unchanged rather than
+                        // fabricating a response.
+                        log_request(
+                            name,
+                            true,
+                            None,
+                            Some(status.as_u16()),
+                            Some(&url),
+                            None,
+                            model,
+                            None,
+                            conversation_id,
+                            conversation_name.as_deref(),
+                            None,
+                        )
+                        .await;
+                        return Ok(buffered_response(status, &response_headers, body_bytes));
+                    }
+                }
             }
             Ok(upstream) if should_retry(upstream.status().as_u16()) => {
                 let status = upstream.status().as_u16();
@@ -2182,18 +2149,14 @@ async fn forward_responses_passthrough(
                     is_half_open,
                 )
                 .await;
-                log_request(
+                log_failed_attempt(
                     name,
-                    false,
                     Some(&format!("HTTP {status}")),
                     Some(status),
                     Some(&url),
-                    None,
                     body.get("model").and_then(|v| v.as_str()),
-                    None,
                     conversation_id,
                     conversation_name.as_deref(),
-                    None,
                 )
                 .await;
                 circuit_state = read_circuit_state().await;
@@ -2202,18 +2165,14 @@ async fn forward_responses_passthrough(
                 let status = upstream.status();
                 let response_headers = upstream.headers().clone();
                 let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
-                log_request(
+                log_failed_attempt(
                     name,
-                    false,
                     None,
                     Some(status.as_u16()),
                     Some(&url),
-                    None,
                     body.get("model").and_then(|v| v.as_str()),
-                    None,
                     conversation_id,
                     conversation_name.as_deref(),
-                    None,
                 )
                 .await;
                 return Ok(buffered_response(status, &response_headers, body_bytes));
@@ -2221,26 +2180,239 @@ async fn forward_responses_passthrough(
             Err(error) => {
                 let message = error.to_string();
                 record_failure(name, circuit_settings, &message, is_half_open).await;
-                log_request(
+                log_failed_attempt(
                     name,
-                    false,
                     Some(&message),
                     None,
                     None,
-                    None,
                     body.get("model").and_then(|v| v.as_str()),
-                    None,
                     conversation_id,
                     conversation_name.as_deref(),
-                    None,
                 )
                 .await;
                 circuit_state = read_circuit_state().await;
             }
         }
     }
+    if let Some(error) = conversion_error {
+        return Ok(conversion_error_response(&error));
+    }
     Err(AppError::proxy(
         "All Responses upstream attempts failed".to_string(),
+    ))
+}
+
+/// Route a Responses streaming request through candidates in order, dispatching
+/// each by its declared mode: native providers stream through untouched,
+/// Chat Completions providers are translated into Responses SSE events. Failover
+/// may move across modes before any header/event reaches the client.
+async fn forward_responses_mixed_stream(
+    config: &crate::config::PiSwitchConfig,
+    candidates: &[String],
+    body: &Value,
+    real_model: &str,
+    headers: &HeaderMap,
+    conversation_id: Option<&str>,
+) -> Result<Response> {
+    let conversation_name = conversation_name_of(headers);
+    let circuit_settings = &config.settings.proxy.circuit_breaker;
+    let mut circuit_state = read_circuit_state().await;
+    let global_spoof = config.settings.proxy.user_agent.as_deref();
+    let mut half_open_used = false;
+    let mut conversion_error: Option<ResponsesConversionError> = None;
+    let mut out_body = body.clone();
+    if !real_model.is_empty() {
+        out_body["model"] = json!(real_model);
+    }
+    let body = &out_body;
+
+    for name in candidates {
+        let (is_open, is_half_open) = is_circuit_open(&circuit_state, name, circuit_settings);
+        if is_open {
+            log_failed_attempt(
+                name,
+                Some("circuit_open"),
+                None,
+                None,
+                body.get("model").and_then(|v| v.as_str()),
+                conversation_id,
+                conversation_name.as_deref(),
+            )
+            .await;
+            continue;
+        }
+        if is_half_open {
+            if half_open_used {
+                log_failed_attempt(
+                    name,
+                    Some("half_open_already_probing"),
+                    None,
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    conversation_id,
+                    conversation_name.as_deref(),
+                )
+                .await;
+                continue;
+            }
+            half_open_used = true;
+        }
+        let Some(profile_value) = config.profiles.get(name) else {
+            continue;
+        };
+        let Ok(profile) = serde_json::from_value::<ProviderProfile>(profile_value.clone()) else {
+            continue;
+        };
+        let is_native = is_native_responses_passthrough(&profile);
+        let is_convert = is_chat_completions_convert(&profile);
+        if !is_native && !is_convert {
+            continue;
+        }
+        let effective_spoof = profile.spoof.as_deref().or(global_spoof);
+        let (client, user_agent, disguise) = build_disguised_client(effective_spoof);
+        let api_key = crate::config::resolve_env(&profile.api_key);
+        let base = profile.base_url.trim_end_matches('/');
+        let url = if is_native {
+            format!("{base}/responses")
+        } else {
+            format!("{base}/chat/completions")
+        };
+        let request_headers =
+            build_upstream_headers(headers, &profile, &api_key, user_agent.as_ref(), &disguise);
+        let send_body = if is_native {
+            body.clone()
+        } else {
+            match responses_to_chat(body) {
+                Ok(mut converted) => {
+                    converted["stream"] = json!(true);
+                    converted
+                }
+                Err(error) => {
+                    conversion_error = Some(error);
+                    continue;
+                }
+            }
+        };
+        let response = client
+            .post(&url)
+            .headers(request_headers)
+            .json(&send_body)
+            .send()
+            .await;
+
+        match response {
+            Ok(upstream) if upstream.status().is_success() => {
+                let status = upstream.status().as_u16();
+                let model = body.get("model").and_then(|v| v.as_str());
+                if is_native {
+                    record_success(name, is_half_open).await;
+                    let mut fields = StreamLogFields::for_success(
+                        name,
+                        status,
+                        &url,
+                        model,
+                        conversation_id,
+                        conversation_name.as_deref(),
+                    );
+                    fields.cost = lookup_model_cost(&profile, real_model);
+                    return Ok(stream_response(upstream, Some(fields)));
+                }
+                // Convert: the upstream must be an SSE stream; anything else is
+                // an upstream error passed through as-is, not a success.
+                let is_sse = upstream
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|t| t.contains("event-stream"));
+                if !is_sse {
+                    let response_status = upstream.status();
+                    let response_headers = upstream.headers().clone();
+                    let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
+                    return Ok(buffered_response(
+                        response_status,
+                        &response_headers,
+                        body_bytes,
+                    ));
+                }
+                record_success(name, is_half_open).await;
+                let mut builder = Response::builder().status(200);
+                for (header_name, value) in forward_headers(upstream.headers()) {
+                    builder = builder.header(header_name, value);
+                }
+                builder = builder.header("content-type", "text/event-stream");
+                let mut fields = StreamLogFields::for_success(
+                    name,
+                    200,
+                    &url,
+                    model,
+                    conversation_id,
+                    conversation_name.as_deref(),
+                );
+                fields.cost = lookup_model_cost(&profile, real_model);
+                let converter = ChatSseToResponses::new(real_model);
+                let transform =
+                    ResponsesStreamTransform::new(upstream.bytes_stream(), converter, fields);
+                return Ok(builder.body(Body::from_stream(transform)).unwrap());
+            }
+            Ok(upstream) if should_retry(upstream.status().as_u16()) => {
+                let status = upstream.status().as_u16();
+                record_failure(
+                    name,
+                    circuit_settings,
+                    &format!("HTTP {status}"),
+                    is_half_open,
+                )
+                .await;
+                log_failed_attempt(
+                    name,
+                    Some(&format!("HTTP {status}")),
+                    Some(status),
+                    Some(&url),
+                    body.get("model").and_then(|v| v.as_str()),
+                    conversation_id,
+                    conversation_name.as_deref(),
+                )
+                .await;
+                circuit_state = read_circuit_state().await;
+            }
+            Ok(upstream) => {
+                let status = upstream.status();
+                let response_headers = upstream.headers().clone();
+                let body_bytes = upstream.bytes().await.unwrap_or_default().to_vec();
+                log_failed_attempt(
+                    name,
+                    None,
+                    Some(status.as_u16()),
+                    Some(&url),
+                    body.get("model").and_then(|v| v.as_str()),
+                    conversation_id,
+                    conversation_name.as_deref(),
+                )
+                .await;
+                return Ok(buffered_response(status, &response_headers, body_bytes));
+            }
+            Err(error) => {
+                let message = error.to_string();
+                record_failure(name, circuit_settings, &message, is_half_open).await;
+                log_failed_attempt(
+                    name,
+                    Some(&message),
+                    None,
+                    None,
+                    body.get("model").and_then(|v| v.as_str()),
+                    conversation_id,
+                    conversation_name.as_deref(),
+                )
+                .await;
+                circuit_state = read_circuit_state().await;
+            }
+        }
+    }
+    if let Some(error) = conversion_error {
+        return Ok(conversion_error_response(&error));
+    }
+    Err(AppError::proxy(
+        "All Responses streaming attempts failed".to_string(),
     ))
 }
 
@@ -3183,6 +3355,157 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_mixed_failover_non_streaming_convert_then_native() {
+        // Primary candidate is a convert (openai-completions) profile that fails
+        // retryably; the failover chain carries a native (openai-responses)
+        // candidate. The request must fail over across modes.
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let native_body = serde_json::json!({
+            "id": "resp-native",
+            "object": "response",
+            "model": "model-a",
+            "output": [{ "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "native" }] }],
+            "usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 }
+        });
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let native_body = native_body.clone();
+                async move {
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(native_body.to_string()))
+                        .unwrap()
+                }
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["native"],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["id"], "resp-native");
+        assert_eq!(value["output"][0]["content"][0]["text"], "native");
+        chat_server.abort();
+        native_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_mixed_failover_non_streaming_native_then_convert() {
+        // Primary candidate is a native profile that fails retryably; the
+        // failover chain carries a convert candidate. Falls back to conversion.
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move || async move {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "chatcmpl-c",
+                            "choices": [{ "message": { "role": "assistant", "content": "converted" }, "finish_reason": "stop" }],
+                            "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 }
+                        }).to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["chat"],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "native/model-a", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["object"], "response");
+        assert_eq!(value["output"][0]["content"][0]["text"], "converted");
+        native_server.abort();
+        chat_server.abort();
+    }
+
+    #[tokio::test]
     async fn responses_streaming_preserves_sse_and_records_usage() {
         let upstream_sse = concat!(
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n",
@@ -3616,6 +3939,376 @@ mod tests {
         assert_eq!(value["error"]["type"], "invalid_request_error");
         assert_eq!(value["error"]["message"], "bad");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_mixed_failover_convert_then_native() {
+        // stream:true, primary convert candidate returns 503; the failover
+        // chain carries a native candidate that streams native Responses SSE.
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let native_sse = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"native-stream\"}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let native_sse = native_sse.clone();
+                async move {
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(native_sse))
+                        .unwrap()
+                }
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["native"],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), native_sse);
+        chat_server.abort();
+        native_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_streaming_mixed_failover_native_then_convert() {
+        // stream:true, primary native candidate returns 503; failover chain
+        // carries a convert candidate whose Chat SSE is translated to
+        // Responses events.
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let chat_sse = concat!(
+            "data: {\"id\":\"chatcmpl-m\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-m\",\"choices\":[{\"delta\":{\"content\":\"conv-stream\"},\"index\":0}]}\n\n",
+            "data: {\"id\":\"chatcmpl-m\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move || {
+                let chat_sse = chat_sse.clone();
+                async move {
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(chat_sse))
+                        .unwrap()
+                }
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["chat"],
+        );
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "native/model-a", "input": "hi", "stream": true })
+                .to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("response.output_text.delta"), "body: {text}");
+        assert!(text.contains("conv-stream"), "body: {text}");
+        assert!(text.contains("response.completed"), "body: {text}");
+        assert!(
+            !text.contains("chatcmpl-m"),
+            "must not leak chat frames: {text}"
+        );
+        native_server.abort();
+        chat_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_mixed_modes_do_not_pollute_each_other() {
+        // One config with both a native and a convert profile; a passthrough
+        // request must only hit /v1/responses and a convert request only
+        // /v1/chat/completions — the modes must not cross-contaminate.
+        let native_hits = Arc::new(Mutex::new(0usize));
+        let native_hits_up = native_hits.clone();
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(move || {
+                let hits = native_hits_up.clone();
+                async move {
+                    *hits.lock().unwrap() += 1;
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "id": "resp-native", "object": "response", "model": "model-a", "output": [] })
+                                .to_string(),
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let chat_hits = Arc::new(Mutex::new(0usize));
+        let chat_hits_up = chat_hits.clone();
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(move || {
+                let hits = chat_hits_up.clone();
+                async move {
+                    *hits.lock().unwrap() += 1;
+                    axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "id": "chatcmpl-iso",
+                                "choices": [{ "message": { "role": "assistant", "content": "ok" }, "finish_reason": "stop" }],
+                                "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap()
+                }
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec![],
+        );
+
+        // Passthrough request -> only /v1/responses.
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "native/model-a", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["id"], "resp-native");
+        assert_eq!(*native_hits.lock().unwrap(), 1);
+        assert_eq!(
+            *chat_hits.lock().unwrap(),
+            0,
+            "convert upstream must not be touched"
+        );
+
+        // Convert request -> only /v1/chat/completions.
+        let response = handle_responses_with_config(
+            &config,
+            HeaderMap::new(),
+            serde_json::json!({ "model": "chat/model-a", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["object"], "response");
+        assert_eq!(value["output"][0]["content"][0]["text"], "ok");
+        assert_eq!(*chat_hits.lock().unwrap(), 1);
+        assert_eq!(
+            *native_hits.lock().unwrap(),
+            1,
+            "passthrough upstream must not be touched by the convert request"
+        );
+
+        native_server.abort();
+        chat_server.abort();
+    }
+
+    #[tokio::test]
+    async fn responses_mixed_failover_logs_both_attempts() {
+        // Mixed chain (convert 503 then native 200) must leave both a failed
+        // attempt and a successful entry in the request log.
+        let chat_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let chat_address = chat_listener.local_addr().unwrap();
+        let chat_upstream = Router::new().route(
+            "/v1/chat/completions",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(Body::from("unavailable"))
+                    .unwrap()
+            }),
+        );
+        let chat_server = tokio::spawn(async move {
+            axum::serve(chat_listener, chat_upstream).await.unwrap();
+        });
+        let native_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let native_address = native_listener.local_addr().unwrap();
+        let native_upstream = Router::new().route(
+            "/v1/responses",
+            post(async || {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "resp-log", "object": "response", "model": "model-a",
+                            "output": [],
+                            "usage": { "input_tokens": 10, "output_tokens": 5, "total_tokens": 15 }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap()
+            }),
+        );
+        let native_server = tokio::spawn(async move {
+            axum::serve(native_listener, native_upstream).await.unwrap();
+        });
+        let config = cfg(
+            serde_json::json!({
+                "chat": {
+                    "api": "openai-completions",
+                    "responsesMode": "convert",
+                    "baseUrl": format!("http://{}/v1", chat_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                },
+                "native": {
+                    "api": "openai-responses",
+                    "responsesMode": "passthrough",
+                    "baseUrl": format!("http://{}/v1", native_address),
+                    "apiKey": "key",
+                    "exposedModels": ["model-a"]
+                }
+            }),
+            vec!["native"],
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-conversation-id",
+            HeaderValue::from_static("conv-mixed-log"),
+        );
+        let response = handle_responses_with_config(
+            &config,
+            headers,
+            serde_json::json!({ "model": "chat/model-a", "input": "hi" }).to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let log_dir = super::init_test_state_dir();
+        let log_text = std::fs::read_to_string(log_dir.join("requests.log")).expect("log written");
+        let rows: Vec<serde_json::Value> = log_text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|value| value["conversationId"] == "conv-mixed-log")
+            .collect();
+        let chat_row = rows
+            .iter()
+            .find(|r| r["provider"] == "chat")
+            .expect("chat attempt logged");
+        assert_eq!(chat_row["ok"], false);
+        assert!(chat_row["error"].as_str().unwrap().contains("503"));
+        let native_row = rows
+            .iter()
+            .find(|r| r["provider"] == "native")
+            .expect("native success logged");
+        assert_eq!(native_row["ok"], true);
+        assert_eq!(native_row["promptTokens"], 10);
+        assert_eq!(native_row["completionTokens"], 5);
+        chat_server.abort();
+        native_server.abort();
     }
 
     #[tokio::test]
