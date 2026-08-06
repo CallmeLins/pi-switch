@@ -1,0 +1,5 @@
+interface:
+  display_name: "Grill to Spec"
+  short_description: "从模糊想法到可执行 Spec — 只打磨设计、产出领域文档与 Spec，不写代码"
+policy:
+  allow_implicit_invocation: false

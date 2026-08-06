@@ -1,0 +1,5 @@
+interface:
+  display_name: "TDD Implement"
+  short_description: "Implement from spec/ticket via TDD red-green loop"
+policy:
+  allow_implicit_invocation: false

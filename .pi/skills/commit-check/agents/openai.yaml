@@ -1,0 +1,5 @@
+interface:
+  display_name: "Commit Check"
+  short_description: "提交前门禁：审查文档、对齐 README、保持目录卫生、规范 commit message"
+policy:
+  allow_implicit_invocation: false

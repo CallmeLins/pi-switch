@@ -1,0 +1,5 @@
+interface:
+  display_name: "Diagnose Fix"
+  short_description: "诊断硬 bug 并按 TDD 红-绿修复"
+policy:
+  allow_implicit_invocation: false
