@@ -115,8 +115,35 @@ pub struct CircuitStateStore {
 
 // ─── Circuit breaker ──────────────────────────────────────
 
+/// Per-process temp dir that proxy tests redirect runtime state (requests.log,
+/// circuit.json) to, so unit tests never pollute the real ~/.pi-switch directory.
+#[cfg(test)]
+pub(crate) fn init_test_state_dir() -> &'static PathBuf {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("pi-switch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test state dir");
+        dir
+    })
+}
+
+/// Where proxy runtime state (requests.log, circuit.json) lives.
+/// Tests redirect this to a per-process temp dir.
+fn state_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        init_test_state_dir().clone()
+    }
+    #[cfg(not(test))]
+    {
+        config_dir()
+    }
+}
+
 fn circuit_path() -> PathBuf {
-    config_dir().join("circuit.json")
+    state_dir().join("circuit.json")
 }
 
 pub async fn read_circuit_state() -> CircuitStateStore {
@@ -1970,7 +1997,7 @@ fn append_log_line(entry: &Value) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let log_path = config_dir().join("requests.log");
+    let log_path = state_dir().join("requests.log");
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
@@ -2177,10 +2204,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_responses_records_usage_and_conversation_in_log() {
-        let log_dir = std::env::temp_dir().join(format!("pi-switch-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&log_dir);
-        std::env::set_var("PI_SWITCH_CONFIG_DIR", &log_dir);
-        std::env::set_var("PI_SWITCH_CIRCUIT_DIR", &log_dir);
+        let log_dir = super::init_test_state_dir().clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let upstream = Router::new().route(
@@ -2256,9 +2280,6 @@ mod tests {
         assert_eq!(entry["cachedTokens"], 40);
         assert_eq!(entry["reasoningTokens"], 5);
         server.abort();
-        let _ = std::fs::remove_dir_all(&log_dir);
-        std::env::remove_var("PI_SWITCH_CONFIG_DIR");
-        std::env::remove_var("PI_SWITCH_CIRCUIT_DIR");
     }
 
     #[tokio::test]
@@ -2288,6 +2309,15 @@ mod tests {
             "unexpected response: {body}"
         );
         assert!(body.contains("No upstream exposes model 'missing/model'"));
+    }
+
+    #[test]
+    fn append_log_line_writes_to_test_isolated_dir() {
+        let dir = super::init_test_state_dir();
+        let log_path = dir.join("requests.log");
+        super::append_log_line(&serde_json::json!({ "probe": "isolation" }));
+        let text = std::fs::read_to_string(&log_path).expect("log written to isolated dir");
+        assert!(text.contains("\"probe\":\"isolation\""));
     }
 
     #[test]
