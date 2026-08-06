@@ -23,4 +23,5 @@
 - 测试结果：Rust `cargo test` 175 passed（含 3 个新端到端测试）；WebUI Vitest 94 passed
 - typecheck：`cargo check` 通过；新增代码 rustfmt 通过；clippy 无新增 warning
 - 文档对齐：更新 `README.md` / `README_ZH.md` 网关特性行（原生 OpenAI Responses 透传）
-- 遗留 / 后续建议：① 修复了 `append_log_line` 并发写入竞态（全局锁串行化，防止日志行黏连）——真实并发代理请求同样受益；② `PI_SWITCH_CONFIG_DIR` 环境变量新增用于测试隔离日志目录，不影响默认行为；③ streaming 透传与 Chat→Responses SSE 转换由 tickets 04/05 继续；④ 熔断跳过的候选暂未写日志行（与既有 chat 路径的 circuit_open 日志不一致，可后续补）
+- 遗留 / 后续建议：① 修复了 `append_log_line` 并发写入竞态（全局锁串行化，防止日志行黏连）——真实并发代理请求同样受益；② streaming 透传与 Chat→Responses SSE 转换由 tickets 04/05 继续；③ 熔断跳过的候选暂未写日志行（与既有 chat 路径的 circuit_open 日志不一致，可后续补）
+- 后续修复（`8f5a9b0` — `fix(test): isolate proxy tests from real log`）：原 `PI_SWITCH_CONFIG_DIR` 仅隔离了单个日志测试，另两个透传测试仍写真实 `~/.pi-switch/requests.log` 造成 webui 统计污染（`native/model-a` 条目）。改为 proxy 测试状态目录统一重定向：`state_dir()` 在 `#[cfg(test)]` 下指向 per-process temp（`init_test_state_dir`），`append_log_line` 与 `circuit_path` 均经它解析；移除 env 覆盖机制。修复后全量测试不再写真实日志（行数不变），并清理了已污染数据（备份 `~/.pi-switch/requests.log.bak-test-pollution-*`）

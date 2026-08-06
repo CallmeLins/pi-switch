@@ -297,11 +297,6 @@ impl Default for PiSwitchConfig {
 // ─── Paths ────────────────────────────────────────────────
 
 pub fn config_dir() -> PathBuf {
-    if let Ok(override_dir) = std::env::var("PI_SWITCH_CONFIG_DIR") {
-        if !override_dir.trim().is_empty() {
-            return PathBuf::from(override_dir);
-        }
-    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".pi-switch")
