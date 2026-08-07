@@ -8,7 +8,7 @@
   },
   "main": "./index.js",
   "napi": {
-    "name": "pi-switch-native",
+    "binaryName": "pi-switch-native",
     "targets": [
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
