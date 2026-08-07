@@ -2879,10 +2879,7 @@ const COST_PER_MILLION_TOKENS: f64 = 1_000_000.0;
 /// Look up a model's unit prices in its provider profile (already parsed at
 /// the call site, so prices are frozen at request time). `None` (unknown
 /// model or no `cost` configured) means the request's cost is unknown.
-fn lookup_model_cost(
-    profile: &ProviderProfile,
-    model: &str,
-) -> Option<crate::config::ModelCost> {
+fn lookup_model_cost(profile: &ProviderProfile, model: &str) -> Option<crate::config::ModelCost> {
     profile
         .models
         .iter()
@@ -3968,7 +3965,7 @@ mod tests {
         let native_upstream = Router::new().route(
             "/v1/responses",
             post(move || {
-                let native_sse = native_sse.clone();
+                let native_sse = native_sse;
                 async move {
                     axum::response::Response::builder()
                         .status(StatusCode::OK)
@@ -4044,7 +4041,7 @@ mod tests {
         let chat_upstream = Router::new().route(
             "/v1/chat/completions",
             post(move || {
-                let chat_sse = chat_sse.clone();
+                let chat_sse = chat_sse;
                 async move {
                     axum::response::Response::builder()
                         .status(StatusCode::OK)
@@ -4880,10 +4877,7 @@ mod tests {
         );
 
         let mut both = HeaderMap::new();
-        both.insert(
-            "x-conversation-id",
-            HeaderValue::from_static("conv-header"),
-        );
+        both.insert("x-conversation-id", HeaderValue::from_static("conv-header"));
         both.insert(
             "x-opencode-session",
             HeaderValue::from_static("019fc02b-session"),
@@ -4998,10 +4992,7 @@ mod tests {
         // decoding would yield invalid UTF-8 (0xEF alone), so the raw
         // value is kept instead of being mis-decoded.
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-conversation-name",
-            HeaderValue::from_static("100%EF"),
-        );
+        headers.insert("x-conversation-name", HeaderValue::from_static("100%EF"));
         assert_eq!(
             super::conversation_name_of(&headers),
             Some("100%EF".to_string())
@@ -5195,7 +5186,10 @@ mod tests {
             cost: Some(cost),
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
-        assert_eq!(entry["costTotal"], 0.00025, "costTotal is written with per-1M-token prices");
+        assert_eq!(
+            entry["costTotal"], 0.00025,
+            "costTotal is written with per-1M-token prices"
+        );
     }
 
     #[test]
@@ -5218,7 +5212,11 @@ mod tests {
             cost: None,
         };
         let entry = super::build_log_entry(&fields, Some(&usage));
-        assert_eq!(entry["costTotal"], serde_json::Value::Null, "no price means unknown cost");
+        assert_eq!(
+            entry["costTotal"],
+            serde_json::Value::Null,
+            "no price means unknown cost"
+        );
 
         let fields_with_price = super::StreamLogFields {
             cost: Some(crate::config::ModelCost {
@@ -5232,7 +5230,11 @@ mod tests {
             ..fields
         };
         let entry = super::build_log_entry(&fields_with_price, None);
-        assert_eq!(entry["costTotal"], serde_json::Value::Null, "no usage means unknown cost");
+        assert_eq!(
+            entry["costTotal"],
+            serde_json::Value::Null,
+            "no usage means unknown cost"
+        );
     }
 
     type TeeSlot = (
@@ -5569,7 +5571,10 @@ mod tests {
             extra: Default::default(),
         };
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 0.00025, "(200-120)*2 + 120*0.5 + 30*1, per 1M tokens") ;
+        assert_eq!(
+            total, 0.00025,
+            "(200-120)*2 + 120*0.5 + 30*1, per 1M tokens"
+        );
     }
     #[test]
     fn compute_cost_uses_tier_price_when_input_tokens_reach_threshold() {
@@ -5595,9 +5600,15 @@ mod tests {
             extra: Default::default(),
         };
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 0.000085, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens");
+        assert_eq!(
+            total, 0.000085,
+            "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens"
+        );
         let total = super::compute_cost(&usage, &cost);
-        assert_eq!(total, 0.000085, "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens");
+        assert_eq!(
+            total, 0.000085,
+            "tier prices: (200-120)*0.5 + 120*0.25 + 30*0.5, per 1M tokens"
+        );
     }
 
     #[test]

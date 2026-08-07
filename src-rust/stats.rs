@@ -449,7 +449,13 @@ pub fn aggregate_paged(
         by_provider: HashMap::new(),
         by_model: HashMap::new(),
         circuit_breaker,
-        total_tokens: TokenTotals { input: 0, output: 0, total: 0, cached: 0, reasoning: 0 },
+        total_tokens: TokenTotals {
+            input: 0,
+            output: 0,
+            total: 0,
+            cached: 0,
+            reasoning: 0,
+        },
         cache_hit_rate: "-".into(),
         total_cost: None,
         cost_unknown: 0,
@@ -506,18 +512,20 @@ pub fn aggregate_paged(
             .filter(|s| !s.is_empty())
             .unwrap_or("unlabeled")
             .to_string();
-        let conv = conversations.entry(key.clone()).or_insert_with(|| ConversationStats {
-            conversation_id: key.clone(),
-            name: None,
-            requests: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cached_tokens: 0,
-            reasoning_tokens: 0,
-            last_active: None,
-            cache_rate: "-".into(),
-            cost: None,
-        });
+        let conv = conversations
+            .entry(key.clone())
+            .or_insert_with(|| ConversationStats {
+                conversation_id: key.clone(),
+                name: None,
+                requests: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+                last_active: None,
+                cache_rate: "-".into(),
+                cost: None,
+            });
         conv.requests += 1;
         // Name: newest named row in the window wins (log order is
         // chronological). Never a grouping key — ADR-0002.
@@ -707,11 +715,11 @@ pub fn parse_window_query(
     let from_ms = from
         .parse::<u64>()
         .map_err(|_| format!("invalid from: {from}"))?;
-    let to_ms = to
-        .parse::<u64>()
-        .map_err(|_| format!("invalid to: {to}"))?;
+    let to_ms = to.parse::<u64>().map_err(|_| format!("invalid to: {to}"))?;
     if from_ms >= to_ms {
-        return Err(format!("invalid window: from ({from_ms}) must be < to ({to_ms})"));
+        return Err(format!(
+            "invalid window: from ({from_ms}) must be < to ({to_ms})"
+        ));
     }
     Ok(Some((from_ms, to_ms)))
 }
@@ -736,7 +744,15 @@ pub fn get_stats_paged(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    aggregate_paged(&entries, &circuit_entries, cooldown_ms, now_ms, window, page.unwrap_or(0), limit.unwrap_or(100))
+    aggregate_paged(
+        &entries,
+        &circuit_entries,
+        cooldown_ms,
+        now_ms,
+        window,
+        page.unwrap_or(0),
+        limit.unwrap_or(100),
+    )
 }
 
 /// Aggregate request-log entries into per-conversation stats, paging the
@@ -755,22 +771,26 @@ pub fn aggregate_conversations_paged(
         if !in_window(entry, window) {
             continue;
         }
-        let key = entry.conversation_id.as_deref()
+        let key = entry
+            .conversation_id
+            .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or("unlabeled")
             .to_string();
-        let conv = conversations.entry(key.clone()).or_insert_with(|| ConversationStats {
-            conversation_id: key.clone(),
-            name: None,
-            requests: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            cached_tokens: 0,
-            reasoning_tokens: 0,
-            last_active: None,
-            cache_rate: "-".into(),
-            cost: None,
-        });
+        let conv = conversations
+            .entry(key.clone())
+            .or_insert_with(|| ConversationStats {
+                conversation_id: key.clone(),
+                name: None,
+                requests: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+                last_active: None,
+                cache_rate: "-".into(),
+                cost: None,
+            });
         conv.requests += 1;
         // Name: newest named row in the window wins (log order is
         // chronological). Never a grouping key — ADR-0002.
@@ -855,7 +875,12 @@ pub fn get_conversation_requests(
     limit: Option<usize>,
 ) -> (Vec<RecentRequest>, usize) {
     let entries = parse_logs();
-    aggregate_conversation_requests(&entries, conversation_id, page.unwrap_or(0), limit.unwrap_or(100))
+    aggregate_conversation_requests(
+        &entries,
+        conversation_id,
+        page.unwrap_or(0),
+        limit.unwrap_or(100),
+    )
 }
 
 pub fn export_logs_json() -> crate::error::Result<String> {
@@ -897,11 +922,28 @@ fn csv_of(entries: &[RequestLogEntry]) -> String {
                 .unwrap_or(""),
             entry.converted.as_deref().unwrap_or(""),
             entry.upstream_url.as_deref().unwrap_or(""),
-            entry.prompt_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.completion_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.reasoning_tokens.map(|t| t.to_string()).unwrap_or_default(),
-            entry.conversation_id.as_deref().unwrap_or("").replace(',', ";").replace('\n', " "),
+            entry
+                .prompt_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .completion_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .cached_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .reasoning_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            entry
+                .conversation_id
+                .as_deref()
+                .unwrap_or("")
+                .replace(',', ";")
+                .replace('\n', " "),
             entry.cost_total.map(|c| c.to_string()).unwrap_or_default(),
         ));
     }
@@ -971,17 +1013,37 @@ mod tests {
 
     #[test]
     fn aggregate_sums_known_cost_and_counts_unknown_rows() {
-        let mut known1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut known1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         known1.cost_total = Some(0.25);
-        let mut known2 = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
+        let mut known2 = with_usage(
+            entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"),
+            200,
+            20,
+            0,
+        );
         known2.cost_total = Some(0.5);
-        let unknown = with_usage(entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"), 300, 30, 0);
+        let unknown = with_usage(
+            entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"),
+            300,
+            30,
+            0,
+        );
 
         // Failed and retried rows are outside the token/cost scope: their cost
         // (even when present) must not leak into totals.
         let mut failed = entry(false, "hyb", "m1", 40, "2026-08-02T10:00:03Z");
         failed.cost_total = Some(9.9);
-        let mut retry = with_usage(entry(true, "hyb", "m1", 50, "2026-08-02T10:00:04Z"), 100, 10, 0);
+        let mut retry = with_usage(
+            entry(true, "hyb", "m1", 50, "2026-08-02T10:00:04Z"),
+            100,
+            10,
+            0,
+        );
         retry.retry = Some(true);
         retry.cost_total = Some(9.9);
 
@@ -999,7 +1061,12 @@ mod tests {
     #[test]
     fn aggregate_total_cost_is_none_when_no_known_cost_rows() {
         let stats = aggregate(
-            &[with_usage(entry(true, "hyb", "m3", 10, "2026-08-02T10:00:00Z"), 100, 10, 0)],
+            &[with_usage(
+                entry(true, "hyb", "m3", 10, "2026-08-02T10:00:00Z"),
+                100,
+                10,
+                0,
+            )],
             &HashMap::new(),
             60_000,
             0,
@@ -1053,23 +1120,17 @@ mod tests {
             None,
         );
         let hyb = &stats.by_provider["hyb"];
-        assert_eq!(
-            hyb.cost,
-            Some(0.75),
-            "provider sums its known usage rows"
-        );
+        assert_eq!(hyb.cost, Some(0.75), "provider sums its known usage rows");
         assert_eq!(hyb.total, 4, "failed row still counts toward requests");
         assert_eq!(
-            hyb.cache_rate,
-            "66.7%",
+            hyb.cache_rate, "66.7%",
             "provider cache rate = cached / input (400/600)"
         );
         let other = &stats.by_provider["other"];
         assert_eq!(other.cost, None, "all-unknown provider shows no cost");
         assert_eq!(other.cache_rate, "0.0%", "input without cache renders 0.0%");
         assert_eq!(
-            stats.by_provider["flaky"].cache_rate,
-            "-",
+            stats.by_provider["flaky"].cache_rate, "-",
             "no countable usage renders a dash"
         );
     }
@@ -1098,13 +1159,7 @@ mod tests {
         );
         let failed = entry(false, "hyb", "deepseek-r", 40, "2026-08-02T10:00:03Z");
 
-        let stats = aggregate(
-            &[m1a, m1b, m2, failed],
-            &HashMap::new(),
-            60_000,
-            0,
-            None,
-        );
+        let stats = aggregate(&[m1a, m1b, m2, failed], &HashMap::new(), 60_000, 0, None);
         let ms = &stats.by_model["deepseek-r"];
         assert_eq!(ms.total, 3, "failed row counts toward requests");
         assert_eq!(ms.ok, 2);
@@ -1121,13 +1176,28 @@ mod tests {
 
     #[test]
     fn aggregate_conversation_cost_sums_known_rows_and_stays_none_when_all_unknown() {
-        let mut priced1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut priced1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         priced1.conversation_id = Some("conv-a".into());
         priced1.cost_total = Some(0.25);
-        let mut priced2 = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
+        let mut priced2 = with_usage(
+            entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"),
+            200,
+            20,
+            0,
+        );
         priced2.conversation_id = Some("conv-a".into());
         priced2.cost_total = Some(0.5);
-        let mut unknown = with_usage(entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"), 300, 30, 0);
+        let mut unknown = with_usage(
+            entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"),
+            300,
+            30,
+            0,
+        );
         unknown.conversation_id = Some("conv-b".into());
 
         let stats = aggregate(
@@ -1144,8 +1214,16 @@ mod tests {
                 .find(|c| c.conversation_id == id)
                 .unwrap()
         };
-        assert_eq!(by_id("conv-a").cost, Some(0.75), "conversation sums its known rows");
-        assert_eq!(by_id("conv-b").cost, None, "all-unknown conversation shows no cost");
+        assert_eq!(
+            by_id("conv-a").cost,
+            Some(0.75),
+            "conversation sums its known rows"
+        );
+        assert_eq!(
+            by_id("conv-b").cost,
+            None,
+            "all-unknown conversation shows no cost"
+        );
     }
 
     #[test]
@@ -1175,17 +1253,21 @@ mod tests {
 
     #[test]
     fn aggregate_recent_requests_carry_cost_or_none() {
-        let mut priced = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
-        priced.cost_total = Some(0.25);
-        let unknown = with_usage(entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"), 200, 20, 0);
-
-        let stats = aggregate(
-            &[priced, unknown],
-            &HashMap::new(),
-            60_000,
+        let mut priced = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
             0,
-            None,
         );
+        priced.cost_total = Some(0.25);
+        let unknown = with_usage(
+            entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"),
+            200,
+            20,
+            0,
+        );
+
+        let stats = aggregate(&[priced, unknown], &HashMap::new(), 60_000, 0, None);
         let by_ts = |ts: &str| {
             stats
                 .recent_requests
@@ -1194,7 +1276,11 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(by_ts("2026-08-02T10:00:00Z").cost, Some(0.25));
-        assert_eq!(by_ts("2026-08-02T10:00:01Z").cost, None, "unknown row shows no cost");
+        assert_eq!(
+            by_ts("2026-08-02T10:00:01Z").cost,
+            None,
+            "unknown row shows no cost"
+        );
     }
 
     #[test]
@@ -1215,7 +1301,10 @@ mod tests {
     fn request_log_entry_deserializes_legacy_rows_without_conversation_name() {
         let legacy = r#"{"ts":"2026-08-02T10:00:00Z","ok":true,"provider":"hyb","model":"m1","conversationId":"conv-1"}"#;
         let parsed: RequestLogEntry = serde_json::from_str(legacy).unwrap();
-        assert_eq!(parsed.conversation_name, None, "old rows parse with no name");
+        assert_eq!(
+            parsed.conversation_name, None,
+            "old rows parse with no name"
+        );
 
         let named = r#"{"ok":true,"conversationName":"my-chat"}"#;
         let parsed: RequestLogEntry = serde_json::from_str(named).unwrap();
@@ -1224,13 +1313,28 @@ mod tests {
 
     #[test]
     fn aggregate_conversation_name_comes_from_newest_named_row() {
-        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut old = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         old.conversation_id = Some("conv-a".into());
         old.conversation_name = Some("old-name".into());
-        let mut mid = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let mut mid = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
         mid.conversation_id = Some("conv-a".into());
         mid.conversation_name = Some("new-name".into());
-        let mut latest = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+        let mut latest = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"),
+            100,
+            10,
+            0,
+        );
         latest.conversation_id = Some("conv-a".into());
 
         let stats = aggregate(&[old, mid, latest], &HashMap::new(), 60_000, 0, None);
@@ -1239,9 +1343,18 @@ mod tests {
             .iter()
             .find(|c| c.conversation_id == "conv-a")
             .unwrap();
-        assert_eq!(conv_a.name.as_deref(), Some("new-name"), "newest named row wins");
+        assert_eq!(
+            conv_a.name.as_deref(),
+            Some("new-name"),
+            "newest named row wins"
+        );
 
-        let mut unnamed = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"), 100, 10, 0);
+        let mut unnamed = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"),
+            100,
+            10,
+            0,
+        );
         unnamed.conversation_id = Some("conv-b".into());
         let stats = aggregate(&[unnamed], &HashMap::new(), 60_000, 0, None);
         let conv_b = stats
@@ -1254,18 +1367,37 @@ mod tests {
 
     #[test]
     fn aggregate_conversation_grouping_ignores_names() {
-        let mut a1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut a1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         a1.conversation_id = Some("conv-a".into());
         a1.conversation_name = Some("shared-name".into());
-        let mut a2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let mut a2 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
         a2.conversation_id = Some("conv-a".into());
         a2.conversation_name = Some("renamed".into());
-        let mut b = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+        let mut b = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"),
+            100,
+            10,
+            0,
+        );
         b.conversation_id = Some("conv-b".into());
         b.conversation_name = Some("shared-name".into());
 
         let stats = aggregate(&[a1, a2, b], &HashMap::new(), 60_000, 0, None);
-        assert_eq!(stats.by_conversation.len(), 2, "name never merges or splits groups");
+        assert_eq!(
+            stats.by_conversation.len(),
+            2,
+            "name never merges or splits groups"
+        );
         let conv_a = stats
             .by_conversation
             .iter()
@@ -1285,8 +1417,16 @@ mod tests {
         let header = csv.lines().next().unwrap();
         assert!(header.ends_with("costTotal"), "header has costTotal column");
         let rows: Vec<&str> = csv.lines().skip(1).collect();
-        assert_eq!(rows[0].split(',').next_back(), Some("0.25"), "known cost exported");
-        assert_eq!(rows[1].split(',').next_back(), Some(""), "legacy row exports empty cost");
+        assert_eq!(
+            rows[0].split(',').next_back(),
+            Some("0.25"),
+            "known cost exported"
+        );
+        assert_eq!(
+            rows[1].split(',').next_back(),
+            Some(""),
+            "legacy row exports empty cost"
+        );
     }
 
     #[test]
@@ -1298,7 +1438,11 @@ mod tests {
 
         let legacy = entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z");
         let json = serde_json::to_value(&[legacy]).unwrap();
-        assert_eq!(json[0]["costTotal"], serde_json::Value::Null, "legacy row has null cost");
+        assert_eq!(
+            json[0]["costTotal"],
+            serde_json::Value::Null,
+            "legacy row has null cost"
+        );
     }
 
     #[test]
@@ -1659,12 +1803,19 @@ mod tests {
         let stats = aggregate(&[a, b, conv_b, failed], &HashMap::new(), 60_000, 0, None);
 
         assert_eq!(
-            (stats.total_tokens.input, stats.total_tokens.output, stats.total_tokens.total),
+            (
+                stats.total_tokens.input,
+                stats.total_tokens.output,
+                stats.total_tokens.total
+            ),
             (310, 130, 440),
             "reasoning is a subset of output, never added to total"
         );
         assert_eq!(stats.total_tokens.cached, 190, "40 + 120 + 30");
-        assert_eq!(stats.total_tokens.reasoning, 55, "20 + 30 + 5; failed row excluded");
+        assert_eq!(
+            stats.total_tokens.reasoning, 55,
+            "20 + 30 + 5; failed row excluded"
+        );
 
         let hyb = &stats.by_provider["hyb"];
         assert_eq!(hyb.reasoning_tokens, 50, "20 + 30");
@@ -1683,7 +1834,12 @@ mod tests {
             .find(|c| c.conversation_id == "unlabeled")
             .expect("unlabeled present");
         assert_eq!(
-            (unlabeled.input_tokens, unlabeled.output_tokens, unlabeled.cached_tokens, unlabeled.reasoning_tokens),
+            (
+                unlabeled.input_tokens,
+                unlabeled.output_tokens,
+                unlabeled.cached_tokens,
+                unlabeled.reasoning_tokens
+            ),
             (300, 110, 160, 50)
         );
     }
@@ -1843,7 +1999,10 @@ mod tests {
     }
     #[test]
     fn json_export_serializes_token_and_conversation_fields() {
-        let mut e = with_reasoning(with_usage(entry(true, "hyb", "gpt-5.4", 12, "t"), 100, 50, 40), 20);
+        let mut e = with_reasoning(
+            with_usage(entry(true, "hyb", "gpt-5.4", 12, "t"), 100, 50, 40),
+            20,
+        );
         e.conversation_id = Some("conv-9".into());
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"promptTokens\":100"));
@@ -1915,7 +2074,11 @@ mod tests {
             ),
             (Some(1234), Some(567), Some(890), Some(100))
         );
-        assert_eq!(r.total_tokens, Some(1801), "input + output, reasoning not double-counted");
+        assert_eq!(
+            r.total_tokens,
+            Some(1801),
+            "input + output, reasoning not double-counted"
+        );
         assert_eq!(r.cache_rate, "72.1%", "890 cached / 1234 input");
     }
 
@@ -1943,12 +2106,7 @@ mod tests {
             10,
             0,
         );
-        let zero_input = with_usage(
-            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"),
-            0,
-            0,
-            0,
-        );
+        let zero_input = with_usage(entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"), 0, 0, 0);
         let normal = with_usage(
             entry(true, "hyb", "m1", 0, "2026-08-02T10:00:02Z"),
             1234,
@@ -1956,7 +2114,13 @@ mod tests {
             890,
         );
 
-        let stats = aggregate(&[zero_cache, zero_input, normal], &HashMap::new(), 60_000, 0, None);
+        let stats = aggregate(
+            &[zero_cache, zero_input, normal],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
 
         let by_ts = |ts: &str| {
             stats
@@ -1965,8 +2129,16 @@ mod tests {
                 .find(|r| r.ts.as_deref() == Some(ts))
                 .unwrap()
         };
-        assert_eq!(by_ts("2026-08-02T10:00:00Z").cache_rate, "0.0%", "cached=0 is a real measurement");
-        assert_eq!(by_ts("2026-08-02T10:00:01Z").cache_rate, "-", "input=0 has no rate");
+        assert_eq!(
+            by_ts("2026-08-02T10:00:00Z").cache_rate,
+            "0.0%",
+            "cached=0 is a real measurement"
+        );
+        assert_eq!(
+            by_ts("2026-08-02T10:00:01Z").cache_rate,
+            "-",
+            "input=0 has no rate"
+        );
         assert_eq!(by_ts("2026-08-02T10:00:02Z").cache_rate, "72.1%");
     }
 
@@ -2011,7 +2183,10 @@ mod tests {
         };
         assert_eq!(by_ts("2026-08-02T10:00:01Z").ok, Some(false));
         assert_eq!(by_ts("2026-08-02T10:00:01Z").status, Some(429));
-        assert_eq!(by_ts("2026-08-02T10:00:01Z").error.as_deref(), Some("rate limited"));
+        assert_eq!(
+            by_ts("2026-08-02T10:00:01Z").error.as_deref(),
+            Some("rate limited")
+        );
     }
 
     #[test]
@@ -2034,7 +2209,11 @@ mod tests {
             window,
         );
 
-        let ts: Vec<Option<&str>> = stats.recent_requests.iter().map(|r| r.ts.as_deref()).collect();
+        let ts: Vec<Option<&str>> = stats
+            .recent_requests
+            .iter()
+            .map(|r| r.ts.as_deref())
+            .collect();
         assert_eq!(
             ts,
             vec![Some("2026-08-02T11:00:00Z"), Some("2026-08-02T10:00:00Z")],
@@ -2047,7 +2226,13 @@ mod tests {
         let mut entries: Vec<RequestLogEntry> = (0..100)
             .map(|i| {
                 with_usage(
-                    entry(true, "hyb", "m1", 0, &format!("2026-08-02T10:{:02}:{:02}Z", i / 60, i % 60)),
+                    entry(
+                        true,
+                        "hyb",
+                        "m1",
+                        0,
+                        &format!("2026-08-02T10:{:02}:{:02}Z", i / 60, i % 60),
+                    ),
                     1,
                     1,
                     0,
@@ -2112,8 +2297,14 @@ mod tests {
         );
 
         assert_eq!(stats.recent_requests.len(), 3);
-        assert_eq!(stats.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:00:02Z"));
-        assert_eq!(stats.recent_requests[1].ts.as_deref(), Some("2026-08-02T10:00:01Z"));
+        assert_eq!(
+            stats.recent_requests[0].ts.as_deref(),
+            Some("2026-08-02T10:00:02Z")
+        );
+        assert_eq!(
+            stats.recent_requests[1].ts.as_deref(),
+            Some("2026-08-02T10:00:01Z")
+        );
         assert_eq!(stats.recent_requests[2].ts, None, "missing ts sorted last");
     }
 
@@ -2126,12 +2317,8 @@ mod tests {
             0,
         );
         zero_cached.conversation_id = Some("conv-zero-cached".into());
-        let mut zero_input = with_usage(
-            entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"),
-            0,
-            0,
-            0,
-        );
+        let mut zero_input =
+            with_usage(entry(true, "hyb", "m1", 0, "2026-08-02T10:00:01Z"), 0, 0, 0);
         zero_input.conversation_id = Some("conv-zero-input".into());
         let mut normal = with_usage(
             entry(true, "hyb", "m1", 0, "2026-08-02T10:00:02Z"),
@@ -2141,7 +2328,13 @@ mod tests {
         );
         normal.conversation_id = Some("conv-normal".into());
 
-        let stats = aggregate(&[zero_cached, zero_input, normal], &HashMap::new(), 60_000, 0, None);
+        let stats = aggregate(
+            &[zero_cached, zero_input, normal],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
 
         let by_id = |id: &str| {
             stats
@@ -2150,7 +2343,11 @@ mod tests {
                 .find(|c| c.conversation_id == id)
                 .unwrap()
         };
-        assert_eq!(by_id("conv-zero-cached").cache_rate, "0.0%", "cached=0 measured");
+        assert_eq!(
+            by_id("conv-zero-cached").cache_rate,
+            "0.0%",
+            "cached=0 measured"
+        );
         assert_eq!(by_id("conv-zero-input").cache_rate, "-", "input=0 no rate");
         assert_eq!(by_id("conv-normal").cache_rate, "72.1%");
     }
@@ -2242,7 +2439,11 @@ mod tests {
 
         assert_eq!(stats.total_requests, 2, "late row outside window");
         let hyb = &stats.by_provider["hyb"];
-        assert_eq!((hyb.total, hyb.prompt_tokens), (1, 100), "late row not counted");
+        assert_eq!(
+            (hyb.total, hyb.prompt_tokens),
+            (1, 100),
+            "late row not counted"
+        );
         assert_eq!(
             (
                 stats.total_tokens.input,
@@ -2254,13 +2455,21 @@ mod tests {
             "token four dimensions only from in-window rows"
         );
         assert_eq!(stats.by_conversation.len(), 2);
-        let a = stats.by_conversation.iter().find(|c| c.conversation_id == "conv-a").unwrap();
+        let a = stats
+            .by_conversation
+            .iter()
+            .find(|c| c.conversation_id == "conv-a")
+            .unwrap();
         assert_eq!(
             (a.requests, a.input_tokens, a.reasoning_tokens),
             (1, 100, 30),
             "conversation aggregates recomputed per window"
         );
-        let b = stats.by_conversation.iter().find(|c| c.conversation_id == "conv-b").unwrap();
+        let b = stats
+            .by_conversation
+            .iter()
+            .find(|c| c.conversation_id == "conv-b")
+            .unwrap();
         assert_eq!((b.requests, b.input_tokens), (1, 10));
     }
 
@@ -2294,11 +2503,7 @@ mod tests {
     #[test]
     fn parse_window_query_valid_custom_window() {
         assert_eq!(
-            parse_window_query(
-                Some("custom"),
-                Some("1785664800000"),
-                Some("1785672000000")
-            ),
+            parse_window_query(Some("custom"), Some("1785664800000"), Some("1785672000000")),
             Ok(Some((1_785_664_800_000, 1_785_672_000_000)))
         );
     }
@@ -2318,11 +2523,7 @@ mod tests {
                 "{range} without window must be rejected"
             );
             assert_eq!(
-                parse_window_query(
-                    Some(range),
-                    Some("1785664800000"),
-                    Some("1785672000000")
-                ),
+                parse_window_query(Some(range), Some("1785664800000"), Some("1785672000000")),
                 Ok(Some((1_785_664_800_000, 1_785_672_000_000))),
                 "{range} with window is accepted"
             );
@@ -2356,11 +2557,17 @@ mod tests {
         assert_eq!(first.recent_request_total, 250);
         assert_eq!(first.recent_requests.len(), 50);
         // Newest first: i=249 is the latest row.
-        assert_eq!(first.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:04:09Z"));
+        assert_eq!(
+            first.recent_requests[0].ts.as_deref(),
+            Some("2026-08-02T10:04:09Z")
+        );
 
         let last = aggregate_paged(&entries, &circuit, 60_000, 0, None, 4, 50);
         assert_eq!(last.recent_requests.len(), 50);
-        assert_eq!(last.recent_requests[0].ts.as_deref(), Some("2026-08-02T10:00:49Z"));
+        assert_eq!(
+            last.recent_requests[0].ts.as_deref(),
+            Some("2026-08-02T10:00:49Z")
+        );
 
         let beyond = aggregate_paged(&entries, &circuit, 60_000, 0, None, 5, 50);
         assert_eq!(beyond.recent_requests.len(), 0);
@@ -2384,17 +2591,38 @@ mod tests {
 
     #[test]
     fn conversations_paged_filters_by_window_and_none_means_all() {
-        let mut in_win = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut in_win = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         in_win.conversation_id = Some("conv-a".into());
-        let mut out_win = with_usage(entry(true, "hyb", "m1", 10, "2026-08-03T10:00:00Z"), 100, 10, 0);
+        let mut out_win = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-03T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         out_win.conversation_id = Some("conv-b".into());
 
-        let window = (ts_epoch_ms("2026-08-02T00:00:00Z").unwrap(), ts_epoch_ms("2026-08-02T23:59:59Z").unwrap());
+        let window = (
+            ts_epoch_ms("2026-08-02T00:00:00Z").unwrap(),
+            ts_epoch_ms("2026-08-02T23:59:59Z").unwrap(),
+        );
         let (rows, total) = aggregate_conversations_paged(&[in_win, out_win], Some(window), 0, 50);
         assert_eq!(total, 1);
-        assert_eq!(rows[0].conversation_id, "conv-a", "window excludes out-of-window rows");
+        assert_eq!(
+            rows[0].conversation_id, "conv-a",
+            "window excludes out-of-window rows"
+        );
 
-        let mut in_win2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut in_win2 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         in_win2.conversation_id = Some("conv-a".into());
         let (rows, total) = aggregate_conversations_paged(&[in_win2], None, 0, 50);
         assert_eq!(total, 1, "None window keeps full history");
@@ -2403,24 +2631,57 @@ mod tests {
 
     #[test]
     fn conversations_paged_groups_missing_ids_under_unlabeled() {
-        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut named = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         named.conversation_id = Some("conv-a".into());
-        let bare1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
-        let bare2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 100, 10, 0);
+        let bare1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
+        let bare2 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"),
+            100,
+            10,
+            0,
+        );
 
         let (rows, _) = aggregate_conversations_paged(&[named, bare1, bare2], None, 0, 50);
         assert_eq!(rows.len(), 2);
-        let unlabeled = rows.iter().find(|c| c.conversation_id == "unlabeled").unwrap();
+        let unlabeled = rows
+            .iter()
+            .find(|c| c.conversation_id == "unlabeled")
+            .unwrap();
         assert_eq!(unlabeled.requests, 2, "bare rows share the unlabeled group");
     }
 
     #[test]
     fn conversations_paged_sorts_by_last_active_desc() {
-        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T09:00:00Z"), 100, 10, 0);
+        let mut old = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T09:00:00Z"),
+            100,
+            10,
+            0,
+        );
         old.conversation_id = Some("conv-old".into());
-        let mut new = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T11:00:00Z"), 100, 10, 0);
+        let mut new = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T11:00:00Z"),
+            100,
+            10,
+            0,
+        );
         new.conversation_id = Some("conv-new".into());
-        let mut mid = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut mid = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         mid.conversation_id = Some("conv-mid".into());
 
         let (rows, _) = aggregate_conversations_paged(&[old, new, mid], None, 0, 50);
@@ -2432,7 +2693,12 @@ mod tests {
     fn conversations_paged_slices_pages_and_reports_total() {
         let entries: Vec<RequestLogEntry> = (0..5)
             .map(|i| {
-                let mut e = with_usage(entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")), 100, 10, 0);
+                let mut e = with_usage(
+                    entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")),
+                    100,
+                    10,
+                    0,
+                );
                 e.conversation_id = Some(format!("conv-{i}"));
                 e
             })
@@ -2453,26 +2719,50 @@ mod tests {
 
     #[test]
     fn conversations_paged_cost_sums_known_rows_and_stays_none_when_all_unknown() {
-        let mut priced1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut priced1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         priced1.conversation_id = Some("conv-a".into());
         priced1.cost_total = Some(0.25);
-        let mut priced2 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let mut priced2 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
         priced2.conversation_id = Some("conv-a".into());
         priced2.cost_total = Some(0.5);
         // Failed and retried rows carry cost but are outside the countable scope.
         let mut failed = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:02Z");
         failed.conversation_id = Some("conv-a".into());
         failed.cost_total = Some(9.9);
-        let mut retry = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"), 100, 10, 0);
+        let mut retry = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:03Z"),
+            100,
+            10,
+            0,
+        );
         retry.conversation_id = Some("conv-a".into());
         retry.retry = Some(true);
         retry.cost_total = Some(9.9);
 
-        let (rows, _) = aggregate_conversations_paged(&[priced1, priced2, failed, retry], None, 0, 50);
+        let (rows, _) =
+            aggregate_conversations_paged(&[priced1, priced2, failed, retry], None, 0, 50);
         assert_eq!(rows[0].cost, Some(0.75), "only countable known rows sum");
-        assert_eq!(rows[0].requests, 4, "requests count every row incl. failed/retry");
+        assert_eq!(
+            rows[0].requests, 4,
+            "requests count every row incl. failed/retry"
+        );
 
-        let mut unknown = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:04Z"), 100, 10, 0);
+        let mut unknown = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:04Z"),
+            100,
+            10,
+            0,
+        );
         unknown.conversation_id = Some("conv-b".into());
         let (rows, _) = aggregate_conversations_paged(&[unknown], None, 0, 50);
         assert_eq!(rows[0].cost, None, "all-unknown conversation shows no cost");
@@ -2480,42 +2770,83 @@ mod tests {
 
     #[test]
     fn conversations_paged_name_comes_from_newest_named_row() {
-        let mut old = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut old = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         old.conversation_id = Some("conv-a".into());
         old.conversation_name = Some("old-name".into());
-        let mut latest = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let mut latest = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
         latest.conversation_id = Some("conv-a".into());
         latest.conversation_name = Some("new-name".into());
 
         let (rows, _) = aggregate_conversations_paged(&[old, latest], None, 0, 50);
-        assert_eq!(rows[0].name.as_deref(), Some("new-name"), "newest named row wins");
+        assert_eq!(
+            rows[0].name.as_deref(),
+            Some("new-name"),
+            "newest named row wins"
+        );
     }
 
     #[test]
     fn conversations_paged_token_scope_excludes_retry_and_failed_rows() {
-        let mut ok = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut ok = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         ok.conversation_id = Some("conv-a".into());
-        let mut retry = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 999, 999, 0);
+        let mut retry = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            999,
+            999,
+            0,
+        );
         retry.conversation_id = Some("conv-a".into());
         retry.retry = Some(true);
         let mut failed = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:02Z");
         failed.conversation_id = Some("conv-a".into());
 
         let (rows, _) = aggregate_conversations_paged(&[ok, retry, failed], None, 0, 50);
-        assert_eq!(rows[0].input_tokens, 100, "retry/failed rows do not add tokens");
+        assert_eq!(
+            rows[0].input_tokens, 100,
+            "retry/failed rows do not add tokens"
+        );
         assert_eq!(rows[0].output_tokens, 10);
         assert_eq!(rows[0].requests, 3);
-        assert_eq!(rows[0].last_active.as_deref(), Some("2026-08-02T10:00:02Z"), "lastActive still tracks every row");
+        assert_eq!(
+            rows[0].last_active.as_deref(),
+            Some("2026-08-02T10:00:02Z"),
+            "lastActive still tracks every row"
+        );
     }
 
     // ─── conversation_id on request details + conversation requests ───
 
     #[test]
     fn aggregate_recent_requests_carry_conversation_fields() {
-        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut named = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         named.conversation_id = Some("conv-a".into());
         named.conversation_name = Some("my-chat".into());
-        let bare = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let bare = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
 
         let stats = aggregate(&[named, bare], &HashMap::new(), 60_000, 0, None);
         assert_eq!(stats.recent_requests.len(), 2);
@@ -2531,47 +2862,90 @@ mod tests {
             .iter()
             .find(|r| r.ts.as_deref() == Some("2026-08-02T10:00:01Z"))
             .unwrap();
-        assert_eq!(bare_row.conversation_id, None, "bare rows carry no conversation id");
+        assert_eq!(
+            bare_row.conversation_id, None,
+            "bare rows carry no conversation id"
+        );
         assert_eq!(bare_row.conversation_name, None);
     }
 
     #[test]
     fn conversation_requests_filters_by_id_and_keeps_all_rows() {
-        let mut a1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
+        let mut a1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
         a1.conversation_id = Some("conv-a".into());
         a1.cost_total = Some(0.25);
         let mut a2 = entry(false, "hyb", "m1", 10, "2026-08-02T10:00:01Z");
         a2.conversation_id = Some("conv-a".into());
         a2.retry = Some(true);
-        let mut b = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"), 50, 5, 0);
+        let mut b = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:02Z"),
+            50,
+            5,
+            0,
+        );
         b.conversation_id = Some("conv-b".into());
 
         let (rows, total) = aggregate_conversation_requests(&[a1, a2, b], "conv-a", 0, 50);
         assert_eq!(total, 2, "total counts only matching rows");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].ts.as_deref(), Some("2026-08-02T10:00:01Z"), "newest first");
-        assert_eq!(rows[0].ok, Some(false), "failed/retry rows included like request details");
+        assert_eq!(
+            rows[0].ts.as_deref(),
+            Some("2026-08-02T10:00:01Z"),
+            "newest first"
+        );
+        assert_eq!(
+            rows[0].ok,
+            Some(false),
+            "failed/retry rows included like request details"
+        );
         assert_eq!(rows[1].ts.as_deref(), Some("2026-08-02T10:00:00Z"));
-        assert_eq!(rows[1].prompt_tokens, Some(100), "token semantics match request details");
+        assert_eq!(
+            rows[1].prompt_tokens,
+            Some(100),
+            "token semantics match request details"
+        );
         assert_eq!(rows[1].cost, Some(0.25));
     }
 
     #[test]
     fn conversation_requests_unlabeled_matches_bare_rows() {
-        let bare1 = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"), 100, 10, 0);
-        let mut named = with_usage(entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"), 100, 10, 0);
+        let bare1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            0,
+        );
+        let mut named = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:01Z"),
+            100,
+            10,
+            0,
+        );
         named.conversation_id = Some("conv-a".into());
 
         let (rows, total) = aggregate_conversation_requests(&[bare1, named], "unlabeled", 0, 50);
         assert_eq!(total, 1);
-        assert_eq!(rows[0].conversation_id, None, "unlabeled matches rows without an id");
+        assert_eq!(
+            rows[0].conversation_id, None,
+            "unlabeled matches rows without an id"
+        );
     }
 
     #[test]
     fn conversation_requests_pages_and_sorts_desc() {
         let entries: Vec<RequestLogEntry> = (0..5)
             .map(|i| {
-                let mut e = with_usage(entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")), 100, 10, 0);
+                let mut e = with_usage(
+                    entry(true, "hyb", "m1", 10, &format!("2026-08-02T10:00:0{i}Z")),
+                    100,
+                    10,
+                    0,
+                );
                 e.conversation_id = Some("conv-a".into());
                 e
             })
@@ -2580,7 +2954,11 @@ mod tests {
         let (page1, total) = aggregate_conversation_requests(&entries, "conv-a", 0, 2);
         assert_eq!(total, 5);
         assert_eq!(page1.len(), 2);
-        assert_eq!(page1[0].ts.as_deref(), Some("2026-08-02T10:00:04Z"), "newest first");
+        assert_eq!(
+            page1[0].ts.as_deref(),
+            Some("2026-08-02T10:00:04Z"),
+            "newest first"
+        );
 
         let (page3, _) = aggregate_conversation_requests(&entries, "conv-a", 2, 2);
         assert_eq!(page3.len(), 1);

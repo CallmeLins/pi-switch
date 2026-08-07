@@ -50,7 +50,11 @@ pub fn extract_usage(value: &serde_json::Value) -> Option<UsageSummary> {
                 .and_then(|d| d.get("cached_tokens"))
                 .and_then(serde_json::Value::as_u64)
         })
-        .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(serde_json::Value::as_u64))
+        .or_else(|| {
+            usage
+                .get("prompt_cache_hit_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
         .unwrap_or(0);
     let reasoning_tokens = usage
         .get("completion_tokens_details")
@@ -313,13 +317,23 @@ mod tests {
 
         let c = extract_usage(&chat).expect("chat completions style");
         assert_eq!(
-            (c.prompt_tokens, c.completion_tokens, c.cached_tokens, c.reasoning_tokens),
+            (
+                c.prompt_tokens,
+                c.completion_tokens,
+                c.cached_tokens,
+                c.reasoning_tokens
+            ),
             (200, 30, 120, 20)
         );
 
         let d = extract_usage(&deepseek).expect("deepseek style");
         assert_eq!(
-            (d.prompt_tokens, d.completion_tokens, d.cached_tokens, d.reasoning_tokens),
+            (
+                d.prompt_tokens,
+                d.completion_tokens,
+                d.cached_tokens,
+                d.reasoning_tokens
+            ),
             (300, 40, 150, 25)
         );
     }
@@ -338,7 +352,12 @@ mod tests {
 
         let r = extract_usage(&responses).expect("responses style");
         assert_eq!(
-            (r.prompt_tokens, r.completion_tokens, r.cached_tokens, r.reasoning_tokens),
+            (
+                r.prompt_tokens,
+                r.completion_tokens,
+                r.cached_tokens,
+                r.reasoning_tokens
+            ),
             (100, 50, 40, 15)
         );
     }

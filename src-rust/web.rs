@@ -83,7 +83,10 @@ pub fn make_web_router(state: Arc<WebState>) -> Router {
         .route("/backups", get(get_backups))
         .route("/stats", get(get_stats))
         .route("/stats/conversations", get(get_stats_conversations))
-        .route("/stats/conversations/:id/requests", get(get_conversation_requests))
+        .route(
+            "/stats/conversations/:id/requests",
+            get(get_conversation_requests),
+        )
         .route("/proxy/status", get(get_proxy_status))
         .route("/webui/info", get(get_webui_info))
         .route("/logs/export", get(get_logs_export))
@@ -685,8 +688,8 @@ mod tests {
 
     #[tokio::test]
     async fn stats_response_includes_recent_request_total_field() {
-        let res = get("/api/stats?range=today&from=1785664800000&to=1785672000000&page=0&limit=50")
-            .await;
+        let res =
+            get("/api/stats?range=today&from=1785664800000&to=1785672000000&page=0&limit=50").await;
         assert_eq!(res.status(), StatusCode::OK);
         let body: Value = serde_json::from_slice(
             &axum::body::to_bytes(res.into_body(), usize::MAX)
@@ -694,8 +697,13 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let total = body.get("recentRequestTotal").expect("stats body must include recentRequestTotal");
-        assert!(total.is_u64() || total.is_i64(), "recentRequestTotal must be a number");
+        let total = body
+            .get("recentRequestTotal")
+            .expect("stats body must include recentRequestTotal");
+        assert!(
+            total.is_u64() || total.is_i64(),
+            "recentRequestTotal must be a number"
+        );
     }
 
     #[tokio::test]
@@ -716,7 +724,9 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let convs = body.get("conversations").expect("body must include conversations");
+        let convs = body
+            .get("conversations")
+            .expect("body must include conversations");
         assert!(convs.is_array(), "conversations must be an array");
         let total = body.get("total").expect("body must include total");
         assert!(total.is_u64() || total.is_i64(), "total must be a number");
@@ -774,7 +784,11 @@ mod tests {
     #[tokio::test]
     async fn conversation_requests_empty_id_is_rejected() {
         let res = get("/api/stats/conversations//requests").await;
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "empty id should be 400");
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "empty id should be 400"
+        );
     }
 
     #[tokio::test]
