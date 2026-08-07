@@ -273,6 +273,7 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
   ];
 
   const byProvider = stats?.byProvider ? Object.entries(stats.byProvider) : [];
+  const byModel = stats?.byModel ? Object.entries(stats.byModel) : [];
   const totals = stats?.totalTokens;
   const totalRows = stats?.recentRequestTotal;
   const totalPages = totalRows != null && totalRows > 0 ? Math.ceil(totalRows / pageSize) : 0;
@@ -393,14 +394,19 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
           {byProvider.length > 0 && (
             <Card>
               <div className="mb-2 text-sm font-semibold text-zinc-200">{t("By provider")}</div>
-              <table className="w-full text-sm">
+              <table aria-label={t("By provider")} className="w-full text-sm">
                 <thead className="text-left text-xs text-zinc-500">
                   <tr>
                     <th className="pb-1">{t("Provider")}</th>
-                    <th className="pb-1 text-right">{t("Total")}</th>
+                    <th className="pb-1 text-right">{t("Requests")}</th>
                     <th className="pb-1 text-right">{t("OK")}</th>
                     <th className="pb-1 text-right">{t("Rate")}</th>
-                    <th className="pb-1 text-right">{t("Tokens")}</th>
+                    <th className="pb-1 text-right">{t("Input")}</th>
+                    <th className="pb-1 text-right">{t("Output")}</th>
+                    <th className="pb-1 text-right">{t("Cached")}</th>
+                    <th className="pb-1 text-right">{t("Total")}</th>
+                    <th className="pb-1 text-right">{t("Cache rate")}</th>
+                    <th className="pb-1 text-right">{t("Cost")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -413,8 +419,74 @@ export function StatsPanel(_: { state: AppState; refresh: () => Promise<void> })
                         <td className="py-1 text-right text-zinc-400">{ps.ok}</td>
                         <td className="py-1 text-right text-zinc-400">{rate}%</td>
                         <td className="py-1 text-right text-zinc-400">
-                          {formatProviderTokens(ps.promptTokens + ps.outputTokens)}
+                          {formatRequestToken(ps.promptTokens)}
                         </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(ps.outputTokens)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(ps.cachedTokens)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(ps.promptTokens + ps.outputTokens)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {ps.cacheRate ?? "-"}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">{formatCost(ps.cost)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </Card>
+          )}
+
+          {byModel.length > 0 && (
+            <Card className="mt-4">
+              <div className="mb-2 text-sm font-semibold text-zinc-200">{t("By model")}</div>
+              <table aria-label={t("By model")} className="w-full text-sm">
+                <thead className="text-left text-xs text-zinc-500">
+                  <tr>
+                    <th className="pb-1">{t("Model")}</th>
+                    <th className="pb-1 text-right">{t("Requests")}</th>
+                    <th className="pb-1 text-right">{t("OK")}</th>
+                    <th className="pb-1 text-right">{t("Rate")}</th>
+                    <th className="pb-1 text-right">{t("Input")}</th>
+                    <th className="pb-1 text-right">{t("Output")}</th>
+                    <th className="pb-1 text-right">{t("Cached")}</th>
+                    <th className="pb-1 text-right">{t("Total")}</th>
+                    <th className="pb-1 text-right">{t("Cache rate")}</th>
+                    <th className="pb-1 text-right">{t("Cost")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {byModel.map(([name, ms]) => {
+                    const input = ms.promptTokens ?? 0;
+                    const output = ms.outputTokens ?? 0;
+                    const rate = ms.total > 0 ? Math.round((ms.ok / ms.total) * 100) : 0;
+                    return (
+                      <tr key={name} className="border-t border-white/5">
+                        <td className="py-1 text-zinc-200">{name}</td>
+                        <td className="py-1 text-right text-zinc-400">{ms.total}</td>
+                        <td className="py-1 text-right text-zinc-400">{ms.ok}</td>
+                        <td className="py-1 text-right text-zinc-400">{rate}%</td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(input)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(output)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(ms.cachedTokens ?? 0)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {formatRequestToken(input + output)}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">
+                          {ms.cacheRate ?? "-"}
+                        </td>
+                        <td className="py-1 text-right text-zinc-400">{formatCost(ms.cost)}</td>
                       </tr>
                     );
                   })}
@@ -722,13 +794,6 @@ function Metric({
       <div className={"mt-1 text-xl font-semibold " + color}>{value}</div>
     </Card>
   );
-}
-
-function formatProviderTokens(tokens: number): string {
-  if (tokens === 0) {
-    return "-";
-  }
-  return formatTokenCount(tokens);
 }
 
 function pageNumbers(current: number, total: number): (number | "…")[] {

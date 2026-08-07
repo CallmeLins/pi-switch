@@ -56,6 +56,8 @@ function fullStats(): UsageStats {
         outputTokens: 50_000,
         cachedTokens: 200_000,
         reasoningTokens: 20_000,
+        cost: 1.25,
+        cacheRate: "66.7%",
       },
       fox: {
         total: 4,
@@ -69,6 +71,8 @@ function fullStats(): UsageStats {
         outputTokens: 1_200,
         cachedTokens: 0,
         reasoningTokens: 0,
+        cost: null,
+        cacheRate: "0.0%",
       },
     },
     totalTokens: {
@@ -155,7 +159,7 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect(await screen.findByText("$12.34")).toBeInTheDocument();
-    expect(screen.getByText("Cost")).toBeInTheDocument();
+    expect(screen.getAllByText("Cost").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/2 unknown/)).toBeInTheDocument();
   });
 
@@ -163,7 +167,7 @@ describe("StatsPanel", () => {
     statsMock.mockResolvedValue({ ...fullStats(), totalCost: null, costUnknown: 10 });
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
-    expect(await screen.findByText("Cost")).toBeInTheDocument();
+    expect((await screen.findAllByText("Cost")).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
     expect(screen.getByText(/10 unknown/)).toBeInTheDocument();
   });
@@ -194,8 +198,8 @@ describe("StatsPanel", () => {
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
     expect(await screen.findByText("363.5K")).toBeInTheDocument();
-    expect(screen.getAllByText("Tokens").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Cache rate")).toBeInTheDocument();
+    expect(screen.getAllByText("Input").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Cache rate").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("53.3%")).toBeInTheDocument();
 
     expect(screen.getByText("hyb")).toBeInTheDocument();
@@ -210,11 +214,81 @@ describe("StatsPanel", () => {
     expect(within(table).getByText("3")).toBeInTheDocument();
   });
 
+  it("renders input/output/cached/total/cache-rate/cost columns per provider", async () => {
+    statsMock.mockResolvedValue(fullStats());
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    const table = screen.getByRole("table", { name: "By provider" });
+
+    // 列头：输入/输出/缓存/总/缓存率/消费价格
+    for (const header of ["Input", "Output", "Cached", "Total", "Cache rate", "Cost"]) {
+      expect(within(table).getAllByText(header).length).toBeGreaterThanOrEqual(1);
+    }
+    // hyb：输入 300.0K / 输出 50.0K / 缓存 200.0K / 总 350.0K / 缓存率 66.7% / 消费 $1.25
+    expect(within(table).getByText("300.0K")).toBeInTheDocument();
+    expect(within(table).getByText("50.0K")).toBeInTheDocument();
+    expect(within(table).getByText("200.0K")).toBeInTheDocument();
+    expect(within(table).getByText("350.0K")).toBeInTheDocument();
+    expect(within(table).getByText("66.7%")).toBeInTheDocument();
+    expect(within(table).getByText("$1.25")).toBeInTheDocument();
+    // fox：无缓存 → 0.0%；全未知 cost → `-`
+    expect(within(table).getByText("13.5K")).toBeInTheDocument();
+    expect(within(table).getByText("0.0%")).toBeInTheDocument();
+  });
+
+  it("renders the by-model table with token detail columns", async () => {
+    statsMock.mockResolvedValue({
+      ...fullStats(),
+      byModel: {
+        "deepseek-r": {
+          total: 3,
+          ok: 2,
+          failed: 1,
+          promptTokens: 300_000,
+          outputTokens: 30_000,
+          cachedTokens: 100_000,
+          reasoningTokens: 5_000,
+          cost: 0.75,
+          cacheRate: "33.3%",
+        },
+        "gpt-x": {
+          total: 1,
+          ok: 1,
+          failed: 0,
+          promptTokens: 300,
+          outputTokens: 30,
+          cachedTokens: 0,
+          reasoningTokens: 0,
+          cost: null,
+          cacheRate: "0.0%",
+        },
+      },
+    });
+    render(<StatsPanel state={{} as never} refresh={async () => {}} />);
+    await screen.findByText("363.5K");
+    const table = screen.getByRole("table", { name: "By model" });
+
+    // 列头与 by-provider 表一致
+    for (const header of ["Model", "Requests", "OK", "Rate", "Input", "Output", "Cached", "Total", "Cache rate", "Cost"]) {
+      expect(within(table).getAllByText(header).length).toBeGreaterThanOrEqual(1);
+    }
+    // deepseek-r：输入 300.0K / 输出 30.0K / 缓存 100.0K / 总 330.0K / 缓存率 33.3% / 消费 $0.75
+    expect(within(table).getByText("deepseek-r")).toBeInTheDocument();
+    expect(within(table).getByText("300.0K")).toBeInTheDocument();
+    expect(within(table).getByText("30.0K")).toBeInTheDocument();
+    expect(within(table).getByText("100.0K")).toBeInTheDocument();
+    expect(within(table).getByText("330.0K")).toBeInTheDocument();
+    expect(within(table).getByText("33.3%")).toBeInTheDocument();
+    expect(within(table).getByText("$0.75")).toBeInTheDocument();
+    // gpt-x：无缓存 → 0.0%；全未知 cost → `-`
+    expect(within(table).getByText("gpt-x")).toBeInTheDocument();
+    expect(within(table).getByText("0.0%")).toBeInTheDocument();
+  });
   it("renders dashes for token metrics when only legacy data exists", async () => {
     statsMock.mockResolvedValue(legacyStats());
     render(<StatsPanel state={{} as never} refresh={async () => {}} />);
 
-    expect((await screen.findAllByText("Tokens")).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText("Input")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(3);
     expect(screen.getAllByText("4").length).toBeGreaterThanOrEqual(1);
 
@@ -335,7 +409,7 @@ describe("StatsPanel", () => {
 
     expect(await screen.findByText("312.3K")).toBeInTheDocument();
     expect(screen.getByText("51.2K")).toBeInTheDocument();
-    expect(screen.getByText("200.0K")).toBeInTheDocument();
+    expect(screen.getAllByText("200.0K").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("20.0K").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("363.5K")).toBeInTheDocument();
     expect(screen.getByText("⊆ Input")).toBeInTheDocument();
@@ -445,7 +519,7 @@ describe("StatsPanel", () => {
     expect(within(reqTable).getByText("Cache rate")).toBeInTheDocument();
     expect(within(reqTable).queryByText("Rate")).not.toBeInTheDocument();
     expect(screen.getByText("deepseek-chat")).toBeInTheDocument();
-    expect(screen.getByText("1.2K")).toBeInTheDocument();
+    expect(within(reqTable).getByText("1.2K")).toBeInTheDocument();
     expect(screen.getByText("567")).toBeInTheDocument();
     expect(screen.getByText("890")).toBeInTheDocument();
     expect(screen.getByText("100")).toBeInTheDocument();
