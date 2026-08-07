@@ -51,6 +51,12 @@ pub struct ProviderStats {
     pub output_tokens: u64,
     #[serde(rename = "cachedTokens")]
     pub cached_tokens: u64,
+    /// Summed `costTotal` of countable usage rows; `None` when no row carried
+    /// a price (mirrors the global `totalCost` semantics per dimension).
+    #[serde(rename = "cost", default)]
+    pub cost: Option<f64>,
+    #[serde(rename = "cacheRate", default)]
+    pub cache_rate: String,
     #[serde(rename = "reasoningTokens")]
     pub reasoning_tokens: u64,
 }
@@ -175,6 +181,20 @@ pub struct UsageStats {
 pub struct ModelStats {
     pub total: u64,
     pub ok: u64,
+    #[serde(rename = "promptTokens")]
+    pub prompt_tokens: u64,
+    #[serde(rename = "outputTokens")]
+    pub output_tokens: u64,
+    #[serde(rename = "cachedTokens")]
+    pub cached_tokens: u64,
+    #[serde(rename = "reasoningTokens")]
+    pub reasoning_tokens: u64,
+    /// Summed `costTotal` of countable usage rows; `None` when no row carried
+    /// a price (mirrors the global `totalCost` semantics per dimension).
+    #[serde(rename = "cost", default)]
+    pub cost: Option<f64>,
+    #[serde(rename = "cacheRate", default)]
+    pub cache_rate: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -521,10 +541,24 @@ pub fn aggregate_paged(
 
         // Per provider
         let provider = entry.provider.as_deref().unwrap_or("unknown");
-        let ps = stats.by_provider.entry(provider.to_string()).or_insert(ProviderStats {
-            total: 0, ok: 0, failed: 0, retries: 0, avg_ms: 0, total_ms: 0, last_used: None,
-            prompt_tokens: 0, output_tokens: 0, cached_tokens: 0, reasoning_tokens: 0,
-        });
+        let ps = stats
+            .by_provider
+            .entry(provider.to_string())
+            .or_insert(ProviderStats {
+                total: 0,
+                ok: 0,
+                failed: 0,
+                retries: 0,
+                avg_ms: 0,
+                total_ms: 0,
+                last_used: None,
+                prompt_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+                cost: None,
+                cache_rate: "-".into(),
+            });
         ps.total += 1;
         if entry.ok.unwrap_or(false) {
             ps.ok += 1;
@@ -539,6 +573,9 @@ pub fn aggregate_paged(
             ps.output_tokens += u.completion;
             ps.cached_tokens += u.cached;
             ps.reasoning_tokens += u.reasoning;
+            if let Some(c) = entry.cost_total {
+                ps.cost = Some(ps.cost.unwrap_or(0.0) + c);
+            }
         }
         if let Some(ms) = entry.ms {
             ps.total_ms += ms;
@@ -553,10 +590,28 @@ pub fn aggregate_paged(
         let ms = stats
             .by_model
             .entry(model.to_string())
-            .or_insert(ModelStats { total: 0, ok: 0 });
+            .or_insert(ModelStats {
+                total: 0,
+                ok: 0,
+                prompt_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+                cost: None,
+                cache_rate: "-".into(),
+            });
         ms.total += 1;
         if entry.ok.unwrap_or(false) {
             ms.ok += 1;
+        }
+        if let Some(u) = &usage {
+            ms.prompt_tokens += u.prompt;
+            ms.output_tokens += u.completion;
+            ms.cached_tokens += u.cached;
+            ms.reasoning_tokens += u.reasoning;
+            if let Some(c) = entry.cost_total {
+                ms.cost = Some(ms.cost.unwrap_or(0.0) + c);
+            }
         }
 
         // Latency
@@ -599,6 +654,12 @@ pub fn aggregate_paged(
     let mut by_conversation: Vec<ConversationStats> = conversations.into_values().collect();
     for conv in &mut by_conversation {
         conv.cache_rate = cache_rate_of(conv.input_tokens, conv.cached_tokens);
+    }
+    for ps in stats.by_provider.values_mut() {
+        ps.cache_rate = cache_rate_of(ps.prompt_tokens, ps.cached_tokens);
+    }
+    for ms in stats.by_model.values_mut() {
+        ms.cache_rate = cache_rate_of(ms.prompt_tokens, ms.cached_tokens);
     }
     by_conversation.sort_by(|a, b| cmp_ts_desc(&a.last_active, &b.last_active));
     by_conversation.truncate(20);
@@ -946,6 +1007,116 @@ mod tests {
         );
         assert_eq!(stats.total_cost, None, "all-unknown window shows no total");
         assert_eq!(stats.cost_unknown, 1);
+    }
+
+    #[test]
+    fn aggregate_provider_cost_sums_known_rows_and_stays_none_when_all_unknown() {
+        let mut known1 = with_usage(
+            entry(true, "hyb", "m1", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            200,
+        );
+        known1.cost_total = Some(0.25);
+        let mut known2 = with_usage(
+            entry(true, "hyb", "m2", 20, "2026-08-02T10:00:01Z"),
+            200,
+            20,
+            200,
+        );
+        known2.cost_total = Some(0.5);
+        // 未知 cost 行：计入请求数但不贡献 cost
+        let unknown = with_usage(
+            entry(true, "hyb", "m3", 30, "2026-08-02T10:00:02Z"),
+            300,
+            30,
+            0,
+        );
+        // failed 行即使带 cost 也不贡献（usage_of 口径）
+        let mut failed = entry(false, "hyb", "m1", 40, "2026-08-02T10:00:03Z");
+        failed.cost_total = Some(9.9);
+        // 全未知 provider
+        let unknown_prov = with_usage(
+            entry(true, "other", "m1", 50, "2026-08-02T10:00:04Z"),
+            100,
+            10,
+            0,
+        );
+        // 只有 failed 行（无 usage）的 provider：token 全零 → 缓存率 `-`
+        let failed_only = entry(false, "flaky", "m1", 60, "2026-08-02T10:00:05Z");
+
+        let stats = aggregate(
+            &[known1, known2, unknown, failed, unknown_prov, failed_only],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        let hyb = &stats.by_provider["hyb"];
+        assert_eq!(
+            hyb.cost,
+            Some(0.75),
+            "provider sums its known usage rows"
+        );
+        assert_eq!(hyb.total, 4, "failed row still counts toward requests");
+        assert_eq!(
+            hyb.cache_rate,
+            "66.7%",
+            "provider cache rate = cached / input (400/600)"
+        );
+        let other = &stats.by_provider["other"];
+        assert_eq!(other.cost, None, "all-unknown provider shows no cost");
+        assert_eq!(other.cache_rate, "0.0%", "input without cache renders 0.0%");
+        assert_eq!(
+            stats.by_provider["flaky"].cache_rate,
+            "-",
+            "no countable usage renders a dash"
+        );
+    }
+
+    #[test]
+    fn aggregate_model_stats_carry_token_detail_cache_rate_and_cost() {
+        let mut m1a = with_usage(
+            entry(true, "hyb", "deepseek-r", 10, "2026-08-02T10:00:00Z"),
+            100,
+            10,
+            50,
+        );
+        m1a.cost_total = Some(0.25);
+        let mut m1b = with_usage(
+            entry(true, "hyb", "deepseek-r", 20, "2026-08-02T10:00:01Z"),
+            200,
+            20,
+            50,
+        );
+        m1b.cost_total = Some(0.5);
+        let m2 = with_usage(
+            entry(true, "hyb", "gpt-x", 30, "2026-08-02T10:00:02Z"),
+            300,
+            30,
+            0,
+        );
+        let failed = entry(false, "hyb", "deepseek-r", 40, "2026-08-02T10:00:03Z");
+
+        let stats = aggregate(
+            &[m1a, m1b, m2, failed],
+            &HashMap::new(),
+            60_000,
+            0,
+            None,
+        );
+        let ms = &stats.by_model["deepseek-r"];
+        assert_eq!(ms.total, 3, "failed row counts toward requests");
+        assert_eq!(ms.ok, 2);
+        assert_eq!(ms.prompt_tokens, 300, "100 + 200");
+        assert_eq!(ms.output_tokens, 30, "10 + 20");
+        assert_eq!(ms.cached_tokens, 100, "50 + 50");
+        assert_eq!(ms.reasoning_tokens, 0);
+        assert_eq!(ms.cost, Some(0.75), "model sums its known usage rows");
+        assert_eq!(ms.cache_rate, "33.3%", "100 cached / 300 input");
+        let g = &stats.by_model["gpt-x"];
+        assert_eq!(g.cost, None, "unknown-cost model shows no cost");
+        assert_eq!(g.cache_rate, "0.0%", "input without cache");
     }
 
     #[test]

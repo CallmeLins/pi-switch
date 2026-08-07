@@ -149,6 +149,8 @@ export interface ProviderStats {
   outputTokens: number;
   cachedTokens: number;
   reasoningTokens: number;
+  cost?: number | null;
+  cacheRate?: string;
 }
 
 export interface ConversationStats {
@@ -192,6 +194,18 @@ export interface RecentRequest {
   conversationName?: string | null;
 }
 
+export interface ModelStats {
+  total: number;
+  ok: number;
+  failed?: number;
+  promptTokens?: number;
+  outputTokens?: number;
+  cachedTokens?: number;
+  reasoningTokens?: number;
+  cost?: number | null;
+  cacheRate?: string;
+}
+
 export interface UsageStats {
   totalRequests: number;
   okRequests: number;
@@ -199,7 +213,7 @@ export interface UsageStats {
   successRate: string;
   avgLatencyMs?: number;
   byProvider: Record<string, ProviderStats>;
-  byModel?: Record<string, { total: number; ok: number; failed: number }>;
+  byModel?: Record<string, ModelStats>;
   totalTokens?: TokenTotals;
   cacheHitRate?: string;
   totalCost?: number | null;
