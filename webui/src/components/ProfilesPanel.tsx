@@ -576,26 +576,31 @@ function CcsImportModal({
         )}
 
         {providers && providers.length > 0 && (
-          <div className="space-y-2 max-h-80 overflow-auto">
+          <div className="space-y-2 max-h-80 overflow-auto rounded-lg border border-white/10 p-2">
             {providers.map((p) => (
               <label
                 key={p.id}
-                className="flex items-start gap-2 p-2 rounded cursor-pointer"
-                style={{ background: selected.has(p.id) ? "#f0f7ff" : "#fafafa" }}
+                className={
+                  "flex items-start gap-2 p-2 rounded-md cursor-pointer transition-colors " +
+                  (selected.has(p.id)
+                    ? "bg-emerald-500/15 border border-emerald-500/30"
+                    : "bg-white/5 border border-transparent hover:bg-white/10")
+                }
               >
                 <input
                   type="checkbox"
                   checked={selected.has(p.id)}
                   onChange={() => toggle(p.id)}
+                  className="mt-0.5 accent-emerald-500"
                 />
-                <span className="text-sm">
-                  <strong>{p.name}</strong>{" "}
+                <span className="text-sm min-w-0">
+                  <span className="font-medium text-zinc-100">{p.name}</span>{" "}
                   <Badge>{apiLabel(p.api)}</Badge>{" "}
                   {p.exists && <Badge>{t("exists")}</Badge>}
                   <br />
-                  <span style={{ color: "#999" }}>{p.baseUrl}</span>
+                  <span className="text-zinc-500 break-all">{p.baseUrl}</span>
                   <br />
-                  <span style={{ color: "#666" }}>{p.models.join(", ") || "-"}</span>
+                  <span className="text-zinc-400">{p.models.join(", ") || "-"}</span>
                 </span>
               </label>
             ))}
